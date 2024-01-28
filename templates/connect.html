@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" rel="stylesheet">
+    <title>Plaid Integration App</title>
+    <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
+</head>
+<body>
+    <h1>Welcome to the Plaid Integration App</h1>
+    <button id="link-button">Connect to Bank</button>
+    <div id="transactions"></div>
+
+    <script>
+        const linkButton = document.getElementById('link-button');
+        let linkHandler = null;
+
+        // Function to handle the creation of the link token
+        async function createLinkToken() {
+            const response = await fetch('/create_link_token', { method: 'POST' });
+            const data = await response.json();
+            console.log(data);  // Add this line for debugging
+            return data.link_token;
+        }
+
+        // Global variable to store the access token
+        let accessToken = null;
+
+        // Function to initialize Plaid Link
+        async function initializeLink() {
+            const linkToken = await createLinkToken();
+            //console.log(linkToken);  // Add this line for debugging
+            linkHandler = Plaid.create({
+                token: linkToken,
+                onSuccess: async (publicToken, metadata) => {
+                    // Send the public token to the server
+                    const response = await fetch('/get_access_token', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ public_token: publicToken }),
+                    });
+                    const data = await response.json();
+                    // After receiving the access token
+                    accessToken = data.access_token;  // Set the access token
+                    console.log("Access Token:", accessToken);  // Debugging: log the access token
+                    fetchAndDisplayTransactions(accessToken); // Call the function to fetch and display transactions
+                },
+                // Add other Plaid Link configuration options here
+            });
+        }
+
+        // Function to fetch and display transactions
+        async function fetchAndDisplayTransactions(accessToken) {
+            
+            // Prepare the payload
+            const payload = JSON.stringify({ access_token: accessToken });
+
+            // Use the access token to fetch transactions
+            console.log("Sending payload:", payload); // Debug: Log the access token being sent
+
+            const response = await fetch('/transactions', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: payload,  // send the access token
+            });
+
+            if (response.status === 202) {
+            // Handle the case where the product is not ready
+            alert('Transaction data is not ready yet. Please try again later.');
+            return;
+            }
+
+            const transactions = await response.json();
+
+            if (!Array.isArray(transactions)) {
+                console.error('Transactions is not an array:', transactions);
+                return;
+            }
+
+            // Display transactions in the 'transactions' div
+            const transactionsDiv = document.getElementById('transactions');
+            transactionsDiv.innerHTML = '<h2>Transactions</h2>';
+            transactions.forEach(transaction => {
+                transactionsDiv.innerHTML += `<p>${transaction.name}: $${transaction.amount}</p>`;
+            });
+        }
+
+
+        linkButton.addEventListener('click', () => {
+            if (linkHandler) {
+                linkHandler.open();
+            }
+        });
+
+        initializeLink(); // Initialize Plaid Link on page load
+    </script>
+</body>
+</html>
