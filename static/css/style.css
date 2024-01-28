@@ -1,0 +1,67 @@
+body, h1, h2, h3, h4, h5, h6, button, input, a {
+    font-family: 'Avenir Next LT Pro', sans-serif;
+}
+
+.btn-primary {
+    background-color: #2c8f19;
+    border-color: #2c8f19;
+    color: #ffffff;
+}
+
+.btn-primary:hover {
+    background-color: #36bbff;
+    border-color: #36bbff;
+}
+
+.navbar-light .navbar-nav .nav-link {
+    color: rgba(0,0,0,.5);
+}
+
+.navbar-light .navbar-nav .nav-link:hover {
+    background-color: #36bbff;
+}
+
+.sidebar .nav-link.active {
+    background-color: #2c8f19;
+    color: #ffffff;
+}
+
+.login-container {
+    text-align: center;
+    background: #fff;
+    padding: 20px;
+    border-radius: 10px;
+    box-shadow: 0px 0px 10px rgba(0,0,0,0.1);
+}
+
+.login-container form {
+    max-width: 300px;
+    margin: auto;
+}
+
+.login-links a {
+    display: block;
+    color: #007bff;
+}
+
+.selected-bank {
+    background-color: #2c8f19; /* Or any other color you prefer */
+    color: white; /* Adjust text color for better contrast if needed */
+}
+
+/* Add this to your style.css file */
+.bank-name {
+    font-weight: 500; /* Semi-bold */
+    color: #333; /* Dark gray text */
+}
+
+.list-group-item {
+    border-radius: 0.25rem; /* Rounded corners for the list items */
+    margin-bottom: 0.5rem; /* Space between list items */
+    background-color: #f8f9fa; /* Light background for the list items */
+    border: 1px solid #e1e4e8; /* Subtle border for the list items */
+}
+
+.list-group-item:hover {
+    background-color: #e2e6ea; /* Slightly darker background on hover */
+}
