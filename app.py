@@ -46,88 +46,119 @@ login_manager.login_view = 'login'
 
 @app.route('/create_link_token', methods=['POST'])
 def create_link_token():
+    data = request.json
+    user_id = data.get('user_id')  # Assuming you pass the user_id
+    access_token = data.get('access_token', None)  # This could be None for new connections
+
+    # Ensure the user is authenticated and authorized
+    # This part depends on your application's authentication logic
+
+    link_token_request = {
+        'user': {
+            'client_user_id': str(user_id),  # Use the authenticated user's ID
+        },
+        'client_name': "ExMint",
+        'products': ["transactions"],
+        'country_codes': ['CA'],
+        'language': 'en',
+    }
+
+    if access_token:
+        # If an access_token is provided, we're updating an existing connection
+        link_token_request['access_token'] = access_token
+
     try:
-        response = client.link_token_create({
-            'user': {
-                'client_user_id': 'unique_user_id',  # replace with a unique ID for your user
-            },
-            'client_name': "ExMint",
-            'products': ["transactions"],
-            'country_codes': ['CA'],
-            'language': 'en',
-        })
+        response = client.link_token_create(link_token_request)
         return jsonify(response.to_dict())
     except plaid.ApiException as e:
         return jsonify({'error': str(e)})
 
 @app.route('/get_access_token', methods=['POST'])
-def get_access_token():
+def handle_token_and_accounts():
     data = request.json
-    public_token = data['public_token']
+    public_token = data.get('public_token')
     institution_name = data.get('institution_name', 'Unknown')
+    is_refresh = data.get('is_refresh', False)
+    credential_id = data.get('credential_id', None)
+
     # Check if a user is logged in
     if not current_user.is_authenticated:
         return jsonify({'error': 'User not authenticated'}), 401
 
     try:
-        exchange_response = client.item_public_token_exchange({
-            'public_token': public_token
-        })
-        access_token = exchange_response['access_token']
-        print('New Access Token: ', access_token)
+        if not is_refresh:
+            # Exchange public token for access token (initial connection)
+            exchange_response = client.item_public_token_exchange({
+                'public_token': public_token
+            })
+            access_token = exchange_response['access_token']
+            print('New Access Token: ', access_token)
 
-        # Encrypt and store access token in Credential
-        credential = Credential(
-            user_id=current_user.id, 
-            access_token=access_token,
-            institution_name=institution_name
-        )
-        db.session.add(credential)
-        db.session.flush()
-
-        # Fetch and store account details
-        accounts_response = client.accounts_get({'access_token': access_token})
-        print("Accounts Response:", accounts_response)
-
-        for account in accounts_response['accounts']:
-            account_type = str(account['type'])
-            account_subtype = str(account['subtype'])
-            print("Account Type:", type(account['type']))
-            print("Account Data:", account)
-            new_account = Account(
-                credential_id=credential.id,
-                plaid_account_id=account['account_id'],
-                name=account['name'],
-                type=account_type,
-                subtype=account_subtype,
-                mask=account.get('mask')
+            # Encrypt and store access token in Credential
+            credential = Credential(
+                user_id=current_user.id, 
+                access_token=access_token,
+                institution_name=institution_name,
+                requires_update=False  # Assuming initial connection does not require update
             )
-            print("New Account Details:", new_account)
-            db.session.add(new_account)
-        
-        db.session.commit()
+            db.session.add(credential)
+            db.session.flush()
+            credential_id = credential.id
 
-        # Create PlaidTransaction entry
+            operation = 'token creation'
+        else:
+            # For refresh, assume access_token is provided and decrypted
+            access_token = data['access_token']
+            credential = Credential.query.get(credential_id)
+            operation = 'Institution Refresh'
+            credential.requires_update = False  # Reset requires_update flag
+
+        # Fetch and update accounts
+        accounts_response = client.accounts_get({'access_token': access_token})
+        refresh_accounts(credential_id, accounts_response['accounts'])
+
+        # Log PlaidTransaction
         plaid_transaction = PlaidTransaction(
             user_id=current_user.id,
             user_ip=request.remote_addr,
-            credential_id=credential.id,
-            operation='token creation',
-            response=str(exchange_response)
+            credential_id=credential_id,
+            operation=operation,
+            response=str(accounts_response)
         )
-        print("Plaid Transaction:", plaid_transaction)
         db.session.add(plaid_transaction)
         db.session.commit()
-        
-        #return jsonify({'access_token': access_token}) # This is for debug purposes only
-        return jsonify({'status': 'success', 'message': 'Token added successfully'})
-    
+
+        return jsonify({'status': 'success', 'message': f'{operation} successful'})
+
     except plaid.ApiException as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
 
-# Replace this with the actual encrypted token from your database
-#database_token = b'qhR9Al4fhLVAcEvHbTQLCTt2oUFVAMaRylKgzrd322x1BShmwy3qunqoWAfKJrMFIjE6gt6uAMfvCqr10qX89rSUijAu2m0Le7TWVjKnzXeJAQO7u8fZyPusNpBLResjkYlqAn8WCQYiDGG3Y3Ecdc2ZJaRBLc5PY5w8gpsgscDyjHTHp2zdB4jozNxRpDX91NHuta+Yy1eG1vguEkcS4kxvtu+ViM83nX3HBm+NgZM='
+def refresh_accounts(credential_id, accounts_data):
+    existing_accounts = Account.query.filter_by(credential_id=credential_id).all()
+    existing_account_ids = {account.plaid_account_id for account in existing_accounts}
+
+    for account in accounts_data:
+        if account['account_id'] in existing_account_ids:
+            # Update existing account details here if needed
+            pass
+        else:
+            # Add new account
+            new_account = Account(
+                credential_id=credential_id,
+                plaid_account_id=account['account_id'],
+                name=account['name'],
+                type=account['type'],
+                subtype=account['subtype'],
+                mask=account.get('mask', '')
+            )
+            db.session.add(new_account)
+
+    # Optionally, deactivate accounts not in the latest fetch
+    for existing_account in existing_accounts:
+        if existing_account.plaid_account_id not in {account['account_id'] for account in accounts_data}:
+            # Deactivate account
+            existing_account.status = 'Inactive'  # Assuming there's a status field to update
 
 @app.route('/transactions', methods=['POST'])
 def get_transactions():
@@ -220,43 +251,47 @@ def sync_transactions():
 
     # Fetch transactions from all credentials
     for credential in user.credentials:
-        cursor = None  # Initialize cursor
-        has_more = True  # Initialize has_more flag
-        while has_more:
-            try:
-                # Prepare the request payload
-                sync_request_payload = {'access_token': credential.access_token}
-                if cursor:
-                    sync_request_payload['cursor'] = cursor  # Add cursor if not None
-                
-                # Fetch transactions using Plaid's sync endpoint
-                response = client.transactions_sync(sync_request_payload)
- 
-                api_call_count += 1  # Increment API call counter
-                print(f"API call {api_call_count} made.")
+            for account in credential.accounts:
+                if account.status == 'Active' and account.is_enabled:
+                    cursor = None
+                    has_more = True
+                    while has_more:
+                        try:
+                            sync_request_payload = {'access_token': credential.access_token}
+                            if cursor:
+                                sync_request_payload['cursor'] = cursor
 
-                # Add transactions to the all_transactions list
-                data = response.to_dict()
+                            response = client.transactions_sync(sync_request_payload)
+                            api_call_count += 1
+                            print(f"API call {api_call_count} made.")
 
-                for action in ['added', 'modified', 'removed']:
-                    transactions = data.get(action, [])
-                    if action == 'added':
-                        added_transactions.extend(transactions)
-                    elif action == 'modified':
-                        modified_transactions.extend(transactions)
-                    elif action == 'removed':
-                        removed_transactions.extend(transactions)
-                
-                # Check if more transactions are available
-                cursor = data.get('next_cursor')
-                has_more = data.get('has_more', False)  # Update has_more flag
-                
-            except plaid.ApiException as e:
-                print("Error fetching transactions:", str(e))
-                break  # Exit loop if an API exception occurs
-            except Exception as e:
-                print("General error during transaction fetching:", str(e))
-                break  # Exit loop if a general exception occurs
+                            data = response.to_dict()
+
+                            for action in ['added', 'modified', 'removed']:
+                                transactions = data.get(action, [])
+                                if action == 'added':
+                                    added_transactions.extend(filter_transactions(transactions, account.plaid_account_id))
+                                elif action == 'modified':
+                                    modified_transactions.extend(filter_transactions(transactions, account.plaid_account_id))
+                                elif action == 'removed':
+                                    removed_transactions.extend(filter_transactions(transactions, account.plaid_account_id))
+
+                            cursor = data.get('next_cursor')
+                            has_more = data.get('has_more', False)
+                            
+                        except plaid.ApiException as e:
+                            error_response = json.loads(e.body)
+                            if error_response.get('error_code') == 'ITEM_LOGIN_REQUIRED':
+                                credential.requires_update = True
+                                db.session.commit()
+                            print("Error fetching transactions:", str(e))
+                            error_csv = "error_code,error_message,error_type,request_id,suggested_action\n"
+                            error_csv += f"{error_response['error_code']},{error_response['error_message']},{error_response['error_type']},{error_response['request_id']},'null'"
+                            return Response(error_csv, mimetype='text/csv', headers={"Content-disposition": "attachment; filename=error.csv"})
+
+                        except Exception as e:
+                            print("General error during transaction fetching:", str(e))
+                            break
 
     # Combine all transactions and convert to CSV
     csv_header = ['Date', 'Name', 'Amount', 'Currency', 'Category', 'Merchant Name', 'Account ID', 'Transaction ID', 'Payment Channel', 'Action', 'Pending']
@@ -282,7 +317,7 @@ def get_accounts():
     accounts = query.filter(Account.status == 'Active').all()  # Assuming 'Account' has a 'status' field
 
     accounts_data = [{'id': account.id, 'name': account.name, 'mask': account.mask, 
-                      'type': account.type, 'subtype': account.subtype} for account in accounts]
+                      'type': account.type, 'subtype': account.subtype, 'is_enabled': account.is_enabled} for account in accounts]
 
     return jsonify(accounts=accounts_data)
 
@@ -299,7 +334,13 @@ def get_banks():
 
     # Filter to get only active banks
     banks = Credential.query.filter_by(user_id=user.id, status='Active').all()
-    banks_data = [{'id': bank.id, 'institution_name': bank.institution_name} for bank in banks]
+    banks_data = [
+        {
+            'id': bank.id,
+            'institution_name': bank.institution_name,
+            'requires_update': bank.requires_update  # Include requires_update field
+        } for bank in banks
+    ]
     return jsonify(banks=banks_data)
 
 
@@ -328,6 +369,10 @@ def json_csv(transactions, action):
         cw.writerow(row)
 
     return si.getvalue()
+
+def filter_transactions(transactions, account_plaid_id):
+    # Filter transactions to only include those for the specific account_plaid_id
+    return [transaction for transaction in transactions if transaction['account_id'] == account_plaid_id]
 
 def deactivate_plaid_token(access_token):
     try:
@@ -384,7 +429,22 @@ def remove_bank(bank_id):
     else:
         return jsonify({'success': False, 'message': 'Credential not found'}), 404
 
-  
+@app.route('/api/get_access_token/<int:credential_id>', methods=['GET'])
+@login_required
+def get_access_token_for_bank(credential_id):
+    credential = Credential.query.filter_by(id=credential_id, user_id=current_user.id).first()
+
+    if not credential:
+        return jsonify({'error': 'Credential not found or does not belong to the current user'}), 404
+
+    # Assuming the access_token is stored encrypted and needs to be decrypted
+    try:
+        access_token = credential.access_token  # Access the decrypted token
+
+        return jsonify({'access_token': access_token})
+    except Exception as e:
+        return jsonify({'error': 'Failed to retrieve access token', 'message': str(e)}), 500
+
 
 if __name__ == '__main__':
     app.run(debug=True)

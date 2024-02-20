@@ -18,17 +18,10 @@
                 <button id="link-button" class="btn btn-outline-secondary mr-2">
                     <i class="fas fa-university"></i> Connect Institution
                 </button>
-                <div class="dropdown d-inline-block mr-2">
-                    <button class="btn btn-outline-secondary dropdown-toggle" type="button" id="notificationsMenu" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-                        <i class="fas fa-bell"></i>
-                    </button>
-                    <div class="dropdown-menu" aria-labelledby="notificationsMenu">
-                        <a class="dropdown-item" href="#">No new notifications</a>
-                    </div>
-                </div>
+
                 <div class="dropdown d-inline-block">
                     <button class="btn btn-outline-secondary dropdown-toggle" type="button" id="profileMenu" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-                        <i class="fas fa-user"></i> Avila, Manuel
+                        <i class="fas fa-user"></i> My Account
                     </button>
                     <div class="dropdown-menu" aria-labelledby="profileMenu">
                         <a class="dropdown-item" href="#" data-toggle="modal" data-target="#profileModal">Edit Profile</a>
@@ -49,12 +42,14 @@
                         <span>Connected Banks</span>
                     </h6>                    
                     <ul class="nav flex-column">
-                        <li class="nav-item" v-for="bank in banks" :key="bank.id" :class="{ 'selected-bank': bank.id === selectedBankId }"
-                        >                            
-                            <a class="nav-link" href="#" @click="toggleBankSelection(bank.id)">
+                        <li class="nav-item" v-for="bank in banks" :key="bank.id"
+                            :class="{'selected-bank': bank.id === selectedBankId, 'text-danger': bank.requires_update}">
+                            <a class="nav-link" href="#" @click.prevent="toggleBankSelection(bank.id)">
                                 [[ bank.institution_name ]]
+                                <span v-if="bank.requires_update" class="btn btn-danger btn-sm" @click="reconnectBank(bank.id)">Reconnect</span>
                             </a>
                         </li>
+
                     </ul>                 
                 </div>
             </div>
@@ -66,10 +61,14 @@
                         <h5 class="card-title">[[ account.name ]]</h5>
                         <h6 class="card-subtitle mb-2 text-muted">...[[ account.mask ]]</h6>
                         <p class="card-text">[[ account.type | capitalize ]] - [[ account.subtype | capitalize ]]</p>
+                        <div class="custom-control custom-switch">
+                            <input type="checkbox" class="custom-control-input" :id="`switch-${account.id}`" v-model="account.is_enabled" @change="toggleAccountEnable(account.id, account.is_enabled)">
+                            <label class="custom-control-label" :for="`switch-${account.id}`">[[ account.is_enabled ? 'Enabled' : 'Disabled' ]]</label>
+                        </div>
                     </div>
                 </div>
             </main>
-        
+
             <!-- Right Sidebar: Help -->
             <div class="col-lg-2 bg-light border-left">
                 <div id="help-sidebar" class="bg-light border-left">

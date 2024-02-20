@@ -65,3 +65,13 @@ body, h1, h2, h3, h4, h5, h6, button, input, a {
 .list-group-item:hover {
     background-color: #e2e6ea; /* Slightly darker background on hover */
 }
+
+/* Banks requiring reconnection */
+.text-danger {
+    color: #dc3545; /* Bootstrap's default 'danger' color */
+}
+
+/* Optional: If you have an unwanted character you wish to hide */
+.unwanted-sign {
+    display: none; /* Adjust the class name as needed based on your HTML structure */
+}
