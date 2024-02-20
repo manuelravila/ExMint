@@ -2,13 +2,28 @@
 const linkButton = document.getElementById('link-button');
 let linkHandler = null;
 
-// Function to handle the creation of the link token
-async function createLinkToken() {
-    const response = await fetch('/create_link_token', { method: 'POST' });
+// Function to handle the creation of the link token, adapted to support update mode
+async function createLinkToken(access_token = null) {
+    // Always prepare a JSON payload, with access_token included only if provided
+    let body = JSON.stringify({ user_id: "your_user_id", access_token: access_token }); // Ensure you have a user_id or similar if needed
+
+    const response = await fetch('/create_link_token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: body // This now consistently sends a JSON object, with or without access_token
+    });
+
+    if (!response.ok) {
+        // Handle HTTP errors (e.g., network issues, endpoint not found, server errors)
+        console.error("Failed to create link token:", response.statusText);
+        throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
     const data = await response.json();
-    console.log(data);  // Add this line for debugging
-    return data.link_token;
+    console.log("Received link token:", data); // Debugging
+    return data.link_token; // Ensure to handle the case where this might be undefined due to errors
 }
+
 
 // Global variable to store the access token
 let accessToken = null;
@@ -59,6 +74,62 @@ async function initializeLink() {
     });
     console.log("Plaid Link initialized", linkHandler);
 }
+
+// Function to initiate the reconnect process for a bank
+async function reconnectBank(bankId) {
+    console.log("Initiating reconnect for Bank ID:", bankId);
+
+    try {
+        // Fetch the access_token for the bank that requires reconnection
+        const response = await fetch(`/api/get_access_token/${bankId}`, { method: 'GET' });
+        if (!response.ok) throw new Error('Failed to fetch access token.');
+
+        const data = await response.json();
+        const access_token = data.access_token;
+        console.log("Fetched access token for update:", access_token);
+
+        // Correctly pass access_token to generate link token for update mode
+        const linkToken = await createLinkToken(access_token); // Ensure createLinkToken is adjusted to accept access_token properly
+        console.log("Received link token for update mode:", linkToken);
+
+        // Use the link token to initialize Plaid Link in update mode
+        // Adjust your existing Plaid Link initialization logic as needed
+        linkHandler = Plaid.create({
+            token: linkToken,
+            onSuccess: async (publicToken, metadata) => {
+                // Exchange public token for access token and refresh accounts
+                let response = await fetch('/refresh_accounts', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        credential_id: bankId, // Assuming you have a way to map bankId to credential_id
+                        access_token: accessToken // You'll need to securely handle access_token
+                    })
+                });
+                if (response.ok) {
+                    console.log("Accounts refreshed successfully");
+                    // Refresh dashboard
+                    window.location.href = '/dashboard.html';
+                } else {
+                    console.error("Failed to refresh accounts");
+                }
+            },
+            
+            onExit: (err, metadata) => {
+                // Handle exit scenario, e.g., user closed the modal without completing the process
+                console.log("User exited link modal", err, metadata);
+            },
+            // Include other necessary configuration options as per your application's needs
+        });
+
+        // Now open the Plaid Link modal for the user to reconnect their bank
+        linkHandler.open();
+    } catch (error) {
+        console.error("Error during bank reconnect:", error);
+    }
+}
+
+
 
 // Function to fetch and display transactions
 async function fetchAndDisplayTransactions(accessToken) {
@@ -136,8 +207,11 @@ new Vue({
             fetch('/api/banks')
                 .then(response => response.json())
                 .then(data => {
-                    this.banks = data.banks;
-                    this.fetchAccounts(); // Fetch all accounts initially
+                    this.banks = data.banks.map(bank => ({
+                        ...bank,
+                        requires_update: bank.requires_update  // Assuming your backend API provides this information
+                    }));
+                    this.fetchAccounts();
                 });
         },
         fetchAccounts: function(bankId = null) {
@@ -187,9 +261,27 @@ new Vue({
             } else {
                 console.log("Bank removal cancelled for:", bank);
             }
-        }
+        },
         
-        
+        toggleAccountEnable: function(accountId, isEnabled) {
+            const url = `/api/accounts/${isEnabled ? 'enable' : 'disable'}/${accountId}`;
+            fetch(url, { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        console.log(`Account ${isEnabled ? 'enabled' : 'disabled'}:`, accountId);
+                    } else {
+                        console.error('Error toggling account:', data.message);
+                        alert(`Failed to ${isEnabled ? 'enable' : 'disable'} account. Please try again.`);
+                        // Rollback the switch state on failure
+                        this.fetchAccounts();
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    this.fetchAccounts(); // Ensure UI consistency by reloading accounts
+                });
+        },  
         
     },
     mounted: function() {

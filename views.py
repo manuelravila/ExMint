@@ -142,3 +142,20 @@ def get_user_info():
     }
     return jsonify(user_info)
 
+@views.route('/api/accounts/enable/<int:account_id>', methods=['POST'])
+def enable_account(account_id):
+    account = Account.query.get(account_id)
+    if account:
+        account.is_enabled = True
+        db.session.commit()
+        return jsonify({'success': True, 'message': 'Account enabled.'})
+    return jsonify({'success': False, 'message': 'Account not found.'}), 404
+
+@views.route('/api/accounts/disable/<int:account_id>', methods=['POST'])
+def disable_account(account_id):
+    account = Account.query.get(account_id)
+    if account:
+        account.is_enabled = False
+        db.session.commit()
+        return jsonify({'success': True, 'message': 'Account disabled.'})
+    return jsonify({'success': False, 'message': 'Account not found.'}), 404

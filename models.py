@@ -57,7 +57,7 @@ class Credential(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     institution_name = db.Column(db.String(100))
     access_token = db.Column(EncryptedType(db.String, key))
-    
+    requires_update = db.Column(db.Boolean, default=False, nullable=False)
 
 class Account(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -68,6 +68,7 @@ class Account(db.Model):
     type = db.Column(db.String(50))  # e.g., 'depository', 'credit'
     subtype = db.Column(db.String(50))  # e.g., 'checking', 'savings', 'credit card'
     mask = db.Column(db.String(4))  # Last 4 digits of the account number, if available
+    is_enabled = db.Column(db.Boolean, default=True, nullable=False)
 
     # Relation to Credential
     credential = db.relationship('Credential', backref=db.backref('accounts', lazy=True))

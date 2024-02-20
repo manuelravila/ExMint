@@ -106,7 +106,7 @@ var app = new Vue({
                     console.error('Error fetching user info:', error);  // Log any errors
                 });
         }
-        
+       
     },
     mounted: function() {
         console.log("Vue instance mounted.");  // Log when Vue instance is mounted
