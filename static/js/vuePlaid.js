@@ -39,7 +39,7 @@ async function initializeLink() {
         onSuccess: async (publicToken, metadata) => {
             // Send the public token to the server
             const institutionName = metadata.institution.name;  // Get institution name from metadata
-            const response = await fetch('/get_access_token', {
+            const response = await fetch('/handle_token_and_accounts', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -53,7 +53,7 @@ async function initializeLink() {
             // After receiving the access token
             accessToken = data.access_token;  // Set the access token
             //console.log("Access Token:", accessToken);  // Debugging: log the access token
-            fetchAndDisplayTransactions(accessToken); // Call the function to fetch and display transactions
+
             if (response.ok && data.status === 'success') {
                 console.log("Access Token Added Successfully");
                 if (typeof app !== 'undefined' && app.fetchBanks) {
@@ -80,93 +80,45 @@ async function reconnectBank(bankId) {
     console.log("Initiating reconnect for Bank ID:", bankId);
 
     try {
-        // Fetch the access_token for the bank that requires reconnection
         const response = await fetch(`/api/get_access_token/${bankId}`, { method: 'GET' });
         if (!response.ok) throw new Error('Failed to fetch access token.');
 
-        const data = await response.json();
-        const access_token = data.access_token;
+        const {access_token} = await response.json();
         console.log("Fetched access token for update:", access_token);
 
-        // Correctly pass access_token to generate link token for update mode
-        const linkToken = await createLinkToken(access_token); // Ensure createLinkToken is adjusted to accept access_token properly
+        const linkToken = await createLinkToken(access_token); 
         console.log("Received link token for update mode:", linkToken);
 
-        // Use the link token to initialize Plaid Link in update mode
-        // Adjust your existing Plaid Link initialization logic as needed
         linkHandler = Plaid.create({
             token: linkToken,
             onSuccess: async (publicToken, metadata) => {
-                // Exchange public token for access token and refresh accounts
-                let response = await fetch('/refresh_accounts', {
+                console.log("OnSuccess block started")
+                let refreshResponse = await fetch('/handle_token_and_accounts', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
-                        credential_id: bankId, // Assuming you have a way to map bankId to credential_id
-                        access_token: accessToken // You'll need to securely handle access_token
+                        public_token: publicToken,
+                        institution_name: metadata.institution.name,
+                        is_refresh: true, // Indicate this is a refresh operation
+                        credential_id: bankId
                     })
                 });
-                if (response.ok) {
+                if (refreshResponse.ok) {
                     console.log("Accounts refreshed successfully");
-                    // Refresh dashboard
-                    window.location.href = '/dashboard.html';
+                    window.location.href = '/dashboard';
                 } else {
                     console.error("Failed to refresh accounts");
                 }
             },
-            
-            onExit: (err, metadata) => {
-                // Handle exit scenario, e.g., user closed the modal without completing the process
-                console.log("User exited link modal", err, metadata);
-            },
-            // Include other necessary configuration options as per your application's needs
+            onExit: (err, metadata) => console.log("User exited link modal", err, metadata)
         });
 
-        // Now open the Plaid Link modal for the user to reconnect their bank
+        console.log("Opening Plaid Link...");
+
         linkHandler.open();
     } catch (error) {
         console.error("Error during bank reconnect:", error);
     }
-}
-
-
-
-// Function to fetch and display transactions
-async function fetchAndDisplayTransactions(accessToken) {
-    
-    // Prepare the payload
-    const payload = JSON.stringify({ access_token: accessToken });
-
-    // Use the access token to fetch transactions
-    console.log("Sending payload:", payload); // Debug: Log the access token being sent
-
-    const response = await fetch('/transactions', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: payload,  // send the access token
-    });
-
-    if (response.status === 202) {
-    // Handle the case where the product is not ready
-    alert('Transaction data is not ready yet. Please try again later.');
-    return;
-    }
-
-    const transactions = await response.json();
-
-    if (!Array.isArray(transactions)) {
-        console.error('Transactions is not an array:', transactions);
-        return;
-    }
-
-    // Display transactions in the 'transactions' div
-    const transactionsDiv = document.getElementById('transactions');
-    transactionsDiv.innerHTML = '<h2>Transactions</h2>';
-    transactions.forEach(transaction => {
-        transactionsDiv.innerHTML += `<p>${transaction.name}: $${transaction.amount}</p>`;
-    });
 }
 
 // Initialize Plaid Link after Vue instance

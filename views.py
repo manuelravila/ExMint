@@ -1,6 +1,9 @@
 # views.py
-from flask import render_template, redirect, url_for, flash, request, jsonify, Blueprint, session
+from flask import current_app, render_template, redirect, url_for, flash, request, jsonify, Blueprint, session
 from flask_login import login_user, current_user, logout_user, login_required
+from extensions import mail
+from flask_mail import Message
+from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadSignature
 from forms import LoginForm, RegistrationForm, ProfileForm
 from models import User, db, Credential, Account
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -109,21 +112,68 @@ def logout():
     return redirect(url_for('views.index'))
 
 @views.route('/reset_password', methods=['GET', 'POST'])
+# Use https://mailtrap.io/ for email for now .
 def reset_password():
     # If the user is already logged in, redirect them to the dashboard
     if current_user.is_authenticated:
         return redirect(url_for('views.dashboard'))
 
-    # If this is a POST request, handle the form submission here
-    # (e.g., verify the email, send a reset link, etc.)
     if request.method == 'POST':
-        # Implement the logic to handle password reset
-        # ...
-        flash('Password reset instructions have been sent to your email.', 'info')
-        return redirect(url_for('views.login'))
+        email = request.form.get('email')
+        user = User.query.filter_by(email=email).first()
+        if user:
+            # Generate a secure token
+            serializer = URLSafeTimedSerializer(current_app.config['SECRET_KEY'])
+            token = serializer.dumps(email, salt='email-reset-salt')
+            
+            # Prepare the password reset email
+            msg = Message('Password Reset Request', 
+                          sender=current_app.config['MAIL_USERNAME'], 
+                          recipients=[email])
+            reset_url = url_for('views.reset_password_token', token=token, _external=True)  # Make sure you have a route to handle this
+            msg.body = f'Please click the following link to reset your password: {reset_url}'
+            
+            # Send the email
+            try:
+                mail.send(msg)
+            except Exception as e:
+                print(f'An error occurred: {e}')
+            flash('Password reset instructions have been sent to your email.', 'info')
+            return redirect(url_for('views.login'))
+        else:
+            flash('No account could be found for this email address.', 'warning')
 
-    # For a GET request, simply render the reset password form
     return render_template('reset_password.html')
+
+@views.route('/reset_password/<token>', methods=['GET', 'POST'])
+def reset_password_token(token):
+    try:
+        # Initialize the serializer
+        serializer = URLSafeTimedSerializer(current_app.config['SECRET_KEY'])
+        
+        # Attempt to decode the token
+        email = serializer.loads(token, salt='email-reset-salt', max_age=3600)  # Token expires after 1 hour
+        
+        # Find the user by email
+        user = User.query.filter_by(email=email).first()
+        if user is None:
+            flash('Invalid or expired reset token.', 'danger')
+            return redirect(url_for('views.login'))
+        
+        # If the request method is POST, update the user's password
+        if request.method == 'POST':
+            new_password = request.form.get('new_password')
+            user.password_hash = generate_password_hash(new_password)  # Use Werkzeug's generate_password_hash
+            db.session.commit()
+            flash('Your password has been updated!', 'success')
+            return redirect(url_for('views.login'))
+
+        # If the request method is GET, show the reset password form
+        return render_template('reset_password_token.html')  # Ensure you have this template
+
+    except (SignatureExpired, BadSignature):
+        flash('Invalid or expired reset token.', 'danger')
+        return redirect(url_for('views.login'))
 
 @views.route('/user-info', methods=['GET', 'POST'])
 @login_required
