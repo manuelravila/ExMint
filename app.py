@@ -16,6 +16,7 @@ from plaid.api import plaid_api
 from plaid.model.item_remove_request import ItemRemoveRequest
 from plaid.model.accounts_get_request import AccountsGetRequest
 from plaid.model.accounts_balance_get_request import AccountsBalanceGetRequest
+from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest  # This import path may vary based on your Plaid SDK version
 
 from config import Config
 from models import db, User, Credential, Account, PlaidTransaction
@@ -80,6 +81,7 @@ def create_app():
             'products': ["transactions"],
             'country_codes': ['CA'],
             'language': 'en',
+            'redirect_uri': 'https://automatos.ca',
         }
 
         if access_token:
@@ -99,7 +101,8 @@ def create_app():
         credential_id = data.get('credential_id')  # Assuming this is passed for refreshes
         public_token = data.get('public_token', None)  # For new connections
         is_refresh = data.get('is_refresh', False)
-
+        print('Is_refrsh: ',is_refresh)
+        a=input()
         if not current_user.is_authenticated:
             return jsonify({'error': 'User not authenticated'}), 401
 
@@ -112,9 +115,12 @@ def create_app():
                 access_token = credential.access_token
             else:
                 # New connection: Exchange public token for access token
+                print("Initiating New Account flow")
                 public_token = data['public_token']
                 institution_name = data.get('institution_name', 'Unknown')
-                exchange_response = client.item_public_token_exchange(public_token=public_token)
+                # Create the request object for token exchange
+                exchange_request = ItemPublicTokenExchangeRequest(public_token=public_token)
+                exchange_response = client.item_public_token_exchange(item_public_token_exchange_request=exchange_request)
                 access_token = exchange_response['access_token']
 
                 # Store new credential
@@ -126,6 +132,7 @@ def create_app():
                 )
                 db.session.add(credential)
                 db.session.commit()
+                
                 credential_id = credential.id  # Use this ID for new credentials
 
             # Fetch and update accounts
@@ -172,6 +179,7 @@ def create_app():
                     # Ensure other necessary fields are updated similarly
             else:
                 # Add new account
+                
                 new_account = Account(
                     credential_id=credential_id,
                     plaid_account_id=account['account_id'],
