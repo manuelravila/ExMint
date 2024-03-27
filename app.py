@@ -79,7 +79,7 @@ def create_app():
             },
             'client_name': "ExMint",
             'products': ["transactions"],
-            'country_codes': ['CA'],
+            'country_codes': ['CA','US'],
             'language': 'en',
             'redirect_uri': 'https://automatos.ca',
         }
@@ -101,8 +101,7 @@ def create_app():
         credential_id = data.get('credential_id')  # Assuming this is passed for refreshes
         public_token = data.get('public_token', None)  # For new connections
         is_refresh = data.get('is_refresh', False)
-        print('Is_refrsh: ',is_refresh)
-        a=input()
+        print('is_refresh = ')
         if not current_user.is_authenticated:
             return jsonify({'error': 'User not authenticated'}), 401
 
@@ -162,7 +161,6 @@ def create_app():
             return jsonify({'error': str(e)}), 500
 
     def refresh_accounts(credential_id, accounts_data):
-        # Assuming the rest of your function setup remains the same
         existing_accounts = Account.query.filter_by(credential_id=credential_id).all()
         existing_account_ids = {account.plaid_account_id for account in existing_accounts}
 

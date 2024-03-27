@@ -5,7 +5,11 @@ import plaid
 basedir = os.path.abspath(os.path.dirname(__file__))
 
 class Config:
-    SQLALCHEMY_DATABASE_URI = 'sqlite:///' + os.path.join(basedir, 'ExMint.db')
+    #SQLALCHEMY_DATABASE_URI = 'sqlite:///' + os.path.join(basedir, 'ExMint.db')
+    #Remember to run the SSH Tunnel before running the app: 
+    #start /B ssh -L 3307:127.0.0.1:3306 root@srv469975.hstgr.cloud -N
+    SQLALCHEMY_DATABASE_URI = 'mysql+pymysql://mrar1995_xmnt_dev:c*36^PtDNf%n*F7@127.0.0.1:3307/mrar1995_xmnt_dev_db'
+
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     SECRET_KEY = 'LaT!erraDe10lvido'  # Replace with a real secret key
     ENCRYPTION_KEY = b'udMS0kDG5aCdF1c9BeJErPhlpWKxkkdc8aRKP-OJihg='
