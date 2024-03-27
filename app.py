@@ -18,6 +18,7 @@ from plaid.model.accounts_get_request import AccountsGetRequest
 from plaid.model.accounts_balance_get_request import AccountsBalanceGetRequest
 from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest  # This import path may vary based on your Plaid SDK version
 
+from version import __version__
 from config import Config
 from models import db, User, Credential, Account, PlaidTransaction
 #from forms import RegistrationForm, LoginForm
