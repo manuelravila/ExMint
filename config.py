@@ -1,26 +1,41 @@
 #config.py
 import os
+import subprocess
 import plaid
+import json
+
+def get_secret(secret_id):
+    try:
+        # Use bws to fetch the secret by ID
+        output = subprocess.check_output(['bws', 'secret', 'get', secret_id], text=True)
+        secret = json.loads(output)
+        # Extract the password or connection string from the secret value
+        return secret['value']
+    except subprocess.CalledProcessError as e:
+        raise ValueError(f"Failed to retrieve secret from Bitwarden: {str(e)}")
+
 
 def get_database_uri():
     branch = os.getenv('FLASK_ENV', 'dev') 
     print('Detected branch: ', branch)
 
-    if branch == 'dev':
-        return 'mysql+pymysql://mrar1995_xmnt_dev:c*36^PtDNf%n*F7@127.0.0.1:3307/mrar1995_xmnt_dev_db'
-    elif branch == 'stag':
-        return 'mysql+pymysql://mrar1995_xmnt_stg:94@GvRGo%2JzaVC@127.0.0.1:3306/mrar1995_xmnt_stg_db'
-    elif branch == 'main':
-        return 'mysql+pymysql://mrar1995_xmnt_prd:u#N4KHC5S!*3jBL@127.0.0.1:3306/mrar1995_xmnt_prd_db'
+    # Map environment to the respective secret ID in Bitwarden
+    secret_ids = {
+        'dev': 'b2a63183-bf49-4705-839e-b141013a5e40',
+        'stag': 'df9103ce-25a0-429c-8b50-b1410139eba4',
+        'main': '94cb8775-54a4-4e62-814e-b1410139c1df'
+    }
+
+    if branch in secret_ids:
+        password = get_secret(secret_ids[branch])
+        # Bitwarden stores the entire connection string as the secret value
+        return password
     else:
         raise ValueError(f"Invalid environment: {branch}")
 
 class Config:
-    # Detect the current Git branch
-    git_branch = os.popen('git rev-parse --abbrev-ref HEAD').read().strip()
-    
+ 
     SQLALCHEMY_DATABASE_URI = get_database_uri()
-    print('Selected Database: ', SQLALCHEMY_DATABASE_URI)
 
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     SECRET_KEY = 'LaT!erraDe10lvido'  # Replace with a real secret key
