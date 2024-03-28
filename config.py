@@ -5,6 +5,7 @@ import plaid
 basedir = os.path.abspath(os.path.dirname(__file__))
 
 def get_database_uri(branch):
+    print('Detected branch: ', branch)
     if branch == 'dev':
         return 'mysql+pymysql://mrar1995_xmnt_dev:c*36^PtDNf%n*F7@127.0.0.1:3307/mrar1995_xmnt_dev_db'
     elif branch == 'stag':
@@ -17,7 +18,9 @@ def get_database_uri(branch):
 class Config:
     # Detect the current Git branch
     git_branch = os.popen('git rev-parse --abbrev-ref HEAD').read().strip()
+    
     SQLALCHEMY_DATABASE_URI = get_database_uri(git_branch)
+    print('Selected Database: ', SQLALCHEMY_DATABASE_URI)
 
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     SECRET_KEY = 'LaT!erraDe10lvido'  # Replace with a real secret key
