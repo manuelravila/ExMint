@@ -3,14 +3,16 @@ import os
 import subprocess
 import plaid
 import json
+import urllib.parse
 
 def get_secret(secret_id):
     try:
         # Use bws to fetch the secret by ID
         output = subprocess.check_output(['bws', 'secret', 'get', secret_id], text=True)
         secret = json.loads(output)
-        # Extract the password or connection string from the secret value
-        return secret['value']
+        # Extract and decode the password or connection string from the secret value
+        decoded_value = urllib.parse.unquote(secret['value'])
+        return decoded_value
     except subprocess.CalledProcessError as e:
         raise ValueError(f"Failed to retrieve secret from Bitwarden: {str(e)}")
 
