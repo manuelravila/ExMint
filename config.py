@@ -2,10 +2,10 @@
 import os
 import plaid
 
-basedir = os.path.abspath(os.path.dirname(__file__))
-
-def get_database_uri(branch):
+def get_database_uri():
+    branch = os.getenv('FLASK_ENV', 'dev') 
     print('Detected branch: ', branch)
+
     if branch == 'dev':
         return 'mysql+pymysql://mrar1995_xmnt_dev:c*36^PtDNf%n*F7@127.0.0.1:3307/mrar1995_xmnt_dev_db'
     elif branch == 'stag':
@@ -13,13 +13,13 @@ def get_database_uri(branch):
     elif branch == 'main':
         return 'mysql+pymysql://mrar1995_xmnt_prd:u#N4KHC5S!*3jBL@127.0.0.1:3306/mrar1995_xmnt_prd_db'
     else:
-        raise ValueError(f"Invalid branch: {branch}")
+        raise ValueError(f"Invalid environment: {branch}")
 
 class Config:
     # Detect the current Git branch
     git_branch = os.popen('git rev-parse --abbrev-ref HEAD').read().strip()
     
-    SQLALCHEMY_DATABASE_URI = get_database_uri(git_branch)
+    SQLALCHEMY_DATABASE_URI = get_database_uri()
     print('Selected Database: ', SQLALCHEMY_DATABASE_URI)
 
     SQLALCHEMY_TRACK_MODIFICATIONS = False
