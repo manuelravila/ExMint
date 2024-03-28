@@ -1,3 +1,7 @@
+## [0.1.2] - 2024-03-26 
+### Added
+- Added automatic database switching based on Git branch.
+
 ## [0.1.1] - 2024-03-26 
 ### Added
 - Added version information to the footer of the dashboard.

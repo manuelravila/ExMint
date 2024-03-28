@@ -4,11 +4,20 @@ import plaid
 
 basedir = os.path.abspath(os.path.dirname(__file__))
 
+def get_database_uri(branch):
+    if branch == 'dev':
+        return 'mysql+pymysql://mrar1995_xmnt_dev:c*36^PtDNf%n*F7@127.0.0.1:3307/mrar1995_xmnt_dev_db'
+    elif branch == 'stag':
+        return 'mysql+pymysql://mrar1995_xmnt_stg:94@GvRGo%2JzaVC@127.0.0.1:3306/mrar1995_xmnt_stg_db'
+    elif branch == 'main':
+        return 'mysql+pymysql://mrar1995_xmnt_prd:u#N4KHC5S!*3jBL@127.0.0.1:3306/mrar1995_xmnt_prd_db'
+    else:
+        raise ValueError(f"Invalid branch: {branch}")
+
 class Config:
-    #SQLALCHEMY_DATABASE_URI = 'sqlite:///' + os.path.join(basedir, 'ExMint.db')
-    #Remember to run the SSH Tunnel before running the app: 
-    #start /B ssh -L 3307:127.0.0.1:3306 root@srv469975.hstgr.cloud -N
-    SQLALCHEMY_DATABASE_URI = 'mysql+pymysql://mrar1995_xmnt_dev:c*36^PtDNf%n*F7@127.0.0.1:3307/mrar1995_xmnt_dev_db'
+    # Detect the current Git branch
+    git_branch = os.popen('git rev-parse --abbrev-ref HEAD').read().strip()
+    SQLALCHEMY_DATABASE_URI = get_database_uri(git_branch)
 
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     SECRET_KEY = 'LaT!erraDe10lvido'  # Replace with a real secret key
