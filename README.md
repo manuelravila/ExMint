@@ -36,6 +36,8 @@ Instructions for setting up ExMint on a local development environment are as fol
   Copy code
   pip install -r requirements.txt
 ```
+Ensure that HashiCorp Vault Amd64 executable is present in a location in PATH on Windows (https://developer.hashicorp.com/vault/install#windows) or 
+
 3. **Environment Configuration:**
 Set up your .env file with the necessary environment variables including PLAID_CLIENT_ID, PLAID_SECRET, and DATABASE_URL.
 Initialize the Database:
