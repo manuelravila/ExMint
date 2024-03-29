@@ -3,16 +3,15 @@ import os
 import subprocess
 import plaid
 import json
-import urllib.parse
+from urllib.parse import quote_plus
 
 def get_secret(secret_id):
     try:
         # Use bws to fetch the secret by ID
         output = subprocess.check_output(['bws', 'secret', 'get', secret_id], text=True)
         secret = json.loads(output)
-        # Extract and decode the password or connection string from the secret value
-        decoded_value = urllib.parse.unquote(secret['value'])
-        return decoded_value
+        return secret['value']
+    
     except subprocess.CalledProcessError as e:
         raise ValueError(f"Failed to retrieve secret from Bitwarden: {str(e)}")
 
@@ -29,11 +28,19 @@ def get_database_uri():
     }
 
     if branch in secret_ids:
-        password = get_secret(secret_ids[branch])
-        # Bitwarden stores the entire connection string as the secret value
-        return password
+        # Fetch and URL encode the password
+        password = quote_plus(get_secret(secret_ids[branch]))
+        
+        if branch == 'dev':
+            return f'mysql+pymysql://mrar1995_xmnt_dev:{password}@127.0.0.1:3307/mrar1995_xmnt_dev_db'
+        elif branch == 'stag':
+            return f'mysql+pymysql://mrar1995_xmnt_stg:{password}@127.0.0.1:3306/mrar1995_xmnt_stg_db'
+        elif branch == 'main':
+            return f'mysql+pymysql://mrar1995_xmnt_prd:{password}@127.0.0.1:3306/mrar1995_xmnt_prd_db'
+        else:
+            raise ValueError(f"Invalid branch: {branch}")
     else:
-        raise ValueError(f"Invalid environment: {branch}")
+        raise ValueError(f"Secret ID for the branch '{branch}' not found")
 
 class Config:
  
