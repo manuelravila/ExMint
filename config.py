@@ -36,7 +36,7 @@ def get_bw_secret(secret_key, field_name=None):
     
     try:
         # List all secrets using bws CLI
-        output = subprocess.check_output(['bws', 'secret', 'list', '--session', bws_session], text=True)
+        output = subprocess.check_output(['bws', 'secret', 'list'], text=True)
         secrets = json.loads(output)
 
         # Convert secret_key to lowercase for case-insensitive comparison
@@ -94,6 +94,14 @@ def get_database_uri():
     else:
         raise ValueError(f"Secret Key for the branch '{branch}' not found")
 
+def decode_base64_urlsafe(encoded_str):
+    # Ensure the encoded string's length is a multiple of 4 by adding necessary padding
+    padding_needed = 4 - (len(encoded_str) % 4)
+    if padding_needed:
+        encoded_str += "=" * padding_needed
+
+    return base64.urlsafe_b64decode(encoded_str)
+
 class Config:
     """
     Configuration class for the Flask application.
@@ -112,7 +120,7 @@ class Config:
 
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     SECRET_KEY = get_bw_secret('SECRET_KEY') 
-    ENCRYPTION_KEY = base64.b64decode(get_bw_secret('ENCRYPTION_KEY'))
+    ENCRYPTION_KEY = decode_base64_urlsafe(get_bw_secret('ENCRYPTION_KEY'))
 
     # Plaid credentials
     PLAID_CLIENT_ID = get_bw_secret('PLAID_CLIENT_ID')
