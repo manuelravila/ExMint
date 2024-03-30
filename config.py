@@ -120,7 +120,16 @@ class Config:
 
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     SECRET_KEY = get_bw_secret('SECRET_KEY') 
-    ENCRYPTION_KEY = decode_base64_urlsafe(get_bw_secret('ENCRYPTION_KEY'))
+    print ('Secret Key:',SECRET_KEY)
+
+    ENCRYPTION_KEY = get_bw_secret('ENCRYPTION_KEY')
+    #ENCRYPTION_KEY = b'udMS0kDG5aCdF1c9BeJErPhlpWKxkkdc8aRKP-OJihg='
+
+    # Decode this base64 string to bytes for use in encryption (this is how Flask would need it)
+    #ENCRYPTION_KEY_BYTES = base64.urlsafe_b64decode(ENCRYPTION_KEY.encode('utf-8'))
+
+    #print('Working Encryption key:', base64.urlsafe_b64decode('udMS0kDG5aCdF1c9BeJErPhlpWKxkkdc8aRKP-OJihg='.encode('utf-8')))
+    #print('Bitwarden Encryption Key (URL-safe Base64):', ENCRYPTION_KEY_BYTES)
 
     # Plaid credentials
     PLAID_CLIENT_ID = get_bw_secret('PLAID_CLIENT_ID')
