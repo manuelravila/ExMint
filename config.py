@@ -30,9 +30,13 @@ def get_bw_secret(secret_key, field_name=None):
     Raises:
         ValueError: If the secret with the given key is not found or BWS retrieval fails.
     """
+    bws_session = os.getenv('BWS_ACCESS_TOKEN')
+    if not bws_session:
+        raise EnvironmentError("BWS_ACCESS_TOKEN environment variable not set.")
+    
     try:
         # List all secrets using bws CLI
-        output = subprocess.check_output(['bws', 'secret', 'list', '--session', os.getenv('BWS_SESSION')], text=True)
+        output = subprocess.check_output(['bws', 'secret', 'list', '--session', bws_session], text=True)
         secrets = json.loads(output)
 
         # Convert secret_key to lowercase for case-insensitive comparison
