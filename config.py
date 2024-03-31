@@ -31,6 +31,7 @@ def get_bw_secret(secret_key, field_name=None):
         ValueError: If the secret with the given key is not found or BWS retrieval fails.
     """
     bws_session = os.getenv('BWS_ACCESS_TOKEN')
+    print('Environment token: ',bws_session)
     if not bws_session:
         raise EnvironmentError("BWS_ACCESS_TOKEN environment variable not set.")
     
