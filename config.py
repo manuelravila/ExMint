@@ -3,10 +3,17 @@ import os
 import subprocess
 import plaid
 import json
-import base64
+import time
 from urllib.parse import quote_plus
 
 branch = os.getenv('FLASK_ENV', 'dev') 
+bws_session = os.getenv('BWS_ACCESS_TOKEN')
+if not bws_session:
+    raise EnvironmentError("BWS_ACCESS_TOKEN environment variable not set.")
+
+# Global cache dictionary
+SECRETS_CACHE = {}
+CACHE_EXPIRATION_SECONDS = 300  # Cache expiration time (5 minutes)
 
 def get_bw_secret(secret_key, field_name=None):
     """
@@ -30,11 +37,14 @@ def get_bw_secret(secret_key, field_name=None):
     Raises:
         ValueError: If the secret with the given key is not found or BWS retrieval fails.
     """
-    bws_session = os.getenv('BWS_ACCESS_TOKEN')
-    print('Environment token: ',bws_session)
-    if not bws_session:
-        raise EnvironmentError("BWS_ACCESS_TOKEN environment variable not set.")
-    
+
+    current_time = time.time()
+    cache_key = (secret_key, field_name)  # Use a tuple of secret_key and field_name as the cache key
+
+    # Check if the secret is in the cache and hasn't expired
+    if cache_key in SECRETS_CACHE and current_time < SECRETS_CACHE[cache_key]['expires']:
+        return SECRETS_CACHE[cache_key]['value']
+
     try:
         # List all secrets using bws CLI
         output = subprocess.check_output(['bws', 'secret', 'list'], text=True)
@@ -48,14 +58,19 @@ def get_bw_secret(secret_key, field_name=None):
         if not secret:
             raise ValueError(f"Secret with key '{secret_key}' not found.")
         
-        # If a field name is specified, return that field
-        if field_name:
-            return secret.get(field_name)
+        # Determine the value to return
+        value_to_return = secret.get(field_name) if field_name else secret['value']
         
-        # Otherwise, return the secret's value
-        return secret['value']
+        # Update the cache with the new value
+        SECRETS_CACHE[cache_key] = {
+            'value': value_to_return,
+            'expires': current_time + CACHE_EXPIRATION_SECONDS
+        }
+
+        return value_to_return
+    
     except subprocess.CalledProcessError as e:
-        raise ValueError(f"Failed to list or retrieve secret from Bitwarden: {str(e)}")
+        raise ValueError(f"Failed to list or retrieve secret from Secret Store: {str(e)}")
 
 def get_database_uri():
     """
@@ -95,14 +110,6 @@ def get_database_uri():
     else:
         raise ValueError(f"Secret Key for the branch '{branch}' not found")
 
-def decode_base64_urlsafe(encoded_str):
-    # Ensure the encoded string's length is a multiple of 4 by adding necessary padding
-    padding_needed = 4 - (len(encoded_str) % 4)
-    if padding_needed:
-        encoded_str += "=" * padding_needed
-
-    return base64.urlsafe_b64decode(encoded_str)
-
 class Config:
     """
     Configuration class for the Flask application.
@@ -121,16 +128,8 @@ class Config:
 
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     SECRET_KEY = get_bw_secret('SECRET_KEY') 
-    print ('Secret Key:',SECRET_KEY)
 
     ENCRYPTION_KEY = get_bw_secret('ENCRYPTION_KEY')
-    #ENCRYPTION_KEY = b'udMS0kDG5aCdF1c9BeJErPhlpWKxkkdc8aRKP-OJihg='
-
-    # Decode this base64 string to bytes for use in encryption (this is how Flask would need it)
-    #ENCRYPTION_KEY_BYTES = base64.urlsafe_b64decode(ENCRYPTION_KEY.encode('utf-8'))
-
-    #print('Working Encryption key:', base64.urlsafe_b64decode('udMS0kDG5aCdF1c9BeJErPhlpWKxkkdc8aRKP-OJihg='.encode('utf-8')))
-    #print('Bitwarden Encryption Key (URL-safe Base64):', ENCRYPTION_KEY_BYTES)
 
     # Plaid credentials
     PLAID_CLIENT_ID = get_bw_secret('PLAID_CLIENT_ID')
