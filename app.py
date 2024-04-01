@@ -264,7 +264,6 @@ def create_app():
                         cursor = None  # Reset cursor after using it once
 
                     response = client.transactions_sync(sync_request_payload)
-                    log_request_response(sync_request_payload, response)  
 
                     data = response.to_dict()
 
@@ -489,7 +488,7 @@ def create_app():
                 return jsonify({'success': True, 'message': 'Bank connection removed'}), 200
             else:
                 # Handle the failure case
-                app.logger.error(f"Failed to deactivate token: {plaid_response}")
+                print(f"Failed to deactivate token: {plaid_response}")
                 #return jsonify({'message': 'Failed to remove bank connection', 'error': plaid_response}), 400
                 session['modal_open'] = True  # Set session variable
                 return jsonify({'success': False, 'message': 'Failed to remove bank connection', 'error': plaid_response}), 400
@@ -511,21 +510,6 @@ def create_app():
             return jsonify({'access_token': access_token})
         except Exception as e:
             return jsonify({'error': 'Failed to retrieve access token', 'message': str(e)}), 500
-
-    def log_request_response(request, response):
-        log_dir = 'logs'
-        if not os.path.exists(log_dir):
-            os.makedirs(log_dir)
-
-        now = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-        log_file = os.path.join(log_dir, f'api_log_{now}.txt')
-
-        with open(log_file, 'a') as f:
-            f.write('Request:\n')
-            f.write(str(request) + '\n\n')
-            f.write('Response:\n')
-            f.write(str(response) + '\n\n')
-
 
     return app
 
