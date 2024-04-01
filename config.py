@@ -5,16 +5,7 @@ import plaid
 import json
 import time
 from urllib.parse import quote_plus
-from secrets_manager import get_secret
-
-branch = os.getenv('FLASK_ENV', 'dev') 
-bws_session = os.getenv('BWS_ACCESS_TOKEN')
-if not bws_session:
-    raise EnvironmentError("BWS_ACCESS_TOKEN environment variable not set.")
-
-# Global cache dictionary
-SECRETS_CACHE = {}
-CACHE_EXPIRATION_SECONDS = 300  # Cache expiration time (5 minutes)
+from secrets_manager import get_secret, branch
 
 def get_database_uri():
     print('Detected branch: ', branch)
