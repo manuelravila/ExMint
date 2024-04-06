@@ -66,7 +66,7 @@ def dashboard():
 def register():
     form = ProfileForm(is_registration=True)
     if current_user.is_authenticated:
-        return redirect(url_for('main.dashboard'))
+        return redirect(url_for('views.dashboard'))
     form = RegistrationForm()
     if form.validate_on_submit():
         hashed_password = generate_password_hash(form.password.data)
@@ -104,7 +104,7 @@ def login():
 
 def logout():
     logout_user()
-    return redirect(url_for('main.index'))
+    return redirect(url_for('views.index'))
 
 @views.route('/logout')
 def logout():

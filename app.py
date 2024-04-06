@@ -1,16 +1,11 @@
 #app.py
-from flask import Flask, jsonify, request, session, redirect, url_for
+from flask import Flask, jsonify, request, session
 from extensions import mail
 import plaid
 import json
 import csv
-#import requests
-#import time
-import re
-import os
 
 from datetime import datetime
-#from datetime import date
 
 from plaid.api import plaid_api
 from plaid.model.item_remove_request import ItemRemoveRequest
@@ -21,14 +16,14 @@ from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchan
 from version import __version__ as VERSION
 from config import Config
 from models import db, User, Credential, Account, PlaidTransaction
-#from forms import RegistrationForm, LoginForm
-#from views import index, register, views
-#from flask import Response
 from flask_bcrypt import Bcrypt
 from flask_login import LoginManager, login_required, current_user
 from flask_migrate import Migrate
 from io import StringIO
 from sqlalchemy import and_
+
+# Import the Add-In Blueprint
+from addin.addin import addin_bp
 
 # Initialize Extensions
 migrate = Migrate()
@@ -46,6 +41,9 @@ def create_app():
 
     from views import views as views_blueprint
     app.register_blueprint(views_blueprint)
+
+    # Register the Add-In Blueprint
+    app.register_blueprint(addin_bp, url_prefix='/api/addin')
 
     # Initialize Plaid client with environment from config
     plaid_environment = Config.get_plaid_environment()
