@@ -1,0 +1,154 @@
+<!-- taskpane.html -->
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ExMint Excel Add-In</title>
+    <!-- Office JavaScript API -->
+    <script type="text/javascript" src="https://appsforoffice.microsoft.com/lib/1.1/hosted/office.js"></script>
+    <!-- Bootstrap CSS -->
+    <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Custom CSS -->
+    <link href="taskpane.css" rel="stylesheet" type="text/css" />
+    <!-- Icons (FontAwesome) -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.1/css/all.min.css">
+</head>
+<body>
+    <div id="app-container">
+        <!-- Login Form -->
+        <div id="login-container" class="container">
+            <h2>Login</h2>
+            <form id="login-form">
+                <div class="form-group">
+                    <label for="login-input">Username or Email</label>
+                    <input type="text" class="form-control" id="login-input" required>
+                </div>
+                <div class="form-group">
+                    <label for="password-input">Password</label>
+                    <input type="password" class="form-control" id="password-input" required>
+                </div>
+                <button type="submit" class="btn btn-primary">Login</button>
+            </form>
+            <p>Don't have an account? <a href="#" id="register-link">Register</a></p>
+        </div>
+        
+        <header class="sticky-top">
+            <nav class="navbar navbar-expand-lg navbar-light bg-light">
+                <a class="navbar-brand" href="#">
+                    <img src="../../../static/images/logo.png" alt="Logo" style="height: 30px;">
+                </a>
+                <div class="ml-auto">
+                    <button id="link-button" class="btn btn-outline-secondary mr-2">
+                        <i class="fas fa-university"></i> Connect Institution
+                    </button>
+
+                    <div class="dropdown d-inline-block">
+                        <button class="btn btn-outline-secondary dropdown-toggle" type="button" id="profileMenu" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+                            <i class="fas fa-user"></i> My Account
+                        </button>
+                        <div class="dropdown-menu" aria-labelledby="profileMenu">
+                            <a class="dropdown-item" href="#" data-toggle="modal" data-target="#profileModal">Edit Profile</a>
+                            <a class="dropdown-item" href="#" data-toggle="modal" data-target="#myConnectionsModal">My Connections</a>
+                            <a class="dropdown-item" href="#" id="logout-link">Log out</a>
+                        </div>
+                    </div>
+                </div>
+            </nav>
+        </header>
+
+        <!-- Dashboard Content -->
+        <div class="container-fluid">
+            <div class="row" id="dashboard-app">
+                <!-- Left Sidebar: Connected Banks -->
+                <div class="col-lg-2 bg-light sidebar">
+                    <div class="sidebar-sticky pt-3">
+                        <h6 class="sidebar-heading d-flex justify-content-between align-items-center px-3 mt-4 mb-1 text-muted">
+                            <span>Connected Banks</span>
+                        </h6>
+                        <ul class="nav flex-column" id="connected-banks-list">
+                            <!-- Connected banks will be dynamically populated here -->
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Main content: Accounts -->
+                <main role="main" class="col-lg-8">
+                    <div id="accounts-container">
+                        <!-- Accounts will be dynamically populated here -->
+                    </div>
+                </main>
+            </div>
+        </div>
+
+        <!-- My Connections Modal -->
+        <div class="modal fade" id="myConnectionsModal" tabindex="-1" role="dialog" aria-labelledby="myConnectionsModalLabel" aria-hidden="true">
+            <div class="modal-dialog" role="document">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="myConnectionsModalLabel">My Connections</h5>
+                        <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                            <span aria-hidden="true">&times;</span>
+                        </button>
+                    </div>
+                    <div class="modal-body">
+                        <ul id="connections-list" class="list-group">
+                            <!-- Connections will be dynamically populated here -->
+                        </ul>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Profile Modal -->
+        <div class="modal fade" id="profileModal" tabindex="-1" role="dialog" aria-labelledby="profileModalLabel" aria-hidden="true">
+            <div class="modal-dialog" role="document">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="profileModalLabel">Profile</h5>
+                        <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                            <span aria-hidden="true">&times;</span>
+                        </button>
+                    </div>
+                    <div class="modal-body">
+                        <form id="profile-form">
+                            <div class="form-group">
+                                <label for="username">Username</label>
+                                <input type="text" class="form-control" id="username" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="email">Email</label>
+                                <input type="email" class="form-control" id="email" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="password">Password</label>
+                                <input type="password" class="form-control" id="password">
+                            </div>
+                            <div class="form-group">
+                                <label for="confirm-password">Confirm Password</label>
+                                <input type="password" class="form-control" id="confirm-password">
+                            </div>
+                            <div class="form-group">
+                                <label for="token">Token</label>
+                                <input type="text" class="form-control" id="token" readonly>
+                            </div>
+                            <button type="submit" class="btn btn-primary">Save Changes</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- JavaScript libraries -->
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.9.0/dist/umd/popper.min.js"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/js/bootstrap.min.js"></script>
+    <!-- Custom JavaScript -->
+    <script src="taskpane.js"></script>
+</body>
+</html>
