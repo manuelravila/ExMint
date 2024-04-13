@@ -2,14 +2,33 @@
 from flask import current_app, render_template, redirect, url_for, flash, request, jsonify, Blueprint, session
 from flask_login import login_user, current_user, logout_user, login_required
 from extensions import mail
+from functools import wraps
 from flask_mail import Message
 from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadSignature
 from forms import LoginForm, RegistrationForm, ProfileForm
 from models import User, db, Credential, Account
 from werkzeug.security import generate_password_hash, check_password_hash
-from config import Config
 
 views = Blueprint('views', __name__)
+
+def combined_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'Authorization' in request.headers:
+            # Attempt to authenticate via token
+            token = request.headers['Authorization'].split(" ")[1]
+            user_id = User.verify_auth_token(token)
+            if user_id:
+                return f(*args, **kwargs)
+            else:
+                return jsonify({'message': 'Token is invalid!'}), 403
+        else:
+            # Attempt to authenticate via session
+            if not current_user.is_authenticated:
+                return redirect(url_for('views.login'))
+            return f(*args, **kwargs)
+    return decorated_function
+
 
 @views.route('/')
 def index():
@@ -22,7 +41,7 @@ def index():
     return render_template('index.html', form=form)
 
 @views.route('/dashboard', methods=['GET', 'POST'])
-@login_required
+@combined_required
 def dashboard():
     user = current_user
     form = ProfileForm(obj=user)
@@ -87,29 +106,54 @@ def register():
 @views.route('/login', methods=['GET', 'POST'])
 def login():
     if current_user.is_authenticated:
-        return redirect(url_for('views.dashboard'))  # Make sure this is the correct endpoint
-    form = LoginForm()
-    if form.validate_on_submit():
-        try:
-            user = User.query.filter((User.username == form.login.data) | (User.email == form.login.data)).first()
-            if user and check_password_hash(user.password_hash, form.password.data):
-                login_user(user)
-                return redirect(url_for('views.dashboard'))  # Make sure this is the correct endpoint
-            else:
-                flash('Login Unsuccessful. Please check email and password', 'danger')
-        except Exception as e:
-            flash(f'An error occurred: {e}', 'danger')
-            # Optionally, log the error as well
-    return render_template('index.html', form=form)
+        # Decide response based on the source of the request
+        if request.headers.get('X-Request-Source') == 'Excel-Add-In':
+            return jsonify({'message': 'User already logged in'}), 200
+        return redirect(url_for('views.dashboard'))
 
+    # Distinguish between JSON and Form submissions
+    if request.headers.get('Content-Type') == 'application/json':
+        # Process JSON content
+        data = request.get_json()
+        username_or_email = data.get('login')
+        password = data.get('password')
+    else:
+        # Process form content
+        username_or_email = request.form.get('login')
+        password = request.form.get('password')
+
+    # Authenticate the user
+    if username_or_email and password:
+        user = User.query.filter((User.username == username_or_email) | (User.email == username_or_email)).first()
+        if user and check_password_hash(user.password_hash, password):
+            login_user(user, remember=True)  # Ensure to manage login session
+            if request.headers.get('X-Request-Source') == 'Excel-Add-In':
+                token = user.generate_auth_token()
+                return jsonify({'message': 'User logged in successfully', 'token': token}), 200
+            return redirect(url_for('views.dashboard'))
+        else:
+            error_message = 'Login Unsuccessful. Please check username and password'
+    else:
+        error_message = 'Login or password not provided'
+
+    # Handle error for both UI and Add-In
+    if request.headers.get('X-Request-Source') == 'Excel-Add-In':
+        return jsonify({'message': error_message}), 401
+    flash(error_message, 'danger')
+    return render_template('index.html')
+
+@views.route('/logout', methods=['GET', 'POST'])
+@combined_required
 def logout():
     logout_user()
-    return redirect(url_for('views.index'))
-
-@views.route('/logout')
-def logout():
-    logout_user()
-    return redirect(url_for('views.index'))
+    session.clear()
+    
+    if request.method == 'POST':
+        # Request from Excel Add-in
+        return jsonify({'message': 'Logged out successfully'})
+    else:
+        # Request from Flask UI
+        return redirect(url_for('views.index'))
 
 @views.route('/reset_password', methods=['GET', 'POST'])
 # Use https://mailtrap.io/ for email for now .

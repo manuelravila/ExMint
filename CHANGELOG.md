@@ -1,3 +1,11 @@
+## [0.2.0] - 2024-03-26 
+### Added
+- Added Excel Add-In code.
+
+### Changed
+- Updated /sync API to include number of transactions and type of refresh
+- Updated /sync API to record an audit entry with response from Plaid in every refresh
+
 ## [0.1.4] - 2024-04-02
 
 ### Added
