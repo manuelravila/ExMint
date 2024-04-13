@@ -19,11 +19,9 @@ from models import db, User, Credential, Account, PlaidTransaction
 from flask_bcrypt import Bcrypt
 from flask_login import LoginManager, login_required, current_user
 from flask_migrate import Migrate
+from flask_cors import CORS
 from io import StringIO
 from sqlalchemy import and_
-
-# Import the Add-In Blueprint
-from addin.addin import addin_bp
 
 # Initialize Extensions
 migrate = Migrate()
@@ -38,12 +36,10 @@ def create_app():
     mail.init_app(app)
     flask_bcrypt.init_app(app)
     login_manager.init_app(app)
+    CORS(app)
 
     from views import views as views_blueprint
     app.register_blueprint(views_blueprint)
-
-    # Register the Add-In Blueprint
-    app.register_blueprint(addin_bp, url_prefix='/api/addin')
 
     # Initialize Plaid client with environment from config
     plaid_environment = Config.get_plaid_environment()
@@ -145,12 +141,18 @@ def create_app():
             refresh_accounts(credential.id if is_refresh else credential_id, accounts_response.to_dict())
 
             # Log PlaidTransaction
+
+            filtered_response = {
+                'item': accounts_response['item'],
+                'request_id': accounts_response['request_id']
+            }
+
             plaid_transaction = PlaidTransaction(
                 user_id=current_user.id,
                 user_ip=request.remote_addr,
                 credential_id=credential.id,
                 operation='Institution Refresh' if is_refresh else 'Token Creation',
-                response=str(accounts_response)
+                response=str(filtered_response)
             )
             db.session.add(plaid_transaction)
 
@@ -332,22 +334,58 @@ def create_app():
                     'subtype': account.subtype,
                     'mask': account.mask,
                     'balance': balance,
+                    'transaction_count': len(account_transactions),
                     'transactions': account_transactions
                 })
 
             if not credential_error:
                 credential_data = {
+                    'credential_id': credential.id,
                     'institution_name': credential.institution_name,
+                    'operation': 'Update sync' if cursors_data else 'Full sync',
                     'next_cursor': next_cursor,
                     'accounts': accounts
                 }
                 banks.append(credential_data)
             else:
                 credential_data = {
+                    'credential_id': credential.id,
                     'institution_name': credential.institution_name,
+                    'operation': 'Update sync' if cursors_data else 'Full sync',
                     'error': credential_error
                 }
                 banks.append(credential_data)
+
+        # Record the transaction
+        transaction = PlaidTransaction(
+            user_id=user.id,
+            user_ip=request.remote_addr,
+            credential_id=credential.id,
+            operation='Update sync' if cursors_data else 'Full sync',
+            response=json.dumps({'banks': [
+                {
+                    'credential_id': bank['credential_id'],
+                    'institution_name': bank['institution_name'],
+                    'operation': bank['operation'],
+                    'next_cursor': bank.get('next_cursor'),
+                    'error': bank.get('error'),
+                    'accounts': [
+                        {
+                            'plaid_account_id': account['plaid_account_id'],
+                            'name': account['name'],
+                            'type': account['type'],
+                            'subtype': account['subtype'],
+                            'mask': account['mask'],
+                            'transaction_count': account['transaction_count']
+                        }
+                        for account in bank.get('accounts', [])
+                    ]
+                }
+                for bank in banks
+            ]})
+        )
+        db.session.add(transaction)
+        db.session.commit()
 
         return jsonify({'banks': banks, 'version': VERSION})
 

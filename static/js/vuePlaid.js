@@ -1,4 +1,4 @@
-//plaid_integration.js
+//vuePlaid.js
 const linkButton = document.getElementById('link-button');
 let linkHandler = null;
 
