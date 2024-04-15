@@ -1,6 +1,6 @@
 # ExMint: Personal Financial Dashboard
 
-ExMint is an advanced, feature-rich personal financial dashboard designed to provide users with a comprehensive view of their financial situation. Integrating with the Plaid API, it offers seamless connectivity with various financial institutions, allowing users to monitor their bank accounts, track transactions, and manage financial connections—all in one intuitive interface.
+ExMint is an advanced and feature-rich personal financial dashboard designed to provide users with a comprehensive view of their financial situation. Integrating with the Plaid API, it offers seamless connectivity with various financial institutions, allowing users to monitor their bank accounts, track transactions, and manage financial connections—all in one intuitive interface.
 
 ## Features
 
