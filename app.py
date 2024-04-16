@@ -36,7 +36,22 @@ def create_app():
     mail.init_app(app)
     flask_bcrypt.init_app(app)
     login_manager.init_app(app)
-    CORS(app)
+
+    # Configure CORS
+    cors_origins = [
+        "http://localhost:3000",  # Local dev URL
+        "https://stg-addin.exmint.me",  # Staging URL
+        "https://addin.exmint.me"  # Production URL
+    ]
+
+    CORS(app, resources={r"/*": {"origins": cors_origins}}, supports_credentials=True, allow_headers=[
+        'Content-Type', 
+        'Authorization', 
+        'X-Requested-With',
+        'X-Request-Source',
+        'x-user-token',
+        'cursors'
+    ])
 
     from views import views as views_blueprint
     app.register_blueprint(views_blueprint)
