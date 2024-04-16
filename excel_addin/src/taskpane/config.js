@@ -2,7 +2,7 @@
 (function() {
     const devUrl = 'http://127.0.0.1:5000';
     const prodUrl = 'https://app.exmint.me';
-    const stagingUrl = 'https://stg-addin.exmint.me';
+    const stagingUrl = 'https://stg-app.exmint.me';
     const hostname = window.location.hostname;
 
     let baseUrl;
