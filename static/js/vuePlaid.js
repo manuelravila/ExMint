@@ -20,7 +20,7 @@ async function createLinkToken(access_token = null) {
     }
 
     const data = await response.json();
-    console.log("Received link token:", data); // Debugging
+    //console.log("Received link token:", data); // Debugging
     return data.link_token; // Ensure to handle the case where this might be undefined due to errors
 }
 
@@ -30,9 +30,8 @@ let accessToken = null;
 
 // Function to initialize Plaid Link
 async function initializeLink() {
-    console.log("Calling initializeLink");
     const linkToken = await createLinkToken();
-    console.log("Received link token:", linkToken);
+    //console.log("Received link token:", linkToken);
     //console.log(linkToken);  // Add this line for debugging
     linkHandler = Plaid.create({
         token: linkToken,
@@ -48,14 +47,14 @@ async function initializeLink() {
             });
             const data = await response.json();
 
-            console.log("Get Access Token Response:", data); // Debugging: log the response from get access token
+            //console.log("Get Access Token Response:", data); // Debugging: log the response from get access token
 
             // After receiving the access token
             accessToken = data.access_token;  // Set the access token
             //console.log("Access Token:", accessToken);  // Debugging: log the access token
 
             if (response.ok && data.status === 'success') {
-                console.log("Access Token Added Successfully");
+                //console.log("Access Token Added Successfully");
                 if (typeof app !== 'undefined' && app.fetchBanks) {
                     app.fetchBanks(); // Refresh the banks data in Vue.js
                 } else {
@@ -72,22 +71,22 @@ async function initializeLink() {
         },
         // Add other Plaid Link configuration options here
     });
-    console.log("Plaid Link initialized", linkHandler);
+    //console.log("Plaid Link initialized", linkHandler);
 }
 
 // Function to initiate the reconnect process for a bank
 async function reconnectBank(bankId) {
-    console.log("Initiating reconnect for Bank ID:", bankId);
+    //console.log("Initiating reconnect for Bank ID:", bankId);
 
     try {
         const response = await fetch(`/api/get_access_token/${bankId}`, { method: 'GET' });
         if (!response.ok) throw new Error('Failed to fetch access token.');
 
         const {access_token} = await response.json();
-        console.log("Fetched access token for update:", access_token);
+        //console.log("Fetched access token for update:", access_token);
 
         const linkToken = await createLinkToken(access_token); 
-        console.log("Received link token for update mode:", linkToken);
+        //console.log("Received link token for update mode:", linkToken);
 
         linkHandler = Plaid.create({
             token: linkToken,
@@ -104,7 +103,7 @@ async function reconnectBank(bankId) {
                     })
                 });
                 if (refreshResponse.ok) {
-                    console.log("Accounts refreshed successfully");
+                    //console.log("Accounts refreshed successfully");
                     window.location.href = '/dashboard';
                 } else {
                     console.error("Failed to refresh accounts");
@@ -113,7 +112,7 @@ async function reconnectBank(bankId) {
             onExit: (err, metadata) => console.log("User exited link modal", err, metadata)
         });
 
-        console.log("Opening Plaid Link...");
+        //console.log("Opening Plaid Link...");
 
         linkHandler.open();
     } catch (error) {
@@ -125,7 +124,7 @@ async function reconnectBank(bankId) {
 async function initializePlaidLink() {
     try {
         await initializeLink();
-        console.log("Plaid Link initialized", linkHandler);
+        //console.log("Plaid Link initialized", linkHandler);
     } catch (error) {
         console.error("Error initializing Plaid Link:", error);
     }
@@ -193,14 +192,14 @@ new Vue({
             console.log("Attempting to remove bank:", bank);
         
             if (confirm(`Are you sure you want to remove your connection with ${bank.institution_name}?`)) {
-                console.log("Confirmed removal of bank:", bank);
+                //console.log("Confirmed removal of bank:", bank);
         
                 fetch('/api/remove_bank/' + bank.id, { method: 'DELETE' })
                     .then(response => response.json())
                     .then(data => {
                         console.log("Response data:", data);
                         if (data.success) {
-                            console.log("Bank connection removed:", bank);
+                            //console.log("Bank connection removed:", bank);
                             window.location.href = '/dashboard?connections_modal_open=true';
                         } else {
                             console.log("Error removing bank:", data.message);
@@ -221,7 +220,7 @@ new Vue({
                 .then(response => response.json())
                 .then(data => {
                     if (data.success) {
-                        console.log(`Account ${isEnabled ? 'enabled' : 'disabled'}:`, accountId);
+                        //console.log(`Account ${isEnabled ? 'enabled' : 'disabled'}:`, accountId);
                     } else {
                         console.error('Error toggling account:', data.message);
                         alert(`Failed to ${isEnabled ? 'enable' : 'disable'} account. Please try again.`);
@@ -238,6 +237,6 @@ new Vue({
     },
     mounted: function() {
         this.fetchBanks();
-        console.log("Vue instance mounted");
+        //console.log("Vue instance mounted");
     }
 });
