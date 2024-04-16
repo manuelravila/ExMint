@@ -17,7 +17,7 @@ Office.onReady(() => {
         $('.open-dashboard-btn').click(function() {
             const token = localStorage.getItem('authToken');
             if (token) {
-                const dashboardUrl = window.appConfig.apiUrl + 'dashboard';
+                const dashboardUrl = window.appConfig.apiUrl + '/dashboard';
                 const windowFeatures = 'toolbar=no,location=no,status=no,menubar=no,scrollbars=yes,resizable=yes,width=1200,height=800';
                 window.open(dashboardUrl, '_blank', windowFeatures);
             } else {
@@ -31,7 +31,7 @@ Office.onReady(() => {
         });
     
         $('#confirmLogout').click(function() {
-            fetch(window.appConfig.apiUrl + 'logout', {
+            fetch(window.appConfig.apiUrl + '/logout', {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${localStorage.getItem('authToken')}`,
@@ -147,7 +147,7 @@ function syncTransactions() {
     document.body.appendChild(loader);
   
     getCursors().then(cursors => {
-        fetch(window.appConfig.apiUrl + 'sync', {
+        fetch(window.appConfig.apiUrl + '/sync', {
           method: 'GET',
           headers: {
             'Authorization': `Bearer ${token}`,
