@@ -108,8 +108,11 @@ def register():
             db.session.add(user)
             db.session.commit()
             token = user.generate_auth_token()  # Generate and save the token
-            flash('Your account has been created! You are now able to log in', 'success')
-            return jsonify({'message': 'Account created successfully', 'token': token}), 201
+            login_user(user)  # Log in the user
+            response = redirect(url_for('views.dashboard'))
+            response.set_cookie('token', token, httponly=True, secure=True)  # Set the token as a cookie
+            flash('Your account has been created! You are now logged in.', 'success')
+            return response
         except Exception as e:
             flash(str(e), 'danger')
             return render_template('register.html', form=form)
