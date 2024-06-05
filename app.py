@@ -39,7 +39,7 @@ def create_app():
 
     # Configure CORS
     cors_origins = [
-        "http://localhost:3000",  # Local dev URL
+        "https://localhost:3000",  # Local dev URL
         "https://stg-addin.exmint.me",  # Staging URL
         "https://addin.exmint.me"  # Production URL
     ]
@@ -51,7 +51,7 @@ def create_app():
         'X-Request-Source',
         'x-user-token',
         'cursors'
-    ])
+    ], allow_methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'])
 
     from views import views as views_blueprint
     app.register_blueprint(views_blueprint)
@@ -308,7 +308,10 @@ def create_app():
 
                 except plaid.ApiException as e:
                     error_response = json.loads(e.body)
-                    if error_response.get('error_code') == 'ITEM_LOGIN_REQUIRED':
+                    print(f"Error fetching transactions: {error_response['error_message']}")
+                    if error_response.get('error_code') == 'DEVELOPMENT_ENVIRONMENT_BROWNOUT':
+                        return jsonify({'error': 'Plaid Development environment is undergoing a scheduled brownout. Please try again later.'}), 503
+                    elif error_response.get('error_code') == 'ITEM_LOGIN_REQUIRED':
                         credential.requires_update = True
                         db.session.commit()
                         credential_error = {
@@ -318,7 +321,6 @@ def create_app():
                         break  # Move to the next credential
                     else:
                         print("Error fetching transactions:", str(e))
-
 
                 except Exception as e:
                     print("General error during transaction fetching:", str(e))
@@ -403,6 +405,7 @@ def create_app():
         db.session.commit()
 
         return jsonify({'banks': banks, 'version': VERSION})
+
 
     @app.route('/api/accounts', methods=['GET'])
     @login_required

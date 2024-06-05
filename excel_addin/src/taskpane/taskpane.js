@@ -1,4 +1,5 @@
 import './taskpane.css';
+console.log("Taskpane script loaded");
 
 function showToast(message) {
   const toast = document.createElement('div');
