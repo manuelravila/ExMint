@@ -18,7 +18,6 @@ $('.sync-transactions-btn').click(function() {
 });
 
 Office.onReady(() => {
-  // Ensures Office APIs are completely loaded before setting up interactions.
   $(document).ready(function() {
       $('.open-dashboard-btn').click(function() {
           const token = localStorage.getItem('authToken');
@@ -58,17 +57,14 @@ Office.onReady(() => {
 });
 
 function getCursors() {
-  // This function needs to be async since we are interacting with Excel objects.
   return Excel.run(async (context) => {
     const sheet = context.workbook.worksheets.getItemOrNullObject('Accounts');
     await context.sync();
 
-    // If the sheet does not exist, we return an empty array.
     if (sheet.isNullObject) {
       return [];
     }
 
-    // Get the 'Credential ID' and 'Next Cursor' column data from the 'Accounts' table.
     const accountsTable = sheet.tables.getItem('Accounts');
     const credentialIdColumn = accountsTable.columns.getItem('Credential ID');
     const nextCursorColumn = accountsTable.columns.getItem('Next Cursor');
@@ -76,18 +72,16 @@ function getCursors() {
     const nextCursorValues = nextCursorColumn.getDataBodyRange().load('values');
     await context.sync();
 
-    // Combine 'Credential ID' and 'Next Cursor' values into 'credential_id:cursor' format.
     const credentialIdCursorPairs = credentialIdValues.values.flat().map((credentialId, index) => {
       const cursor = nextCursorValues.values.flat()[index];
       return cursor ? `${credentialId}:${cursor}` : null;
     });
 
-    // Filter out any empty values and return the comma-separated list.
     return credentialIdCursorPairs.filter(pair => pair).join(',');
   }).catch(error => {
     console.error('Error getting cursors:', error);
     showToast('Failed to get cursors for transactions sync.', 'error');
-    return ''; // Return an empty string in case of error.
+    return '';
   });
 }
 
@@ -100,7 +94,6 @@ function createCard(type, bankName, operation, transactionCount, errorCode, erro
   closeButton.innerHTML = '&times;';
   closeButton.addEventListener('click', () => {
     card.remove();
-    // Hide the cards container if there are no more cards
     if (cardsContainer.children.length === 0) {
       cardsContainer.style.display = 'none';
     }
@@ -138,118 +131,122 @@ function createCard(type, bankName, operation, transactionCount, errorCode, erro
 let isSyncing = false;
 
 function syncTransactions() {
-  if (isSyncing) {
-      console.log('Sync is already in progress');
-      return;
-  }
+    if (isSyncing) {
+        console.log('Sync is already in progress');
+        return;
+    }
 
-  isSyncing = true;
-  console.log('Syncing started');
+    isSyncing = true;
+    console.log('Syncing started');
 
-  const token = localStorage.getItem('authToken');
-  if (!token) {
-      console.error('User not authenticated');
-      showToast('Please log in to sync transactions.', 'warning');
-      isSyncing = false;
-      console.log('Syncing aborted: user not authenticated');
-      return;
-  }
+    const token = localStorage.getItem('authToken');
+    if (!token) {
+        console.error('User not authenticated');
+        showToast('Please log in to sync transactions.', 'warning');
+        isSyncing = false;
+        console.log('Syncing aborted: user not authenticated');
+        return;
+    }
 
-  const loader = document.createElement('div');
-  loader.className = 'loader';
-  loader.innerHTML = '<i class="fas fa-spinner fa-spin"></i><br>Loading Transactions';
-  document.body.appendChild(loader);
+    const loader = document.createElement('div');
+    loader.className = 'loader';
+    loader.innerHTML = '<i class="fas fa-spinner fa-spin"></i><br>Loading Transactions';
+    document.body.appendChild(loader);
 
-  Excel.run(context => {
-      const workbook = context.workbook;
-      return workbook.load('worksheets').context.sync()
-          .then(() => importTemplateSheets(context, workbook))
-          .then(() => getCursors())
-          .then(cursors => {
-              console.log('Cursors retrieved:', cursors);
-              return fetch(window.appConfig.apiUrl + '/sync', {
-                  method: 'GET',
-                  headers: {
-                      'Authorization': `Bearer ${token}`,
-                      'Content-Type': 'application/json',
-                      'X-Request-Source': 'Excel-Add-In',
-                      'x-user-token': token,
-                      'cursors': cursors
-                  }
-              });
-          })
-          .then(response => {
-              if (response.ok) {
-                  console.log('Sync response OK');
-                  return response.json();
-              } else {
-                  console.log('Sync response failed');
-                  throw new Error('Failed to sync transactions');
-              }
-          })
-          .then(data => {
-              console.log('Transaction data retrieved:', data);
-              return processTransactionData(context, workbook, data);
-          })
-          .catch(error => {
-              console.error('Error syncing transactions:', error);
-              showToast('Failed to sync transactions. Please try again.', 'error');
-          })
-          .finally(() => {
-              isSyncing = false;
-              const loader = document.querySelector('.loader');
-              if (loader) {
-                  document.body.removeChild(loader);
-              }
-              console.log('Syncing process completed, cleaning up.');
-          });
-  }).catch(error => {
-      console.error('Error in Excel.run:', error);
-      showToast('An error occurred. Please try again.', 'error');
-  });
+    Excel.run(context => {
+        const workbook = context.workbook;
+        return workbook.load('worksheets').context.sync()
+            .then(() => importTemplateSheets(context, workbook))
+            .then(() => getCursors())
+            .then(cursors => {
+                console.log('Cursors retrieved:', cursors);
+                return fetch(window.appConfig.apiUrl + '/sync', {
+                    method: 'GET',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json',
+                        'X-Request-Source': 'Excel-Add-In',
+                        'x-user-token': token,
+                        'cursors': cursors
+                    }
+                });
+            })
+            .then(response => {
+                if (response.ok) {
+                    console.log('Sync response OK');
+                    return response.json();
+                } else {
+                    console.log('Sync response failed');
+                    throw new Error('Failed to sync transactions');
+                }
+            })
+            .then(data => {
+                console.log('Transaction data retrieved:', data);
+                return processTransactionData(context, workbook, data);
+            })
+            .then(() => updateNamedRanges(context, workbook))
+            .then(() => applyFormulasToTransactions(context, workbook))
+            .then(() => recreatePivotTable(context))
+            .catch(error => {
+                console.error('Error syncing transactions:', error);
+                createErrorCard('Sync', 'SYNC_ERROR', error.message); // Create error card for sync error
+                showToast('Failed to sync transactions. Please try again.', 'error');
+            })
+            .finally(() => {
+                isSyncing = false;
+                const loader = document.querySelector('.loader');
+                if (loader) {
+                    document.body.removeChild(loader);
+                }
+                console.log('Syncing process completed, cleaning up.');
+            });
+    }).catch(error => {
+        console.error('Error in Excel.run:', error);
+        createErrorCard('Excel', 'EXCEL_ERROR', error.message); // Create error card for Excel error
+        showToast('An error occurred. Please try again.', 'error');
+    });
 }
 
+
 function processTransactionData(context, workbook, data) {
-  const banksWithErrors = new Set();
+    const banksWithErrors = new Set();
 
-  // Clear existing cards before adding new ones
-  const cardsContainer = document.getElementById('cardsContainer');
-  while (cardsContainer.firstChild) {
-      cardsContainer.removeChild(cardsContainer.firstChild);
-  }
+    const cardsContainer = document.getElementById('cardsContainer');
+    while (cardsContainer.firstChild) {
+        cardsContainer.removeChild(cardsContainer.firstChild);
+    }
 
-  // Process each bank item
-  if (data.banks) {
-      data.banks.forEach(bank => {
-          if (bank.error) {
-              const errorCode = bank.error.error_code;
-              const errorMessage = bank.error.error_message;
-              createErrorCard(bank.institution_name, errorCode, errorMessage);
-              banksWithErrors.add(bank.institution_name);
-          } else {
-              const transactionCount = bank.accounts.reduce((total, account) => total + (account.transactions ? account.transactions.length : 0), 0);
-              createSuccessCard(bank.institution_name, bank.operation, transactionCount);
-          }
-      });
-  }
+    if (data.banks) {
+        data.banks.forEach(bank => {
+            if (bank.error) {
+                const errorCode = bank.error.error_code;
+                const errorMessage = bank.error.error_message;
+                createErrorCard(bank.institution_name, errorCode, errorMessage); // Create error card for each bank error
+                banksWithErrors.add(bank.institution_name);
+            } else {
+                const transactionCount = bank.accounts.reduce((total, account) => total + (account.transactions ? account.transactions.length : 0), 0);
+                createSuccessCard(bank.institution_name, bank.operation, transactionCount);
+            }
+        });
+    }
 
-  return insertTransactionData(context, workbook, data, banksWithErrors)
-      .then(() => context.sync())
-      .then(() => {
-          showToast('Transactions synced successfully.', 'success');
-          console.log('Transaction data processed and synced successfully.');
-      })
-      .catch(error => {
-          console.error('Error syncing transactions:', error);
-          showToast('Failed to sync transactions. Please try again.', 'error');
-      });
+    return insertTransactionData(context, workbook, data, banksWithErrors)
+        .then(() => context.sync())
+        .then(() => {
+            showToast('Transactions synced successfully.', 'success');
+            console.log('Transaction data processed and synced successfully.');
+        })
+        .catch(error => {
+            console.error('Error syncing transactions:', error);
+            createErrorCard('ProcessData', 'PROCESS_ERROR', error.message); // Create error card for processing error
+            showToast('Failed to sync transactions. Please try again.', 'error');
+        });
 }
 
 function importTemplateSheets(context, workbook) {
   return new Promise((resolve, reject) => {
-      // Check if the template sheets already exist
       const sheets = workbook.worksheets;
-      const sheetNames = ['Dashboard', 'Accounts', 'Transactions', 'Conf'];
+      const sheetNames = ['Conf', 'Accounts', 'Transactions', 'Dashboard'];
       let existingSheets = [];
       
       sheets.load('items/name');
@@ -261,7 +258,6 @@ function importTemplateSheets(context, workbook) {
               }
           });
           
-          // Only import template sheets if they do not already exist
           if (existingSheets.length === 0) {
               fetch('/assets/template.xlsx')
                   .then(response => response.arrayBuffer())
@@ -280,122 +276,223 @@ function importTemplateSheets(context, workbook) {
 }
 
 function insertTransactionData(context, workbook, data, banksWithErrors) {
-  const accountsData = [];
-  const transactionsData = [];
+    const accountsData = [];
+    const transactionsData = [];
 
-  if (data.banks) {
-      data.banks.forEach(bank => {
-          if (banksWithErrors.has(bank.institution_name)) {
-              return;
-          }
+    if (data.banks) {
+        data.banks.forEach(bank => {
+            if (banksWithErrors.has(bank.institution_name)) {
+                return;
+            }
 
-          bank.accounts.forEach(account => {
-              const accountRow = [
-                  bank.institution_name,
-                  bank.credential_id,
-                  bank.next_cursor,
-                  account.balance,
-                  account.mask,
-                  account.name,
-                  account.plaid_account_id,
-                  account.subtype,
-                  account.type
-              ];
-              accountsData.push(accountRow);
+            bank.accounts.forEach(account => {
+                const accountRow = [
+                    bank.institution_name,
+                    bank.credential_id,
+                    bank.next_cursor,
+                    account.balance,
+                    account.mask,
+                    account.name,
+                    account.plaid_account_id,
+                    account.subtype,
+                    account.type
+                ];
+                accountsData.push(accountRow);
 
-              if (account.transactions) {
-                  account.transactions.forEach(transaction => {
-                      const categories = transaction.category ? transaction.category.join(', ') : '';
-                      // Convert the date string to an Excel datetime value
-                      const jsDate = new Date(transaction.date);
-                      const excelDate = jsDate.getTime() / (1000 * 60 * 60 * 24) + 25569 + (jsDate.getTimezoneOffset() / (60 * 24));
+                if (account.transactions) {
+                    account.transactions.forEach(transaction => {
+                        const categories = transaction.category ? transaction.category.join(', ') : '';
+                        const jsDate = new Date(transaction.date);
+                        const excelDate = jsDate.getTime() / (1000 * 60 * 60 * 24) + 25569 + (jsDate.getTimezoneOffset() / (60 * 24));
 
-                      const transactionRow = [
-                          account.plaid_account_id,
-                          transaction.action,
-                          -1 * transaction.amount,
-                          categories,
-                          excelDate, // Use the converted Excel datetime value here
-                          transaction.iso_currency_code,
-                          transaction.merchant_name || '',
-                          transaction.name,
-                          transaction.payment_channel,
-                          transaction.pending,
-                          transaction.transaction_id
-                      ];
-                      transactionsData.push(transactionRow);
-                  });
-              }
-          });
-      });
-  }
+                        const transactionRow = [
+                            account.plaid_account_id,
+                            transaction.action,
+                            -1 * transaction.amount,
+                            categories,
+                            excelDate,
+                            transaction.iso_currency_code,
+                            transaction.merchant_name || '',
+                            transaction.name,
+                            transaction.payment_channel,
+                            transaction.pending,
+                            transaction.transaction_id
+                        ];
+                        transactionsData.push(transactionRow);
+                    });
+                }
+            });
+        });
+    }
 
-  const accountsTable = workbook.tables.getItem('Accounts');
-  const transactionsTable = workbook.tables.getItem('Transactions');
+    const accountsTable = workbook.tables.getItem('Accounts');
+    const transactionsTable = workbook.tables.getItem('Transactions');
 
-  // Clear existing data in the tables
-  accountsTable.clearFilters();
-  accountsTable.getDataBodyRange().clear();
-  transactionsTable.clearFilters();
-  transactionsTable.getDataBodyRange().clear();
+    accountsTable.clearFilters();
+    accountsTable.getDataBodyRange().clear();
+    transactionsTable.clearFilters();
+    transactionsTable.getDataBodyRange().clear();
 
-  // Load table columns
-  const transactionsHeaderRange = transactionsTable.getHeaderRowRange().load('values');
-  
-  return context.sync().then(() => {
-      const transactionColumns = transactionsHeaderRange.values[0];
+    const transactionsHeaderRange = transactionsTable.getHeaderRowRange().load('values');
+    
+    return context.sync().then(() => {
+        const transactionColumns = transactionsHeaderRange.values[0];
 
-      const formattedTransactionsData = transactionsData.map(transactionRow => {
-          const formattedRow = [];
-          transactionColumns.forEach((column, index) => {
-              formattedRow.push(transactionRow[index] || '');
-          });
-          return formattedRow;
-      });
+        const formattedTransactionsData = transactionsData.map(transactionRow => {
+            const formattedRow = [];
+            transactionColumns.forEach((column, index) => {
+                formattedRow.push(transactionRow[index] || '');
+            });
+            return formattedRow;
+        });
 
-      accountsTable.rows.add(null, accountsData);
-      transactionsTable.rows.add(null, formattedTransactionsData);
-      
-      return applyFormulasToTransactions(context, workbook); // Call the formula application function
-  });
+        accountsTable.rows.add(null, accountsData);
+        transactionsTable.rows.add(null, formattedTransactionsData);
+
+        return applyFormulasToTransactions(context, workbook);
+    }).catch(error => {
+        console.error('Error in insertTransactionData:', error);
+        showToast('Failed to insert transaction data. Please try again.', 'error');
+    });
 }
 
 async function applyFormulasToTransactions(context, workbook) {
     try {
-        const confSheet = workbook.worksheets.getItem('Conf');
-        const transactionsSheet = workbook.worksheets.getItem('Transactions');
+        console.log('Starting to apply formulas to transactions...');
 
-        // Load the Formulas table
+        const confSheet = workbook.worksheets.getItem('Conf');
+        await confSheet.load('name').context.sync();
+
         const formulasTable = confSheet.tables.getItem('Formulas');
         const formulaColumns = formulasTable.columns.load('items');
         await context.sync();
 
-        // Load the Transactions table
+        const transactionsSheet = workbook.worksheets.getItem('Transactions');
+        await transactionsSheet.load('name').context.sync();
+
         const transactionsTable = transactionsSheet.tables.getItem('Transactions');
         const transactionColumns = transactionsTable.columns.load('items');
         await context.sync();
 
-        // Iterate over each formula in the Formulas table
-        for (let i = 0; i < formulaColumns.items.length; i++) {
-            const formulaColumn = formulaColumns.items[i];
-            const formulaRange = formulaColumn.getDataBodyRange().load('values');
-            await context.sync();
+        const formulaRange = formulasTable.getDataBodyRange().load('values');
+        await context.sync();
 
-            const formula = formulaRange.values[0][0];
+        for (let i = 0; i < formulaRange.values.length; i++) {
+            const [columnName, formula] = formulaRange.values[i];
+
             if (formula) {
-                const transactionColumn = transactionsTable.columns.getItem(formulaColumn.name);
+                const transactionColumn = transactionsTable.columns.getItem(columnName);
                 const transactionColumnRange = transactionColumn.getDataBodyRange();
-                
-                // Apply the formula to the entire column
-                transactionColumnRange.formulas = [[`=${formula}`]];
+                await transactionColumnRange.load('rowCount').context.sync();
+
+                const rowCount = transactionColumnRange.rowCount;
+
+                const isArrayFormula = formula.includes("XLOOKUP") || formula.includes("MATCH") || formula.includes("INDEX") || formula.includes("SUMIFS") || formula.includes("AVERAGEIFS");
+
+                if (isArrayFormula) {
+                    transactionColumnRange.formulas = Array(rowCount).fill([`=${formula}`]);
+                } else {
+                    transactionColumnRange.formulas = Array(rowCount).fill([`=${formula}`]);
+                }
+
+                await context.sync();
             }
         }
+        console.log('Formulas applied to all columns successfully');
 
+        // Set the value of the named cell "Sel_Month" to the first cell of the named range "Unique_Months"
+        const dashboardSheet = workbook.worksheets.getItem('Dashboard');
+        const confD1Range = confSheet.getRange('D1');
+        const dashboardD2Range = dashboardSheet.getRange('D2');
+        await confD1Range.load('values');
         await context.sync();
+        const confD1Value = confD1Range.values[0][0];
+        dashboardD2Range.values = [[confD1Value]];
+        await context.sync();
+    
+        console.log('Cell D2 in "Dashboard" set to the value of cell D1 in "Conf" successfully');
+        
+        // Hide the "Conf" sheet
+        confSheet.visibility = Excel.SheetVisibility.hidden;
+        await context.sync();
+        
     } catch (error) {
         console.error('Error applying formulas to transactions:', error);
     }
 }
+
+async function updateNamedRanges(context, workbook) {
+    try {
+        console.log('Starting to update named ranges...');
+
+        const confSheet = workbook.worksheets.getItem('Conf');
+        await confSheet.load('name').context.sync();
+
+        const namesTable = confSheet.tables.getItem('Names');
+        const namesDataRange = namesTable.getDataBodyRange().load('values');
+        await context.sync();
+
+        for (let i = 0; i < namesDataRange.values.length; i++) {
+            const [name, formula] = namesDataRange.values[i];
+
+            const cleanFormula = formula.startsWith('=') ? formula : `=${formula}`;
+
+            let namedRange = workbook.names.getItemOrNullObject(name);
+            await context.sync();
+
+            if (namedRange.isNullObject) {
+                workbook.names.add(name, cleanFormula);
+            } else {
+                namedRange.formula = cleanFormula;
+            }
+
+            await context.sync();
+        }
+
+        console.log('Named ranges updated successfully');
+    } catch (error) {
+        console.error('Error updating named ranges:', error);
+    }
+}
+
+async function recreatePivotTable(context) {
+    try {
+      console.log('Starting to recreate pivot table...');
+  
+      // Delete the existing PivotTable named "Summary"
+      const dashboardSheet = context.workbook.worksheets.getItem("Dashboard");
+      const pivotTable = dashboardSheet.pivotTables.getItem("Summary");
+      pivotTable.delete();
+      await context.sync();
+  
+      // Create a new PivotTable named "Summary" on sheet "Dashboard" at cell A4
+      const newPivotTable = dashboardSheet.pivotTables.add("Summary", "Transactions", "A4");
+      newPivotTable.columnGrandTotals = false;
+      newPivotTable.rowGrandTotals = false;
+  
+      // Add row hierarchies
+      newPivotTable.rowHierarchies.add(newPivotTable.hierarchies.getItem("Custom Category"));
+      newPivotTable.rowHierarchies.add(newPivotTable.hierarchies.getItem("Name"));
+  
+      // Add data hierarchies and set summarization
+      const averageHierarchy = newPivotTable.hierarchies.getItem("6M AVG");
+      const budgetHierarchy = newPivotTable.hierarchies.getItem("Budget");
+  
+      const averageField = newPivotTable.dataHierarchies.add(averageHierarchy);
+      averageField.summarizeBy = Excel.AggregationFunction.max;
+      averageField.numberFormat = "$#,##0";
+  
+      const budgetField = newPivotTable.dataHierarchies.add(budgetHierarchy);
+      budgetField.summarizeBy = Excel.AggregationFunction.max;
+      budgetField.numberFormat = "$#,##0";
+  
+      await context.sync();
+  
+      console.log('Pivot table recreated successfully');
+    } catch (error) {
+      console.error('Error recreating pivot table:', error);
+    }
+  }
 
 function createErrorCard(institutionName, errorCode, errorMessage) {
     const errorCard = createCard('error', institutionName, null, null, errorCode, errorMessage);

@@ -20,7 +20,7 @@ async function createLinkToken(access_token = null) {
     }
 
     const data = await response.json();
-    //console.log("Received link token:", data); // Debugging
+    console.log("Received link token:", data); // Debugging
     return data.link_token; // Ensure to handle the case where this might be undefined due to errors
 }
 
@@ -31,8 +31,8 @@ let accessToken = null;
 // Function to initialize Plaid Link
 async function initializeLink() {
     const linkToken = await createLinkToken();
-    //console.log("Received link token:", linkToken);
-    //console.log(linkToken);  // Add this line for debugging
+    console.log("Received link token:", linkToken);
+    console.log(linkToken);  // Add this line for debugging
     linkHandler = Plaid.create({
         token: linkToken,
         onSuccess: async (publicToken, metadata) => {
@@ -47,11 +47,11 @@ async function initializeLink() {
             });
             const data = await response.json();
 
-            //console.log("Get Access Token Response:", data); // Debugging: log the response from get access token
+            console.log("Get Access Token Response:", data); // Debugging: log the response from get access token
 
             // After receiving the access token
             accessToken = data.access_token;  // Set the access token
-            //console.log("Access Token:", accessToken);  // Debugging: log the access token
+            console.log("Access Token:", accessToken);  // Debugging: log the access token
 
             if (response.ok && data.status === 'success') {
                 //console.log("Access Token Added Successfully");
@@ -71,7 +71,7 @@ async function initializeLink() {
         },
         // Add other Plaid Link configuration options here
     });
-    //console.log("Plaid Link initialized", linkHandler);
+    console.log("Plaid Link initialized", linkHandler);
 }
 
 // Function to initiate the reconnect process for a bank
