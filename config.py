@@ -49,7 +49,7 @@ class Config:
         MAIL_SERVER = 'mail.exmint.me'
         MAIL_USERNAME = 'admin@exmint.me'
     else:
-        PLAID_ENV = 'development' # or 'sandbox'
+        PLAID_ENV = 'sandbox' 
         MAIL_SERVER = 'sandbox.smtp.mailtrap.io'
         MAIL_USERNAME = '357e33875489f2'
 
