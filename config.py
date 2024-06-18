@@ -5,16 +5,7 @@ import plaid
 import json
 import time
 from urllib.parse import quote_plus
-from secrets_manager import get_secret
-
-branch = os.getenv('FLASK_ENV', 'dev') 
-bws_session = os.getenv('BWS_ACCESS_TOKEN')
-if not bws_session:
-    raise EnvironmentError("BWS_ACCESS_TOKEN environment variable not set.")
-
-# Global cache dictionary
-SECRETS_CACHE = {}
-CACHE_EXPIRATION_SECONDS = 300  # Cache expiration time (5 minutes)
+from secrets_manager import get_secret, branch
 
 def get_database_uri():
     print('Detected branch: ', branch)
@@ -58,7 +49,7 @@ class Config:
         MAIL_SERVER = 'mail.exmint.me'
         MAIL_USERNAME = 'admin@exmint.me'
     else:
-        PLAID_ENV = 'development' # or 'sandbox'
+        PLAID_ENV = 'sandbox' 
         MAIL_SERVER = 'sandbox.smtp.mailtrap.io'
         MAIL_USERNAME = '357e33875489f2'
 
