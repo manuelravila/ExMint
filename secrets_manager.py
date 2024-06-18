@@ -5,6 +5,12 @@ import json
 import time
 from filelock import FileLock
 
+branch = os.getenv('FLASK_ENV', 'dev') 
+bws_session = os.getenv('BWS_ACCESS_TOKEN')
+if not bws_session:
+    raise EnvironmentError("BWS_ACCESS_TOKEN environment variable not set.")
+
+
 SECRETS_CACHE = {}
 CACHE_EXPIRATION_SECONDS = 300  # Cache expiration time (5 minutes)
 LOCK_FILE = 'secrets.lock'

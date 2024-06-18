@@ -1,16 +1,11 @@
 #app.py
-from flask import Flask, jsonify, request, session, redirect, url_for
+from flask import Flask, jsonify, request, session
 from extensions import mail
 import plaid
 import json
 import csv
-#import requests
-#import time
-import re
-import os
 
 from datetime import datetime
-#from datetime import date
 
 from plaid.api import plaid_api
 from plaid.model.item_remove_request import ItemRemoveRequest
@@ -21,12 +16,10 @@ from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchan
 from version import __version__ as VERSION
 from config import Config
 from models import db, User, Credential, Account, PlaidTransaction
-#from forms import RegistrationForm, LoginForm
-#from views import index, register, views
-#from flask import Response
 from flask_bcrypt import Bcrypt
 from flask_login import LoginManager, login_required, current_user
 from flask_migrate import Migrate
+from flask_cors import CORS
 from io import StringIO
 from sqlalchemy import and_
 
@@ -43,6 +36,22 @@ def create_app():
     mail.init_app(app)
     flask_bcrypt.init_app(app)
     login_manager.init_app(app)
+
+    # Configure CORS
+    cors_origins = [
+        "https://localhost:3000",  # Local dev URL
+        "https://stg-addin.exmint.me",  # Staging URL
+        "https://addin.exmint.me"  # Production URL
+    ]
+
+    CORS(app, resources={r"/*": {"origins": cors_origins}}, supports_credentials=True, allow_headers=[
+        'Content-Type', 
+        'Authorization', 
+        'X-Requested-With',
+        'X-Request-Source',
+        'x-user-token',
+        'cursors'
+    ], allow_methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'])
 
     from views import views as views_blueprint
     app.register_blueprint(views_blueprint)
@@ -147,12 +156,18 @@ def create_app():
             refresh_accounts(credential.id if is_refresh else credential_id, accounts_response.to_dict())
 
             # Log PlaidTransaction
+
+            filtered_response = {
+                'item': accounts_response['item'],
+                'request_id': accounts_response['request_id']
+            }
+
             plaid_transaction = PlaidTransaction(
                 user_id=current_user.id,
                 user_ip=request.remote_addr,
                 credential_id=credential.id,
                 operation='Institution Refresh' if is_refresh else 'Token Creation',
-                response=str(accounts_response)
+                response=str(filtered_response)
             )
             db.session.add(plaid_transaction)
 
@@ -264,7 +279,6 @@ def create_app():
                         cursor = None  # Reset cursor after using it once
 
                     response = client.transactions_sync(sync_request_payload)
-                    log_request_response(sync_request_payload, response)  
 
                     data = response.to_dict()
 
@@ -294,7 +308,10 @@ def create_app():
 
                 except plaid.ApiException as e:
                     error_response = json.loads(e.body)
-                    if error_response.get('error_code') == 'ITEM_LOGIN_REQUIRED':
+                    print(f"Error fetching transactions: {error_response['error_message']}")
+                    if error_response.get('error_code') == 'DEVELOPMENT_ENVIRONMENT_BROWNOUT':
+                        return jsonify({'error': 'Plaid Development environment is undergoing a scheduled brownout. Please try again later.'}), 503
+                    elif error_response.get('error_code') == 'ITEM_LOGIN_REQUIRED':
                         credential.requires_update = True
                         db.session.commit()
                         credential_error = {
@@ -304,7 +321,6 @@ def create_app():
                         break  # Move to the next credential
                     else:
                         print("Error fetching transactions:", str(e))
-
 
                 except Exception as e:
                     print("General error during transaction fetching:", str(e))
@@ -335,24 +351,61 @@ def create_app():
                     'subtype': account.subtype,
                     'mask': account.mask,
                     'balance': balance,
+                    'transaction_count': len(account_transactions),
                     'transactions': account_transactions
                 })
 
             if not credential_error:
                 credential_data = {
+                    'credential_id': credential.id,
                     'institution_name': credential.institution_name,
+                    'operation': 'Update sync' if cursors_data else 'Full sync',
                     'next_cursor': next_cursor,
                     'accounts': accounts
                 }
                 banks.append(credential_data)
             else:
                 credential_data = {
+                    'credential_id': credential.id,
                     'institution_name': credential.institution_name,
+                    'operation': 'Update sync' if cursors_data else 'Full sync',
                     'error': credential_error
                 }
                 banks.append(credential_data)
 
+        # Record the transaction
+        transaction = PlaidTransaction(
+            user_id=user.id,
+            user_ip=request.remote_addr,
+            credential_id=credential.id,
+            operation='Update sync' if cursors_data else 'Full sync',
+            response=json.dumps({'banks': [
+                {
+                    'credential_id': bank['credential_id'],
+                    'institution_name': bank['institution_name'],
+                    'operation': bank['operation'],
+                    'next_cursor': bank.get('next_cursor'),
+                    'error': bank.get('error'),
+                    'accounts': [
+                        {
+                            'plaid_account_id': account['plaid_account_id'],
+                            'name': account['name'],
+                            'type': account['type'],
+                            'subtype': account['subtype'],
+                            'mask': account['mask'],
+                            'transaction_count': account['transaction_count']
+                        }
+                        for account in bank.get('accounts', [])
+                    ]
+                }
+                for bank in banks
+            ]})
+        )
+        db.session.add(transaction)
+        db.session.commit()
+
         return jsonify({'banks': banks, 'version': VERSION})
+
 
     @app.route('/api/accounts', methods=['GET'])
     @login_required
@@ -489,7 +542,7 @@ def create_app():
                 return jsonify({'success': True, 'message': 'Bank connection removed'}), 200
             else:
                 # Handle the failure case
-                app.logger.error(f"Failed to deactivate token: {plaid_response}")
+                print(f"Failed to deactivate token: {plaid_response}")
                 #return jsonify({'message': 'Failed to remove bank connection', 'error': plaid_response}), 400
                 session['modal_open'] = True  # Set session variable
                 return jsonify({'success': False, 'message': 'Failed to remove bank connection', 'error': plaid_response}), 400
@@ -511,21 +564,6 @@ def create_app():
             return jsonify({'access_token': access_token})
         except Exception as e:
             return jsonify({'error': 'Failed to retrieve access token', 'message': str(e)}), 500
-
-    def log_request_response(request, response):
-        log_dir = 'logs'
-        if not os.path.exists(log_dir):
-            os.makedirs(log_dir)
-
-        now = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-        log_file = os.path.join(log_dir, f'api_log_{now}.txt')
-
-        with open(log_file, 'a') as f:
-            f.write('Request:\n')
-            f.write(str(request) + '\n\n')
-            f.write('Response:\n')
-            f.write(str(response) + '\n\n')
-
 
     return app
 

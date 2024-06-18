@@ -14,6 +14,9 @@ views = Blueprint('views', __name__)
 def combined_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
+        print(f"Request endpoint: {request.endpoint}")
+        print(f"Request headers: {request.headers}")
+        print(f"Request cookies: {request.cookies}")
 
         if request.endpoint == 'views.logout':
             print("Allowing logout route to bypass authentication")
@@ -40,10 +43,11 @@ def combined_required(f):
                     return f(*args, **kwargs)
                 else:
                     print("Token is invalid!")
-                    return redirect(url_for('views.login'))  # Redirect to login page for invalid token
 
-            print("Token not found. Redirecting to login.")
-            return redirect(url_for('views.login'))
+            print("Token not found or invalid. Attempting to authenticate via session.")
+            if 'user_id' not in session:
+                print("User ID not found in the session. Redirecting to login.")
+                return redirect(url_for('views.login'))
 
         return f(*args, **kwargs)
     return decorated_function
@@ -52,7 +56,19 @@ def combined_required(f):
 def index():
     if current_user.is_authenticated:
         return redirect(url_for('views.dashboard'))
-    return redirect(url_for('views.login'))
+    form = LoginForm()
+    if form.validate_on_submit():
+        try:
+            user = User.query.filter((User.username == form.login.data) | (User.email == form.login.data)).first()
+            if user and check_password_hash(user.password_hash, form.password.data):
+                login_user(user)
+                return redirect(url_for('views.dashboard'))  # Make sure this is the correct endpoint
+            else:
+                flash('Login Unsuccessful. Please check email and password', 'danger')
+        except Exception as e:
+            flash(f'An error occurred: {e}', 'danger')
+            # Optionally, log the error as well
+    return render_template('index.html', form=form)
 
 @views.route('/dashboard', methods=['GET', 'POST'])
 @combined_required
@@ -97,9 +113,9 @@ def dashboard():
 
 @views.route('/register', methods=['GET', 'POST'])
 def register():
+    form = ProfileForm(is_registration=True)
     if current_user.is_authenticated:
         return redirect(url_for('views.dashboard'))
-
     form = RegistrationForm()
     if form.validate_on_submit():
         hashed_password = generate_password_hash(form.password.data)
@@ -107,37 +123,32 @@ def register():
             user = User(username=form.username.data, email=form.email.data, password_hash=hashed_password)
             db.session.add(user)
             db.session.commit()
-            token = user.generate_auth_token()  # Generate and save the token
-            login_user(user)  # Log in the user
-            response = redirect(url_for('views.dashboard'))
-            response.set_cookie('token', token, httponly=True, secure=True)  # Set the token as a cookie
-            flash('Your account has been created! You are now logged in.', 'success')
-            return response
+            user.generate_auth_token()  # Generate and save the token
+            flash('Your account has been created! You are now able to log in', 'success')
+            return redirect(url_for('views.login'))
         except Exception as e:
             flash(str(e), 'danger')
             return render_template('register.html', form=form)
 
     return render_template('register.html', title='Register', form=form)
 
+
 @views.route('/login', methods=['GET', 'POST'])
 def login():
     if current_user.is_authenticated:
-        return handle_authenticated_user()
+        # Decide response based on the source of the request
+        if request.headers.get('X-Request-Source') == 'Excel-Add-In':
+            return jsonify({'message': 'User already logged in'}), 200
+        return redirect(url_for('views.dashboard'))
 
-    if request.method == 'POST':
-        return handle_login_request()
-
-    form = LoginForm()
-    return render_template('index.html', form=form)
-
-
-def handle_login_request():
     # Distinguish between JSON and Form submissions
-    try:
+    if request.headers.get('Content-Type') == 'application/json':
+        # Process JSON content
         data = request.get_json()
         username_or_email = data.get('login')
         password = data.get('password')
-    except:
+    else:
+        # Process form content
         username_or_email = request.form.get('login')
         password = request.form.get('password')
 
@@ -146,47 +157,34 @@ def handle_login_request():
         user = User.query.filter((User.username == username_or_email) | (User.email == username_or_email)).first()
         if user and check_password_hash(user.password_hash, password):
             login_user(user, remember=True)
-            return handle_successful_login(user)
+            # Ensure to manage login session
+            if request.headers.get('X-Request-Source') == 'Excel-Add-In':
+                token = user.generate_auth_token()
+                return jsonify({'message': 'User logged in successfully', 'token': token}), 200
+            else:
+                # Set the token as a cookie in the response for web login
+                response = redirect(url_for('views.dashboard'))
+                token = user.generate_auth_token()
+                response.set_cookie('token', token)
+                return response
         else:
             error_message = 'Login Unsuccessful. Please check username and password'
     else:
         error_message = 'Login or password not provided'
 
-    return handle_unsuccessful_login(error_message)
-
-
-def handle_authenticated_user():
-    # Decide response based on the source of the request
-    if request.headers.get('X-Request-Source') == 'Excel-Add-In':
-        return jsonify({'message': 'User already logged in'}), 200
-    return redirect(url_for('views.dashboard'))
-
-
-def handle_successful_login(user):
-    if request.headers.get('X-Request-Source') == 'Excel-Add-In':
-        token = user.generate_auth_token()
-        return jsonify({'message': 'User logged in successfully', 'token': token}), 200
-    else:
-        # Set the token as a cookie in the response for web login
-        response = redirect(url_for('views.dashboard'))
-        token = user.generate_auth_token()
-        response.set_cookie('token', token, httponly=True, secure=True)
-        return response
-
-
-def handle_unsuccessful_login(error_message):
+    # Handle unsuccessful login
     if request.headers.get('X-Request-Source') == 'Excel-Add-In':
         return jsonify({'message': error_message}), 401
     else:
         flash(error_message, 'danger')
-        return redirect(url_for('views.login'))
-
+        return redirect(url_for('views.index'))
 
 @views.route('/logout', methods=['GET', 'POST'])
 @combined_required
 def logout():
     print(f"User logged in: {current_user.is_authenticated}")
     logout_user()
+    session.pop('_user_id', None)
     print(f"User logged out: {not current_user.is_authenticated}")
     if request.method == 'POST':
         print("Request from Excel Add-in")
@@ -262,7 +260,7 @@ def reset_password_token(token):
         return redirect(url_for('views.login'))
 
 @views.route('/user-info', methods=['GET', 'POST'])
-@combined_required
+@login_required
 def get_user_info():
     user = User.query.filter_by(id=current_user.id).first()
     if not user:
