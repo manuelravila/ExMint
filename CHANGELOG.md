@@ -1,3 +1,32 @@
+## [0.3.0] - 2024-06-17
+
+### Added
+- Initial beta release of the Excel Add-In.
+- Included an Excel template in the assets subdirectory under the add-in `dist` folder for managing Accounts and Transactions table and elements in the dashboard.
+
+### Important Notes
+- Formulas in the Transactions table must be added to the Formulas table in the "Conf" sheet.
+- Named ranges need to be updated from the Office.js API.
+- Any PivotTable needs to be recreated via command.
+
+### Script Breakdown
+- **Console Log:** Indicates that the dashboard script has been loaded successfully.
+- **Show Toast Function:** Displays a temporary message to the user with different types (info, success, warning, error).
+- **Sync Transactions Button:** Attaches a click event handler to the sync transactions button to initiate the sync process.
+- **Office onReady Event:** Ensures that the script waits for the Office context to be ready before attaching event handlers and performing other operations.
+- **Get Cursors Function:** Retrieves cursor values from the Accounts table for syncing transactions.
+- **Create Card Function:** Generates a card element to display messages about success or error transactions.
+- **Sync Transactions Function:** Handles the entire process of syncing transactions, including authentication, data retrieval, and processing.
+- **Process Transaction Data Function:** Processes the retrieved transaction data and updates the relevant Excel tables.
+- **Import Template Sheets Function:** Ensures that the necessary template sheets are imported into the workbook if they do not already exist.
+- **Insert Transaction Data Function:** Inserts transaction data into the Accounts and Transactions tables in the Excel workbook.
+- **Apply Formulas to Transactions Function:** Applies formulas from the Formulas table to the Transactions table.
+- **Update Named Ranges Function:** Updates named ranges in the workbook based on the configuration in the Names table.
+- **Recreate Pivot Table Function:** Recreates the PivotTable named "Summary" to reflect the latest data and configurations.
+- **Create Error Card Function:** Creates and displays an error card for any issues encountered during the transaction sync process.
+- **Create Success Card Function:** Creates and displays a success card for successful transactions.
+
+
 ## [0.2.0] - 2024-03-26 
 ### Added
 - Added Excel Add-In code.
