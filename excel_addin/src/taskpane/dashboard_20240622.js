@@ -311,7 +311,7 @@ function insertTransactionData(context, workbook, data, banksWithErrors) {
                     bank.institution_name,
                     bank.credential_id,
                     bank.next_cursor,
-                    account.type === 'credit' || account.type === 'loan' ? -account.balance : account.balance,
+                    account.balance,
                     account.mask,
                     account.name,
                     account.plaid_account_id,
@@ -457,21 +457,14 @@ async function applyFormulasToTransactions(context, workbook) {
         // Set the value of the named cell "Sel_Month" to the first cell of the named range "Unique_Months"
         const dashboardSheet = workbook.worksheets.getItem('Dashboard');
         const confD1Range = confSheet.getRange('D1');
-        const dashboardI1Range = dashboardSheet.getRange('I1');
-
+        const dashboardD2Range = dashboardSheet.getRange('D2');
         await confD1Range.load('values');
         await context.sync();
-
         const confD1Value = confD1Range.values[0][0];
-        dashboardI1Range.values = [[confD1Value]];
-
-        // Get the Named Range 'Sel_Month' and set its formula
-        const selMonthNamedItem = workbook.names.getItem('Sel_Month');
-        selMonthNamedItem.formula = '=Dashboard!$I$1';
-
+        dashboardD2Range.values = [[confD1Value]];
         await context.sync();
     
-        console.log('Cell I1 in "Dashboard" set to the value of cell D1 in "Conf" successfully');
+        console.log('Cell D2 in "Dashboard" set to the value of cell D1 in "Conf" successfully');
         
         // Hide the "Conf" sheet
         confSheet.visibility = Excel.SheetVisibility.hidden;
@@ -527,7 +520,7 @@ async function recreatePivotTable(context) {
       await context.sync();
   
       // Create a new PivotTable named "Summary" on sheet "Dashboard" at cell A4
-      const newPivotTable = dashboardSheet.pivotTables.add("Summary", "Transactions", "E2");
+      const newPivotTable = dashboardSheet.pivotTables.add("Summary", "Transactions", "A4");
       newPivotTable.columnGrandTotals = false;
       newPivotTable.rowGrandTotals = false;
   
@@ -542,38 +535,11 @@ async function recreatePivotTable(context) {
       const averageField = newPivotTable.dataHierarchies.add(averageHierarchy);
       averageField.summarizeBy = Excel.AggregationFunction.max;
       averageField.numberFormat = "$#,##0";
-      averageField.name = "6M Average";
   
       const budgetField = newPivotTable.dataHierarchies.add(budgetHierarchy);
       budgetField.summarizeBy = Excel.AggregationFunction.max;
       budgetField.numberFormat = "$#,##0";
-      budgetField.name = "Budget";
-
-      // Delete the existing PivotTable named "Balances"
-        const pivotTableB = dashboardSheet.pivotTables.getItem("Balances");
-        pivotTableB.delete();
-        await context.sync();
-        
-      // Create the 'Balances' pivot table
-        const balancesPivotTable = dashboardSheet.pivotTables.add("Balances", "Accounts", "A2");
-        balancesPivotTable.columnGrandTotals = true;
-        balancesPivotTable.rowGrandTotals = true;
-
-        // Add row hierarchies
-        balancesPivotTable.rowHierarchies.add(balancesPivotTable.hierarchies.getItem("Institution Name"));
-        balancesPivotTable.rowHierarchies.add(balancesPivotTable.hierarchies.getItem("Type"));
-        balancesPivotTable.rowHierarchies.add(balancesPivotTable.hierarchies.getItem("Name"));
-
-        // Add data hierarchies and set summarization
-        const numberField = balancesPivotTable.dataHierarchies.add(balancesPivotTable.hierarchies.getItem("Mask"));
-        numberField.summarizeBy = Excel.AggregationFunction.max;
-        numberField.name = "Number";
-
-        const balanceField = balancesPivotTable.dataHierarchies.add(balancesPivotTable.hierarchies.getItem("Balance"));
-        balanceField.summarizeBy = Excel.AggregationFunction.sum;
-        balanceField.numberFormat = "#,##0.00";
-        balanceField.name = "Balance";
-
+  
       await context.sync();
   
       console.log('Pivot table recreated successfully');
