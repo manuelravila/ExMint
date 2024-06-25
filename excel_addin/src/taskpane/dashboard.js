@@ -43,6 +43,8 @@ Office.onReady(() => {
           .then(response => {
               if (response.ok) {
                   localStorage.removeItem('authToken');
+                  sessionStorage.clear();
+                  
                   window.location.href = 'taskpane.html';
               } else {
                   throw new Error('Logout failed');
