@@ -184,15 +184,26 @@ def handle_unsuccessful_login(error_message):
 def logout():
     print(f"User logged in: {current_user.is_authenticated}")
     logout_user()
+    session.clear()
+
+    response = make_response()
+
+    # Clear any cookies related to authentication
+    response.set_cookie('session', '', expires=0)
+    response.set_cookie('remember_token', '', expires=0)
+
     print(f"User logged out: {not current_user.is_authenticated}")
     if request.method == 'POST':
         print("Request from Excel Add-in")
         return jsonify({'message': 'Logged out successfully'})
     else:
         print("Request from Flask UI")
-        response = redirect(url_for('views.index'))
-        response.set_cookie('token', '', expires=0)
-        return response
+        response = make_response(redirect(url_for('views.index')))
+
+    # Add headers to clear localStorage on the client side
+    response.headers['Clear-Site-Data'] = '"cache", "cookies", "storage"'
+        
+    return response
         
 @views.route('/reset_password', methods=['GET', 'POST'])
 def reset_password():
