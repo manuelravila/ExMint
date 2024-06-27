@@ -1,5 +1,5 @@
 # views.py
-from flask import current_app, render_template, redirect, url_for, flash, request, jsonify, Blueprint, session
+from flask import current_app, render_template, redirect, url_for, flash, request, jsonify, Blueprint, session, make_response, g
 from flask_login import login_user, current_user, logout_user, login_required
 from extensions import mail
 from functools import wraps
@@ -14,38 +14,30 @@ views = Blueprint('views', __name__)
 def combined_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
-
         if request.endpoint == 'views.logout':
-            print("Allowing logout route to bypass authentication")
             return f(*args, **kwargs)
 
         if 'X-Request-Source' in request.headers and request.headers['X-Request-Source'] == 'Excel-Add-In':
-            print("Attempting to authenticate via token in the Authorization header for Excel Add-In request")
             if 'Authorization' in request.headers:
                 token = request.headers['Authorization'].split(" ")[1]
                 user_id = User.verify_auth_token(token)
                 if user_id:
-                    print(f"Token is valid. User ID: {user_id}")
-                    return f(*args, **kwargs)
-                else:
-                    print("Token is invalid!")
-                    return jsonify({'message': 'Token is invalid!'}), 403
+                    user = User.query.get(user_id)
+                    if user:
+                        login_user(user)
+                        return f(*args, **kwargs)
         else:
-            print("Attempting to authenticate via token in the cookie for web request")
             token = request.cookies.get('token')
             if token:
                 user_id = User.verify_auth_token(token)
                 if user_id:
-                    print(f"Token is valid. User ID: {user_id}")
-                    return f(*args, **kwargs)
-                else:
-                    print("Token is invalid!")
-                    return redirect(url_for('views.login'))  # Redirect to login page for invalid token
+                    user = User.query.get(user_id)
+                    if user:
+                        login_user(user)
+                        return f(*args, **kwargs)
 
-            print("Token not found. Redirecting to login.")
-            return redirect(url_for('views.login'))
+        return jsonify({'message': 'Unauthorized'}), 401
 
-        return f(*args, **kwargs)
     return decorated_function
 
 @views.route('/')
@@ -59,11 +51,14 @@ def index():
 def dashboard():
     user = current_user
     form = ProfileForm(obj=user)
-    form.token.data = user.token
+
+    # Only set the token if the request is authenticated via token
+    if request.headers.get('X-Request-Source') == 'Excel-Add-In' and 'Authorization' in request.headers:
+        form.token.data = user.token
 
     # Check for open modals query parameter
     connections_modal_open = session.pop('connections_modal_open', False)
-    modal_open = session.pop('modal_open', False)  
+    modal_open = session.pop('modal_open', False)
 
     if form.validate_on_submit():
         if 'submit' in request.form:
@@ -109,15 +104,16 @@ def register():
             db.session.commit()
             token = user.generate_auth_token()  # Generate and save the token
             login_user(user)  # Log in the user
-            response = redirect(url_for('views.dashboard'))
-            response.set_cookie('token', token, httponly=True, secure=True)  # Set the token as a cookie
+            suffix = current_app.config['SUFFIX']
+            response = redirect(f'https://exmint.me/app{suffix}', code=302)
+            response.set_cookie('token', token, httponly=True, secure=True, SameSite=None)  # Set the token as a cookie
             flash('Your account has been created! You are now logged in.', 'success')
             return response
         except Exception as e:
             flash(str(e), 'danger')
-            return render_template('register.html', form=form)
+            return render_template('register.html', suffix=current_app.config['SUFFIX'], form=form)
 
-    return render_template('register.html', title='Register', form=form)
+    return render_template('register.html', title='Register', suffix=current_app.config['SUFFIX'], form=form)
 
 @views.route('/login', methods=['GET', 'POST'])
 def login():
@@ -163,14 +159,15 @@ def handle_authenticated_user():
 
 
 def handle_successful_login(user):
+    print('User successfully authenticated')
     if request.headers.get('X-Request-Source') == 'Excel-Add-In':
         token = user.generate_auth_token()
         return jsonify({'message': 'User logged in successfully', 'token': token}), 200
     else:
         # Set the token as a cookie in the response for web login
-        response = redirect(url_for('views.dashboard'))
         token = user.generate_auth_token()
-        response.set_cookie('token', token, httponly=True, secure=True)
+        response = make_response(redirect(url_for('views.dashboard')))
+        response.set_cookie('token', token, httponly=True, secure=True, samesite='None')
         return response
 
 
@@ -198,35 +195,46 @@ def logout():
         return response
         
 @views.route('/reset_password', methods=['GET', 'POST'])
-# Use https://mailtrap.io/ for email for now .
 def reset_password():
     # If the user is already logged in, redirect them to the dashboard
     if current_user.is_authenticated:
+        print("User is already authenticated, redirecting to dashboard.")
         return redirect(url_for('views.dashboard'))
 
     if request.method == 'POST':
         email = request.form.get('email')
+        print(f"Received POST request for password reset with email: {email}")
+
         user = User.query.filter_by(email=email).first()
         if user:
+            print(f"User found: {user.email}")
+
             # Generate a secure token
             serializer = URLSafeTimedSerializer(current_app.config['SECRET_KEY'])
             token = serializer.dumps(email, salt='email-reset-salt')
-            
+            print(f"Generated token: {token}")
+
             # Prepare the password reset email
+            reset_url = url_for('views.reset_password_token', token=token, _external=True)
+            print(f"Generated reset URL: {reset_url}")
+
+            html_content = render_template('password_reset_email.html', reset_url=reset_url, base_url=current_app.config['BASE_URL'])
             msg = Message('Password Reset Request', 
                           sender=current_app.config['MAIL_USERNAME'], 
                           recipients=[email])
-            reset_url = url_for('views.reset_password_token', token=token, _external=True)  # Make sure you have a route to handle this
-            msg.body = f'Please click the following link to reset your password: {reset_url}'
-            
+            msg.html = html_content
+
             # Send the email
             try:
                 mail.send(msg)
+                print(f"Password reset email sent to: {email}")
             except Exception as e:
-                print(f'An error occurred: {e}')
-            flash('Password reset instructions have been sent to your email.', 'info')
-            return redirect(url_for('views.login'))
+                print(f"An error occurred while sending the email: {e}")
+
+            # Render the password reset sent page
+            return render_template('password_reset_sent.html', suffix=current_app.config['SUFFIX'])
         else:
+            print(f"No account found for email: {email}")
             flash('No account could be found for this email address.', 'warning')
 
     return render_template('reset_password.html')

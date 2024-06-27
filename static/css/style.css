@@ -75,3 +75,21 @@ body, h1, h2, h3, h4, h5, h6, button, input, a {
 .unwanted-sign {
     display: none; /* Adjust the class name as needed based on your HTML structure */
 }
+/* static/styles.css */
+.form-group {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+}
+
+label {
+    margin-bottom: 5px;
+}
+
+input[type="email"] {
+    margin-bottom: 10px;
+}
+
+input[type="submit"] {
+    align-self: flex-start;
+}

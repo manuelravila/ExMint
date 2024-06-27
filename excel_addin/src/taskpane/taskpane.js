@@ -10,7 +10,6 @@ function showToast(message) {
   setTimeout(() => document.body.removeChild(toast), 5000); // Change duration to 5 seconds
 }
 
-
 document.addEventListener('DOMContentLoaded', function () {
   const loginForm = document.querySelector('form');
   const serverAddress = window.appConfig.apiUrl;
@@ -75,13 +74,26 @@ function fetchProtectedData() {
   });
 }
 
-//Dynamically set login form links
-document.addEventListener('DOMContentLoaded', function() {
-  const apiUrl = window.appConfig.apiUrl; // Get the API URL from your config
+// Dynamically set login form links
+document.addEventListener('DOMContentLoaded', function () {
+  // Ensure the DOM is fully loaded before attaching the event handlers
+  var resetPasswordLink = document.getElementById('resetPasswordLink');
+  if (resetPasswordLink) {
+      resetPasswordLink.addEventListener('click', function (event) {
+          event.preventDefault(); // Prevent the default link behavior
+          var url = 'https://exmint.me/app' + window.appConfig.suffix + '/password-reset';
+          console.log('Link clicked:', url);
+          window.open(url, '_blank'); // Open the URL in a new window/tab
+      });
+  }
 
-  // Set the href for the reset password link
-  document.getElementById('resetPasswordLink').setAttribute('href', `${apiUrl}reset_password`);
-
-  // Set the href for the create account link
-  document.getElementById('createAccountLink').setAttribute('href', `${apiUrl}register`);
+  var createAccountLink = document.getElementById('createAccountLink');
+  if (createAccountLink) {
+      createAccountLink.addEventListener('click', function (event) {
+          event.preventDefault(); // Prevent the default link behavior
+          var url = 'https://exmint.me/app' + window.appConfig.suffix + '/register';
+          console.log('Link clicked:', url);
+          window.open(url, '_blank'); // Open the URL in a new window/tab
+      });
+  }
 });

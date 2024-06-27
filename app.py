@@ -27,7 +27,7 @@ from sqlalchemy import and_
 migrate = Migrate()
 flask_bcrypt = Bcrypt()
 login_manager = LoginManager()
-login_manager.login_view = 'login'
+login_manager.login_view = 'views.login'
 
 # Initialize Flask app
 def create_app():
@@ -41,7 +41,8 @@ def create_app():
     cors_origins = [
         "https://localhost:3000",  # Local dev URL
         "https://stg-addin.exmint.me",  # Staging URL
-        "https://addin.exmint.me"  # Production URL
+        "https://addin.exmint.me",  # Production URL
+        "https://exmint.me"  # Production WP URL
     ]
 
     CORS(app, resources={r"/*": {"origins": cors_origins}}, supports_credentials=True, allow_headers=[
@@ -53,7 +54,7 @@ def create_app():
         'cursors'
     ], allow_methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'])
 
-    from views import views as views_blueprint
+    from views import views as views_blueprint, combined_required
     app.register_blueprint(views_blueprint)
 
     # Initialize Plaid client with environment from config
@@ -109,6 +110,7 @@ def create_app():
             return jsonify({'error': str(e)})
             
     @app.route('/handle_token_and_accounts', methods=['POST'])
+    @combined_required
     def handle_token_and_accounts():
         print('Backend code started correctly')
         data = request.json
@@ -174,11 +176,12 @@ def create_app():
             credential.requires_update = False
             db.session.commit()
 
-            return jsonify({'status': 'success', 'message': 'Operation successful'})
+            return jsonify({'status': 'success', 'message': 'Bank connection added successfully'})
         
-        except plaid.ApiException as e:
+        except Exception as e:
+            print(f"Error in handle_token_and_accounts: {str(e)}")
             db.session.rollback()
-            return jsonify({'error': str(e)}), 500
+            return jsonify({'status': 'error', 'message': str(e)}), 500
 
     def refresh_accounts(credential_id, accounts_data):
         existing_accounts = Account.query.filter_by(credential_id=credential_id).all()
@@ -408,7 +411,7 @@ def create_app():
 
 
     @app.route('/api/accounts', methods=['GET'])
-    @login_required
+    @combined_required
     def get_accounts():
         user_id = current_user.id
         bank_id = request.args.get('bank_id')
@@ -426,9 +429,12 @@ def create_app():
         return jsonify(accounts=accounts_data)
 
     @app.route('/api/banks', methods=['GET'])
-    @login_required
+    @combined_required
     def get_banks():
+        print('Attempting to get token...')
         token = request.args.get('token')
+        print('Token to use in /ap/banks: ', token)
+        # Check if the request has a token or falls back to current_user
         if token:
             user = User.verify_auth_token(token)
             if not user or user != current_user:
@@ -448,7 +454,7 @@ def create_app():
         return jsonify(banks=banks_data)
 
     @app.route('/api/balance', methods=['POST'])
-    @login_required
+    @combined_required
     def fetch_balances():
         data = request.json
         access_token = data.get('access_token')
@@ -511,7 +517,7 @@ def create_app():
 
     # Endpoint to remove a bank
     @app.route('/api/remove_bank/<int:bank_id>', methods=['DELETE'])
-    @login_required
+    @combined_required
     def remove_bank(bank_id):
         # Find the credential by ID
         credential = Credential.query.filter_by(id=bank_id, user_id=current_user.id).first()
@@ -550,7 +556,7 @@ def create_app():
             return jsonify({'success': False, 'message': 'Credential not found'}), 404
 
     @app.route('/api/get_access_token/<int:credential_id>', methods=['GET'])
-    @login_required
+    @combined_required
     def get_access_token_for_bank(credential_id):
         credential = Credential.query.filter_by(id=credential_id, user_id=current_user.id).first()
 
