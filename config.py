@@ -44,20 +44,28 @@ class Config:
     # Plaid credentials
     PLAID_CLIENT_ID = get_secret('PLAID_CLIENT_ID')
     PLAID_SECRET = get_secret('PLAID_SECRET')
-    if branch == 'main':
-        PLAID_ENV = 'production'
-        MAIL_SERVER = 'mail.exmint.me'
-        MAIL_USERNAME = 'admin@exmint.me'
-    else:
-        PLAID_ENV = 'sandbox' 
-        MAIL_SERVER = 'sandbox.smtp.mailtrap.io'
-        MAIL_USERNAME = '357e33875489f2'
+    PLAID_ENV = 'sandbox' if branch != 'main' else 'production' 
 
+    # Email settings
+    MAIL_SERVER = 'mail.exmint.me'
+    MAIL_USERNAME = 'noreply@exmint.me'
     MAIL_PASSWORD = get_secret('MAIL_PASSWORD')
     MAIL_PORT = 587
     MAIL_USE_TLS = True
     MAIL_USE_SSL = False
 
+    # Base URL logic
+    if branch == 'dev':
+        BASE_URL = 'http://127.0.0.1:5000'
+        SUFFIX = '-dev'
+    elif branch == 'stag':
+        BASE_URL = 'https://stg-app.exmint.me'
+        SUFFIX = '-stg'
+    else:
+        BASE_URL = 'https://app.exmint.me'
+        SUFFIX = ''
+
+    
     # Select the appropriate environment
     @staticmethod
     def get_plaid_environment():

@@ -1,5 +1,3 @@
-// dashboard.js
-
 console.log("Dashboard script loaded");
 
 function showToast(message, type = 'info') {
@@ -19,19 +17,21 @@ $('.sync-transactions-btn').click(function() {
 
 Office.onReady(() => {
   $(document).ready(function() {
-      $('.open-dashboard-btn').click(function() {
-          const token = localStorage.getItem('authToken');
-          if (token) {
-              const dashboardUrl = window.appConfig.apiUrl + '/dashboard';
-              const windowFeatures = 'toolbar=no,location=no,status=no,menubar=no,scrollbars=yes,resizable=yes,width=1200,height=800';
-              window.open(dashboardUrl, '_blank', windowFeatures);
-          } else {
-              console.error('User not authenticated');
-              showToast('Please log in to access the dashboard.', 'warning');
-          }
-      });
-  
+    $('.open-dashboard-btn').click(function() {
+        const token = localStorage.getItem('authToken');
+        if (token) {
+            const dashboardUrl = window.appConfig.apiUrl + '/dashboard';
+            const windowFeatures = 'toolbar=no,location=no,status=no,menubar=no,scrollbars=yes,resizable=yes,width=1200,height=800';
+            window.open(dashboardUrl, '_blank', windowFeatures);
+        } else {
+            console.error('User not authenticated');
+            showToast('Please log in to access the dashboard.', 'warning');
+        }
+    });
+      
       $('#confirmLogout').click(function() {
+          console.log("Confirm Logout button clicked");
+
           fetch(window.appConfig.apiUrl + '/logout', {
               method: 'POST',
               headers: {
@@ -43,6 +43,8 @@ Office.onReady(() => {
           .then(response => {
               if (response.ok) {
                   localStorage.removeItem('authToken');
+                  sessionStorage.clear();
+
                   window.location.href = 'taskpane.html';
               } else {
                   throw new Error('Logout failed');
@@ -72,12 +74,15 @@ function getCursors() {
     const nextCursorValues = nextCursorColumn.getDataBodyRange().load('values');
     await context.sync();
 
-    const credentialIdCursorPairs = credentialIdValues.values.flat().map((credentialId, index) => {
+    const uniquePairs = new Set();
+    credentialIdValues.values.flat().forEach((credentialId, index) => {
       const cursor = nextCursorValues.values.flat()[index];
-      return cursor ? `${credentialId}:${cursor}` : null;
+      if (cursor) {
+        uniquePairs.add(`${credentialId}:${cursor}`);
+      }
     });
 
-    return credentialIdCursorPairs.filter(pair => pair).join(',');
+    return Array.from(uniquePairs).join(',');
   }).catch(error => {
     console.error('Error getting cursors:', error);
     showToast('Failed to get cursors for transactions sync.', 'error');
@@ -135,10 +140,8 @@ function syncTransactions() {
         console.log('Sync is already in progress');
         return;
     }
-
     isSyncing = true;
     console.log('Syncing started');
-
     const token = localStorage.getItem('authToken');
     if (!token) {
         console.error('User not authenticated');
@@ -147,16 +150,33 @@ function syncTransactions() {
         console.log('Syncing aborted: user not authenticated');
         return;
     }
-
     const loader = document.createElement('div');
     loader.className = 'loader';
     loader.innerHTML = '<i class="fas fa-spinner fa-spin"></i><br>Loading Transactions';
     document.body.appendChild(loader);
-
     Excel.run(context => {
         const workbook = context.workbook;
+        let transactionsTableExists = false;
+
         return workbook.load('worksheets').context.sync()
-            .then(() => importTemplateSheets(context, workbook))
+            .then(() => {
+                const transactionsSheet = workbook.worksheets.getItem('Transactions');
+                const transactionsTable = transactionsSheet.tables.getItemOrNullObject('Transactions');
+                
+                transactionsTable.load('name');
+                return context.sync()
+                    .then(() => {
+                        transactionsTableExists = true;
+                    })
+                    .catch(() => {
+                        // Table doesn't exist, continue without setting the flag
+                    });
+            })
+            .then(() => {
+                if (!transactionsTableExists) {
+                    return importTemplateSheets(context, workbook);
+                }
+            })
             .then(() => getCursors())
             .then(cursors => {
                 console.log('Cursors retrieved:', cursors);
@@ -184,9 +204,13 @@ function syncTransactions() {
                 console.log('Transaction data retrieved:', data);
                 return processTransactionData(context, workbook, data);
             })
-            .then(() => updateNamedRanges(context, workbook))
-            .then(() => applyFormulasToTransactions(context, workbook))
-            .then(() => recreatePivotTable(context))
+            .then(() => {
+                if (!transactionsTableExists) {
+                    return updateNamedRanges(context, workbook)
+                        .then(() => applyFormulasToTransactions(context, workbook))
+                        .then(() => recreatePivotTable(context));
+                }
+            })
             .catch(error => {
                 console.error('Error syncing transactions:', error);
                 createErrorCard('Sync', 'SYNC_ERROR', error.message); // Create error card for sync error
@@ -206,7 +230,6 @@ function syncTransactions() {
         showToast('An error occurred. Please try again.', 'error');
     });
 }
-
 
 function processTransactionData(context, workbook, data) {
     const banksWithErrors = new Set();
@@ -290,7 +313,7 @@ function insertTransactionData(context, workbook, data, banksWithErrors) {
                     bank.institution_name,
                     bank.credential_id,
                     bank.next_cursor,
-                    account.balance,
+                    account.type === 'credit' || account.type === 'loan' ? -account.balance : account.balance,
                     account.mask,
                     account.name,
                     account.plaid_account_id,
@@ -329,32 +352,65 @@ function insertTransactionData(context, workbook, data, banksWithErrors) {
     const transactionsTable = workbook.tables.getItem('Transactions');
 
     accountsTable.clearFilters();
-    accountsTable.getDataBodyRange().clear();
     transactionsTable.clearFilters();
-    transactionsTable.getDataBodyRange().clear();
 
-    const transactionsHeaderRange = transactionsTable.getHeaderRowRange().load('values');
-    
+    const accountsRange = accountsTable.getDataBodyRange().load('values');
+    const transactionsRange = transactionsTable.getDataBodyRange().load('values');
+
     return context.sync().then(() => {
-        const transactionColumns = transactionsHeaderRange.values[0];
+        const existingAccounts = accountsRange.values.reduce((map, row) => {
+            map[row[6]] = row;
+            return map;
+        }, {});
 
-        const formattedTransactionsData = transactionsData.map(transactionRow => {
-            const formattedRow = [];
-            transactionColumns.forEach((column, index) => {
-                formattedRow.push(transactionRow[index] || '');
-            });
-            return formattedRow;
+        const existingTransactions = transactionsRange.values.reduce((map, row) => {
+            map[row[10]] = row;
+            return map;
+        }, {});
+
+        const newAccountsData = [];
+        const newTransactionsData = [];
+
+        accountsData.forEach(accountRow => {
+            const plaidAccountId = accountRow[6];
+            if (existingAccounts[plaidAccountId]) {
+                accountsTable.rows.getItemAt(existingAccounts[plaidAccountId]._rowIndex).delete();
+            }
+            newAccountsData.push(accountRow);
         });
 
-        accountsTable.rows.add(null, accountsData);
-        transactionsTable.rows.add(null, formattedTransactionsData);
+        transactionsData.forEach(transactionRow => {
+            const transactionId = transactionRow[10];
+            if (existingTransactions[transactionId]) {
+                transactionsTable.rows.getItemAt(existingTransactions[transactionId]._rowIndex).delete();
+            }
+            newTransactionsData.push(transactionRow);
+        });
 
-        return applyFormulasToTransactions(context, workbook);
-    }).catch(error => {
-        console.error('Error in insertTransactionData:', error);
-        showToast('Failed to insert transaction data. Please try again.', 'error');
+        const transactionsHeaderRange = transactionsTable.getHeaderRowRange().load('values');
+
+        return context.sync().then(() => {
+            const transactionColumns = transactionsHeaderRange.values[0];
+
+            const formattedTransactionsData = newTransactionsData.map(transactionRow => {
+                const formattedRow = [];
+                transactionColumns.forEach((column, index) => {
+                    formattedRow.push(transactionRow[index] || '');
+                });
+                return formattedRow;
+            });
+
+            accountsTable.rows.add(null, newAccountsData);
+            transactionsTable.rows.add(null, formattedTransactionsData);
+
+            return applyFormulasToTransactions(context, workbook);
+        }).catch(error => {
+            console.error('Error in insertTransactionData:', error);
+            showToast('Failed to insert transaction data. Please try again.', 'error');
+        });
     });
 }
+
 
 async function applyFormulasToTransactions(context, workbook) {
     try {
@@ -403,14 +459,21 @@ async function applyFormulasToTransactions(context, workbook) {
         // Set the value of the named cell "Sel_Month" to the first cell of the named range "Unique_Months"
         const dashboardSheet = workbook.worksheets.getItem('Dashboard');
         const confD1Range = confSheet.getRange('D1');
-        const dashboardD2Range = dashboardSheet.getRange('D2');
+        const dashboardI1Range = dashboardSheet.getRange('I1');
+
         await confD1Range.load('values');
         await context.sync();
+
         const confD1Value = confD1Range.values[0][0];
-        dashboardD2Range.values = [[confD1Value]];
+        dashboardI1Range.values = [[confD1Value]];
+
+        // Get the Named Range 'Sel_Month' and set its formula
+        const selMonthNamedItem = workbook.names.getItem('Sel_Month');
+        selMonthNamedItem.formula = '=Dashboard!$I$1';
+
         await context.sync();
     
-        console.log('Cell D2 in "Dashboard" set to the value of cell D1 in "Conf" successfully');
+        console.log('Cell I1 in "Dashboard" set to the value of cell D1 in "Conf" successfully');
         
         // Hide the "Conf" sheet
         confSheet.visibility = Excel.SheetVisibility.hidden;
@@ -466,7 +529,7 @@ async function recreatePivotTable(context) {
       await context.sync();
   
       // Create a new PivotTable named "Summary" on sheet "Dashboard" at cell A4
-      const newPivotTable = dashboardSheet.pivotTables.add("Summary", "Transactions", "A4");
+      const newPivotTable = dashboardSheet.pivotTables.add("Summary", "Transactions", "E2");
       newPivotTable.columnGrandTotals = false;
       newPivotTable.rowGrandTotals = false;
   
@@ -481,11 +544,38 @@ async function recreatePivotTable(context) {
       const averageField = newPivotTable.dataHierarchies.add(averageHierarchy);
       averageField.summarizeBy = Excel.AggregationFunction.max;
       averageField.numberFormat = "$#,##0";
+      averageField.name = "6M Average";
   
       const budgetField = newPivotTable.dataHierarchies.add(budgetHierarchy);
       budgetField.summarizeBy = Excel.AggregationFunction.max;
       budgetField.numberFormat = "$#,##0";
-  
+      budgetField.name = "Budget";
+
+      // Delete the existing PivotTable named "Balances"
+        const pivotTableB = dashboardSheet.pivotTables.getItem("Balances");
+        pivotTableB.delete();
+        await context.sync();
+        
+      // Create the 'Balances' pivot table
+        const balancesPivotTable = dashboardSheet.pivotTables.add("Balances", "Accounts", "A2");
+        balancesPivotTable.columnGrandTotals = true;
+        balancesPivotTable.rowGrandTotals = true;
+
+        // Add row hierarchies
+        balancesPivotTable.rowHierarchies.add(balancesPivotTable.hierarchies.getItem("Institution Name"));
+        balancesPivotTable.rowHierarchies.add(balancesPivotTable.hierarchies.getItem("Type"));
+        balancesPivotTable.rowHierarchies.add(balancesPivotTable.hierarchies.getItem("Name"));
+
+        // Add data hierarchies and set summarization
+        const numberField = balancesPivotTable.dataHierarchies.add(balancesPivotTable.hierarchies.getItem("Mask"));
+        numberField.summarizeBy = Excel.AggregationFunction.max;
+        numberField.name = "Number";
+
+        const balanceField = balancesPivotTable.dataHierarchies.add(balancesPivotTable.hierarchies.getItem("Balance"));
+        balanceField.summarizeBy = Excel.AggregationFunction.sum;
+        balanceField.numberFormat = "#,##0.00";
+        balanceField.name = "Balance";
+
       await context.sync();
   
       console.log('Pivot table recreated successfully');
