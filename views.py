@@ -15,13 +15,10 @@ def combined_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
 
-        if request.endpoint == 'views.logout':
-            print("Allowing logout route to bypass authentication")
-            return f(*args, **kwargs)
-
         if 'X-Request-Source' in request.headers and request.headers['X-Request-Source'] == 'Excel-Add-In':
             print("Attempting to authenticate via token in the Authorization header for Excel Add-In request")
             if 'Authorization' in request.headers:
+                print('Decorator found header in request and Authorization in it')
                 token = request.headers['Authorization'].split(" ")[1]
                 user_id = User.verify_auth_token(token)
                 if user_id:
@@ -33,6 +30,7 @@ def combined_required(f):
         else:
             print("Attempting to authenticate via token in the cookie for web request")
             token = request.cookies.get('token')
+            print(f"Token found: {token}")  # Debug statement
             if token:
                 user_id = User.verify_auth_token(token)
                 if user_id:
@@ -57,6 +55,7 @@ def index():
 @views.route('/dashboard', methods=['GET', 'POST'])
 @combined_required
 def dashboard():
+    
     user = current_user
     form = ProfileForm(obj=user)
     form.token.data = user.token
@@ -109,8 +108,12 @@ def register():
             db.session.commit()
             token = user.generate_auth_token()  # Generate and save the token
             login_user(user)  # Log in the user
+            
             response = redirect(url_for('views.dashboard'))
-            response.set_cookie('token', token, httponly=True, secure=True)  # Set the token as a cookie
+            response.set_cookie('token', token, 
+                                httponly=True, 
+                                secure=current_app.config['SESSION_COOKIE_SECURE'], 
+                                samesite=current_app.config['SESSION_COOKIE_SAMESITE'])
             flash('Your account has been created! You are now logged in.', 'success')
             return response
         except Exception as e:
@@ -122,6 +125,7 @@ def register():
 @views.route('/login', methods=['GET', 'POST'])
 def login():
     if current_user.is_authenticated:
+        print('Current user IS authenticated')
         return handle_authenticated_user()
 
     if request.method == 'POST':
@@ -163,16 +167,20 @@ def handle_authenticated_user():
 
 
 def handle_successful_login(user):
+    print('SUCCESSFUL login initiated')
     if request.headers.get('X-Request-Source') == 'Excel-Add-In':
         token = user.generate_auth_token()
         return jsonify({'message': 'User logged in successfully', 'token': token}), 200
     else:
         # Set the token as a cookie in the response for web login
+        print('Using secure cookies: ',current_app.config['SESSION_COOKIE_SECURE'])
         response = redirect(url_for('views.dashboard'))
-        token = user.generate_auth_token()
-        response.set_cookie('token', token, httponly=True, secure=True)
+        response.set_cookie('token', user.token, 
+                            httponly=True, 
+                            secure=current_app.config['SESSION_COOKIE_SECURE'], 
+                            samesite=current_app.config['SESSION_COOKIE_SAMESITE'])
+        print(response.headers)
         return response
-
 
 def handle_unsuccessful_login(error_message):
     if request.headers.get('X-Request-Source') == 'Excel-Add-In':
@@ -181,13 +189,11 @@ def handle_unsuccessful_login(error_message):
         flash(error_message, 'danger')
         return redirect(url_for('views.login'))
 
-
 @views.route('/logout', methods=['GET', 'POST'])
-@combined_required
 def logout():
-    print(f"User logged in: {current_user.is_authenticated}")
+    print(f"User logged in before logout: {current_user.is_authenticated}")
     logout_user()
-    print(f"User logged out: {not current_user.is_authenticated}")
+    print(f"User logged out after logout: {not current_user.is_authenticated}")
     if request.method == 'POST':
         print("Request from Excel Add-in")
         return jsonify({'message': 'Logged out successfully'})
@@ -198,7 +204,6 @@ def logout():
         return response
         
 @views.route('/reset_password', methods=['GET', 'POST'])
-# Use https://mailtrap.io/ for email for now .
 def reset_password():
     # If the user is already logged in, redirect them to the dashboard
     if current_user.is_authenticated:
