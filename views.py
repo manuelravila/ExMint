@@ -8,6 +8,7 @@ from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadSignature
 from forms import LoginForm, RegistrationForm, ProfileForm
 from models import User, db, Credential, Account
 from werkzeug.security import generate_password_hash, check_password_hash
+from config import Config
 
 views = Blueprint('views', __name__)
 
@@ -106,7 +107,7 @@ def register():
             token = user.generate_auth_token()  # Generate and save the token
             login_user(user)  # Log in the user
             
-            response = redirect(url_for('views.dashboard'))
+            response = redirect(Config.external_redirect('dashboard'))
             response.set_cookie('token', token, 
                                 httponly=True, 
                                 secure=current_app.config['SESSION_COOKIE_SECURE'], 
@@ -207,12 +208,12 @@ def logout():
 def reset_password():
     # If the user is already logged in, redirect them to the dashboard
     if current_user.is_authenticated:
-        print("User is already authenticated, redirecting to dashboard.")
+        #print("User is already authenticated, redirecting to dashboard.")
         return redirect(url_for('views.dashboard'))
 
     if request.method == 'POST':
         email = request.form.get('email')
-        print(f"Received POST request for password reset with email: {email}")
+        #print(f"Received POST request for password reset with email: {email}")
 
         user = User.query.filter_by(email=email).first()
         if user:
@@ -221,13 +222,13 @@ def reset_password():
             # Generate a secure token
             serializer = URLSafeTimedSerializer(current_app.config['SECRET_KEY'])
             token = serializer.dumps(email, salt='email-reset-salt')
-            print(f"Generated token: {token}")
+            #print(f"Generated token: {token}")
 
             # Prepare the password reset email
             reset_url = url_for('views.reset_password_token', token=token, _external=True)
-            print(f"Generated reset URL: {reset_url}")
+            #print(f"Generated reset URL: {reset_url}")
 
-            html_content = render_template('password_reset_email.html', reset_url=reset_url, base_url=current_app.config['BASE_URL'])
+            html_content = render_template('password_reset_email.html', reset_url=reset_url, suffix=current_app.config['SUFFIX'])
             msg = Message('Password Reset Request', 
                           sender=current_app.config['MAIL_USERNAME'], 
                           recipients=[email])
@@ -261,7 +262,7 @@ def reset_password_token(token):
         user = User.query.filter_by(email=email).first()
         if user is None:
             flash('Invalid or expired reset token.', 'danger')
-            return redirect(url_for('views.login'))
+            return redirect(Config.external_redirect())
         
         # If the request method is POST, update the user's password
         if request.method == 'POST':
@@ -269,14 +270,14 @@ def reset_password_token(token):
             user.password_hash = generate_password_hash(new_password)  # Use Werkzeug's generate_password_hash
             db.session.commit()
             flash('Your password has been updated!', 'success')
-            return redirect(url_for('views.login'))
+            return redirect(Config.external_redirect())
 
         # If the request method is GET, show the reset password form
         return render_template('reset_password_token.html')  # Ensure you have this template
 
     except (SignatureExpired, BadSignature):
         flash('Invalid or expired reset token.', 'danger')
-        return redirect(url_for('views.login'))
+        return redirect(Config.external_redirect())
 
 @views.route('/user-info', methods=['GET', 'POST'])
 @combined_required

@@ -45,7 +45,7 @@ class Config:
     
     # Email configuration
     MAIL_SERVER = 'mail.exmint.me'
-    MAIL_USERNAME = 'admin@exmint.me'
+    MAIL_USERNAME = 'noreply@exmint.me'
     MAIL_PASSWORD = get_secret('MAIL_PASSWORD')
     MAIL_PORT = 587
     MAIL_USE_TLS = True
@@ -56,17 +56,17 @@ class Config:
         PLAID_ENV = 'production'
         DEBUG = False
         SUFFIX = ''
+        SSL_CONTEXT = None  # No SSL context needed for production
     elif branch == 'stag':
         PLAID_ENV = 'sandbox'   
         DEBUG = True  
         SUFFIX = '-stg'
+        SSL_CONTEXT = None  # No SSL context needed for staging
     else:
         PLAID_ENV = 'sandbox' 
         DEBUG = True
         SUFFIX = '-dev'
-
-
-
+        SSL_CONTEXT = ('server-cert.pem', 'server-key.pem')  # SSL context for development
 
     # Select the appropriate environment
     @staticmethod
@@ -77,3 +77,8 @@ class Config:
             return plaid.Environment.Development
         else:  # Assume production
             return plaid.Environment.Production
+        
+    @staticmethod
+    def external_redirect(path=''):
+        base_url = 'https://exmint.me/app'
+        return f"{base_url}{Config.SUFFIX}/{path}"
