@@ -1,5 +1,3 @@
-// dashboard.js
-
 console.log("Dashboard script loaded");
 
 function showToast(message, type = 'info') {
@@ -19,19 +17,21 @@ $('.sync-transactions-btn').click(function() {
 
 Office.onReady(() => {
   $(document).ready(function() {
-      $('.open-dashboard-btn').click(function() {
-          const token = localStorage.getItem('authToken');
-          if (token) {
-              const dashboardUrl = window.appConfig.apiUrl + '/dashboard';
-              const windowFeatures = 'toolbar=no,location=no,status=no,menubar=no,scrollbars=yes,resizable=yes,width=1200,height=800';
-              window.open(dashboardUrl, '_blank', windowFeatures);
-          } else {
-              console.error('User not authenticated');
-              showToast('Please log in to access the dashboard.', 'warning');
-          }
-      });
-  
+    $('.open-dashboard-btn').click(function() {
+        const token = localStorage.getItem('authToken');
+        if (token) {
+            const dashboardUrl = window.appConfig.apiUrl + '/dashboard';
+            const windowFeatures = 'toolbar=no,location=no,status=no,menubar=no,scrollbars=yes,resizable=yes,width=1200,height=800';
+            window.open(dashboardUrl, '_blank', windowFeatures);
+        } else {
+            console.error('User not authenticated');
+            showToast('Please log in to access the dashboard.', 'warning');
+        }
+    });
+      
       $('#confirmLogout').click(function() {
+          console.log("Confirm Logout button clicked");
+
           fetch(window.appConfig.apiUrl + '/logout', {
               method: 'POST',
               headers: {
@@ -43,6 +43,8 @@ Office.onReady(() => {
           .then(response => {
               if (response.ok) {
                   localStorage.removeItem('authToken');
+                  sessionStorage.clear();
+
                   window.location.href = 'taskpane.html';
               } else {
                   throw new Error('Logout failed');
