@@ -1,3 +1,16 @@
+## [0.3.1] - 2024-06-30
+
+### Added
+- Detailed instructions and configuration for generating a trusted Certificate Authority (CA) and signing a server certificate using OpenSSL.
+- Integration of Subject Alternative Names (SAN) in the certificate generation process to ensure compatibility with modern browsers.
+- Updated Flask application configuration to utilize the newly generated server certificate and key files for HTTPS.
+- Steps for importing the CA certificate into the Trusted Root Certification Authorities store on Windows for development environments.
+
+### Improved
+- Enhanced security for the development environment by ensuring the self-signed certificates are recognized as valid by the browser.
+- Comprehensive guide included to aid developers in setting up a secure local development environment with SSL/TLS encryption.
+
+
 ## [0.3.0] - 2024-06-17
 
 ### Added
