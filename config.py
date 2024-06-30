@@ -1,9 +1,5 @@
 #config.py
-import os
-import subprocess
 import plaid
-import json
-import time
 from urllib.parse import quote_plus
 from secrets_manager import get_secret, branch
 
@@ -38,25 +34,39 @@ class Config:
 
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     SECRET_KEY = get_secret('SECRET_KEY') 
-
     ENCRYPTION_KEY = get_secret('ENCRYPTION_KEY')
+    # Session cookie settings
+    SESSION_COOKIE_SAMESITE = None
+    SESSION_COOKIE_SECURE = True
 
     # Plaid credentials
     PLAID_CLIENT_ID = get_secret('PLAID_CLIENT_ID')
     PLAID_SECRET = get_secret('PLAID_SECRET')
-    if branch == 'main':
-        PLAID_ENV = 'production'
-        MAIL_SERVER = 'mail.exmint.me'
-        MAIL_USERNAME = 'admin@exmint.me'
-    else:
-        PLAID_ENV = 'sandbox' 
-        MAIL_SERVER = 'sandbox.smtp.mailtrap.io'
-        MAIL_USERNAME = '357e33875489f2'
-
+    
+    # Email configuration
+    MAIL_SERVER = 'mail.exmint.me'
+    MAIL_USERNAME = 'admin@exmint.me'
     MAIL_PASSWORD = get_secret('MAIL_PASSWORD')
     MAIL_PORT = 587
     MAIL_USE_TLS = True
-    MAIL_USE_SSL = False
+    MAIL_USE_SSL = False  
+
+    # Environment dependent configuration
+    if branch == 'main':
+        PLAID_ENV = 'production'
+        DEBUG = False
+        SUFFIX = ''
+    elif branch == 'stag':
+        PLAID_ENV = 'sandbox'   
+        DEBUG = True  
+        SUFFIX = '-stg'
+    else:
+        PLAID_ENV = 'sandbox' 
+        DEBUG = True
+        SUFFIX = '-dev'
+
+
+
 
     # Select the appropriate environment
     @staticmethod

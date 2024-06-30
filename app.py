@@ -4,6 +4,7 @@ from extensions import mail
 import plaid
 import json
 import csv
+import os
 
 from datetime import datetime
 
@@ -41,7 +42,8 @@ def create_app():
     cors_origins = [
         "https://localhost:3000",  # Local dev URL
         "https://stg-addin.exmint.me",  # Staging URL
-        "https://addin.exmint.me"  # Production URL
+        "https://addin.exmint.me",  # Production URL
+        "https://exmint.me"
     ]
 
     CORS(app, resources={r"/*": {"origins": cors_origins}}, supports_credentials=True, allow_headers=[
@@ -569,4 +571,4 @@ def create_app():
 
 if __name__ == '__main__':
     app = create_app()
-    app.run(debug=True)
+    app.run(ssl_context=('dev.exmint.me.pem', 'dev.exmint.me-key.pem'), debug=app.config['DEBUG'], host='0.0.0.0')
