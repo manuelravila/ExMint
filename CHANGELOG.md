@@ -9,6 +9,7 @@
 ### Improved
 - Enhanced security for the development environment by ensuring the self-signed certificates are recognized as valid by the browser.
 - Comprehensive guide included to aid developers in setting up a secure local development environment with SSL/TLS encryption.
+- Enhanced manifest.xml
 
 
 ## [0.3.0] - 2024-06-17
