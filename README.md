@@ -20,7 +20,7 @@ ExMint is an advanced and feature-rich personal financial dashboard designed to 
 - **Backend:** Flask (Python), SQLAlchemy for ORM
 - **Database:** PostgreSQL
 - **APIs:** Plaid API for financial data integration
-- **Other Technologies:** Flask-Migrate for database migrations, Flask-Login for handling user authentication
+- **Other Technologies:** Flask-Migrate for database migrations, Flask-Login for handling user authentication.
 
 ## Installation and Setup
 
