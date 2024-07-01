@@ -56,4 +56,4 @@ flask run
 Contributions to ExMint are welcome! Whether it's bug fixes, feature suggestions, or improvements to documentation, your input is valued. Please feel free to submit issues and pull requests.
 
 6. **License**
-ExMint is released under the MIT License.
+ExMint is released under Automatos Consulting License.
