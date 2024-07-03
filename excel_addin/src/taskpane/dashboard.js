@@ -179,7 +179,6 @@ function syncTransactions() {
             })
             .then(() => getCursors())
             .then(cursors => {
-                console.log('Cursors retrieved:', cursors);
                 return fetch(window.appConfig.apiUrl + '/sync', {
                     method: 'GET',
                     headers: {
