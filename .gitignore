@@ -2,5 +2,4 @@ __pycache__/
 *.pyc
 logs/
 venv/
-excel_addin/assets
 excel_addin/node_modules
