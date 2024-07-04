@@ -73,11 +73,12 @@
       </bt:Urls>
       <bt:ShortStrings>
         <bt:String id="GetStarted.Title" DefaultValue="Get started with ExMint add-in!"/>
-        <bt:String id="CommandsGroup.Label" DefaultValue="Commands Group"/>
+        <bt:String id="CommandsGroup.Label" DefaultValue="Add-ins"/>
         <bt:String id="TaskpaneButton.Label" DefaultValue="Open ExMint"/>
       </bt:ShortStrings>
       <bt:LongStrings>
-        <bt:String id="GetStarted.Description" DefaultValue="ExMint add-in loaded succesfully. Go to the HOME tab and click the 'Epen ExMint' button to get started."/>
+        <bt:String id="GetStarted.Description" DefaultValue="ExMint add-in loaded successfully. Go to the HOME tab and click the 'Open ExMint' button to get started."/>
+        <bt:String id="TaskpaneButton.Tooltip" DefaultValue="Click to open the task pane"/>
       </bt:LongStrings>
     </Resources>
   </VersionOverrides>
