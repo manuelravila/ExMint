@@ -32,6 +32,8 @@ def create_app():
     # Configure CORS
     cors_origins = [
         "https://localhost:3000",  # Local dev URL
+        "https://dev.exmint.me:3000",  # Local dev URL
+        "https://127.0.0.1:3000",  # Local dev URL
         "https://stg-addin.exmint.me",  # Staging URL
         "https://addin.exmint.me",  # Production URL
         "https://exmint.me"  # Production WP URL

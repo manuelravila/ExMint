@@ -1,0 +1,20 @@
+[req]
+distinguished_name = req_distinguished_name
+req_extensions = req_ext
+prompt = no
+
+[req_distinguished_name]
+C = CA
+ST = Ontario
+L = Toronto
+O = Automatos Consulting Inc.
+OU = IT
+CN = dev.exmint.me
+
+[req_ext]
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = dev.exmint.me
+DNS.2 = localhost
+IP.1 = 127.0.0.1
