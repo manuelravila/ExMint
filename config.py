@@ -66,7 +66,7 @@ class Config:
         PLAID_ENV = 'sandbox' 
         DEBUG = True
         SUFFIX = '-dev'
-        SSL_CONTEXT = ('server-cert.pem', 'server-key.pem')  # SSL context for development
+        SSL_CONTEXT = ('dev_exmint_me.crt', 'dev_exmint_me.key')  # SSL context for development
 
     # Select the appropriate environment
     @staticmethod
