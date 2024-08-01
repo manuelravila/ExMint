@@ -56,11 +56,13 @@ def handle_token_and_accounts():
 
     try:
         if is_refresh:
+            print(f"Trying to refresh connection...")
             credential = Credential.query.get(credential_id)
             if not credential:
                 return jsonify({'error': 'Credential not found'}), 404
             access_token = credential.access_token
         else:
+            print(f"Trying to add new connection...")
             public_token = data['public_token']
             institution_name = data.get('institution_name', 'Unknown')
             exchange_request = ItemPublicTokenExchangeRequest(public_token=public_token)
@@ -81,8 +83,36 @@ def handle_token_and_accounts():
         accounts_request = AccountsGetRequest(access_token=access_token)
         accounts_response = current_app.plaid_client.accounts_get(accounts_request)
         
-        refresh_accounts(credential.id if is_refresh else credential_id, accounts_response.to_dict())
+        accounts_data = accounts_response.to_dict().get('accounts', [])
+        for account in accounts_data:
+            plaid_account_id = account.get('account_id')
+            name = account.get('name')
+            type_ = account.get('type')
+            subtype = account.get('subtype')
+            mask = account.get('mask')
+            is_enabled = account.get('is_enabled', True)  # Default to True if not present
 
+            existing_account = Account.query.filter_by(plaid_account_id=plaid_account_id).first()
+            if existing_account:
+                existing_account.name = name
+                existing_account.type = type_
+                existing_account.subtype = subtype
+                existing_account.mask = mask
+                existing_account.is_enabled = is_enabled
+            else:
+                new_account = Account(
+                    status='Active',  # Assuming status is 'Active' since it's not in the account data
+                    credential_id=credential_id,
+                    plaid_account_id=plaid_account_id,
+                    name=name,
+                    type=type_,
+                    subtype=subtype,
+                    mask=mask,
+                    is_enabled=is_enabled
+                )
+                db.session.add(new_account)
+        db.session.commit()
+        
         filtered_response = {
             'item': accounts_response['item'],
             'request_id': accounts_response['request_id']
@@ -97,8 +127,10 @@ def handle_token_and_accounts():
         )
         db.session.add(plaid_transaction)
 
+        # Check if the requires_update flag is being set correctly
         credential.requires_update = False
         db.session.commit()
+        db.session.refresh(credential)  # Refresh the instance to get the latest state from the DB
 
         return jsonify({'status': 'success', 'message': 'Bank connection added successfully'})
     

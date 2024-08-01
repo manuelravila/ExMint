@@ -24,7 +24,7 @@ class User(UserMixin, db.Model):
     def generate_auth_token(self):
         payload = {
             'user_id': self.id,
-            'iat': datetime.datetime.utcnow()  # Add issued-at time
+            'iat': datetime.datetime.now(datetime.UTC)  # Add issued-at time
         }
         new_token = jwt.encode(
             payload,

@@ -6,3 +6,4 @@ venv/
 excel_addin/*
 # But not the dist folder
 !excel_addin/dist
+!excel_addin/src
