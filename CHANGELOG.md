@@ -1,3 +1,8 @@
+## [0.4.0] - 2024-08-05
+
+### Fixed
+- Completed JSON template to fix issues with the add-in on Excel 265 online
+
 ## [0.3.1] - 2024-06-30
 
 ### Added
