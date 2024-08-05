@@ -1,0 +1,632 @@
+{
+  "Sheets": [
+    {
+      "Name": "Dashboard",
+      "ListObjects": [
+        {
+          "Name": "Custom_Cat",
+          "StartingCell": "$P$2",
+          "ColorStyle": "TableStyleMedium2",
+          "Columns": [
+            {
+              "Header": "Name",
+              "Width": 21,
+              "Formula": ""
+            },
+            {
+              "Header": "Amount",
+              "Width": 10.43,
+              "Formula": ""
+            },
+            {
+              "Header": "Custom Category",
+              "Width": 25.86,
+              "Formula": ""
+            }
+          ],
+          "Rows": [
+
+          ]
+        },
+        {
+          "Name": "Budgets",
+          "StartingCell": "$K$2",
+          "ColorStyle": "TableStyleMedium2",
+          "Columns": [
+            {
+              "Header": "Custom Category",
+              "Width": 25.57,
+              "Formula": ""
+            },
+            {
+              "Header": "Frequency",
+              "Width": 16.71,
+              "Formula": ""
+            },
+            {
+              "Header": "Amount",
+              "Width": 10.86,
+              "Formula": ""
+            },
+            {
+              "Header": "Monthly",
+              "Width": 10,
+              "Formula": "=[@Amount]*XLOOKUP([@Frequency],Frequency[Frequency],Frequency[Factor],1,0)"
+            }
+          ],
+          "Rows": [
+
+          ]
+        }
+      ],
+      "PivotTables": [
+        {
+          "Name": "Spending",
+          "StartingCell": "$E$2",
+          "ColorStyle": "",
+          "SourceData": "Transactions",
+          "RowFields": [
+            {
+              "Name": "Custom Category",
+              "CustomName": "Custom Category",
+              "Subtotals": true,
+              "LayoutForm": "1"
+            },
+            {
+              "Name": "Name",
+              "CustomName": "Name",
+              "Subtotals": true,
+              "LayoutForm": "1"
+            }
+          ],
+          "ColumnFields": [
+
+          ],
+          "ValueFields": [
+            {
+              "Name": "6M AVG",
+              "CustomName": "6M Average",
+              "SummarizedBy": "Max",
+              "ShowValuesAs": "None",
+              "NumberFormat": "$#,##0"
+            },
+            {
+              "Name": "Budget",
+              "CustomName": "Budget",
+              "SummarizedBy": "Max",
+              "ShowValuesAs": "None",
+              "NumberFormat": "$#,##0"
+            }
+          ]
+        },
+        {
+          "Name": "Balances",
+          "StartingCell": "$A$2",
+          "ColorStyle": "",
+          "SourceData": "Accounts",
+          "RowFields": [
+            {
+              "Name": "Type",
+              "CustomName": "Type",
+              "Subtotals": true,
+              "LayoutForm": "1"
+            },
+            {
+              "Name": "Institution Name",
+              "CustomName": "Institution Name",
+              "Subtotals": true,
+              "LayoutForm": "1"
+            },
+            {
+              "Name": "Name",
+              "CustomName": "Name",
+              "Subtotals": true,
+              "LayoutForm": "1"
+            }
+          ],
+          "ColumnFields": [
+
+          ],
+          "ValueFields": [
+            {
+              "Name": "Mask",
+              "CustomName": "Mask",
+              "SummarizedBy": "Max",
+              "ShowValuesAs": "None",
+              "NumberFormat": "General"
+            },
+            {
+              "Name": "Balance",
+              "CustomName": "Balance",
+              "SummarizedBy": "Sum",
+              "ShowValuesAs": "None",
+              "NumberFormat": "$#,##0.00"
+            }
+          ]
+        }
+      ],
+      "OtherCells": [
+        {
+          "Address": "$H$3:$H$1000",
+          "Formula": "=IFS(RC[-3]=\"\",\"\",RC[-3]=\"Grand Total\",SUM(R2C:R[-1]C),TRUE,IF(COUNTIF(Transactions[Custom Category],RC[-3])>0,SUMIFS(Transactions[Amount],Transactions[Custom Category],RC[-3],Transactions[Month],Sel_Month),SUMIFS(Transactions[Amount],Transactions[Name],RC[-3],Transactions[Month],Sel_Month)))",
+          "FillColor": "#FFFFFF",
+          "NumberFormat": "$#,##0",
+          "Font": {
+              "Size": 11,
+              "Color": "#000000",
+              "Bold": true,
+              "Italic": false
+          }
+        },
+        {
+          "Address": "$I$3:$I$1000",
+          "Formula": "=IF(RC[-2]=\"\",\"\",IF(RC[-2]=0,0,1-((RC[-2]-RC[-1])/RC[-2])))",
+          "FillColor": "#FFFFFF",
+          "NumberFormat": "0%",
+          "Font": {
+              "Size": 11,
+              "Color": "#000000",
+              "Bold": false,
+              "Italic": false
+          }
+        }
+      ],
+      "Cells": [
+        {
+          "Address": "$A$1",
+          "Value": "Balances",
+          "FillColor": "#FFFFFF",
+          "NumberFormat": "General",
+          "Font": {
+              "Size": 16,
+              "Color": "#000000",
+              "Bold": true,
+              "Italic": false
+          }
+        },
+        {
+          "Address": "$E$1",
+          "Value": "Spending Report",
+          "FillColor": "#FFFFFF",
+          "NumberFormat": "General",
+          "Font": {
+              "Size": 16,
+              "Color": "#000000",
+              "Bold": true,
+              "Italic": false
+          }
+        },
+        {
+          "Address": "$H$1",
+          "Value": "Month",
+          "FillColor": "#074F69",
+          "NumberFormat": "General",
+          "Font": {
+              "Size": 11,
+              "Color": "#FFFFFF",
+              "Bold": true,
+              "Italic": false
+          }
+        },
+        {
+          "Address": "$K$1",
+          "Value": "Budgets",
+          "FillColor": "#FFFFFF",
+          "NumberFormat": "General",
+          "Font": {
+              "Size": 16,
+              "Color": "#000000",
+              "Bold": true,
+              "Italic": false
+          }
+        },
+        {
+          "Address": "$P$1",
+          "Value": "Custom Categories",
+          "FillColor": "#FFFFFF",
+          "NumberFormat": "General",
+          "Font": {
+              "Size": 16,
+              "Color": "#000000",
+              "Bold": true,
+              "Italic": false
+          }
+        },
+        {
+          "Address": "$H$2",
+          "Value": "Monthly Spending",
+          "FillColor": "#074F69",
+          "NumberFormat": "General",
+          "Font": {
+              "Size": 11,
+              "Color": "#FFFFFF",
+              "Bold": true,
+              "Italic": false
+          }
+        },
+        {
+          "Address": "$I$2",
+          "Value": "Spent",
+          "FillColor": "#074F69",
+          "NumberFormat": "General",
+          "Font": {
+              "Size": 11,
+              "Color": "#FFFFFF",
+              "Bold": true,
+              "Italic": false
+          }
+        }
+      ],
+      "DataValidations": [
+        {
+          "Address": "$I$1",
+          "Type": "3",
+          "AlertStyle": "1",
+          "Formula1": "=Unique_Months",
+          "Formula2": "",
+          "ShowInputMessage": true,
+          "InputTitle": "Select Month",
+          "InputMessage": "",
+          "ShowErrorMessage": true,
+          "ErrorTitle": "",
+          "ErrorMessage": ""
+        },
+        {
+          "Address": "$L$3",
+          "Type": "3",
+          "AlertStyle": "1",
+          "Formula1": "=Conf!$A$2:$A$8",
+          "Formula2": "",
+          "ShowInputMessage": true,
+          "InputTitle": "How frequently resets",
+          "InputMessage": "Select the frequency at which this budget will reset",
+          "ShowErrorMessage": true,
+          "ErrorTitle": "",
+          "ErrorMessage": ""
+        }
+      ],
+      "ConditionalFormatting": [
+        {
+          "AppliesTo": "$A$6:$C$6",
+          "Type": "2",
+          "Formula": "=$E6=\"Total\"",
+          "Interior": {
+              "Color": "#104861",
+              "Pattern": ""
+          },
+          "Font": {
+              "Name": "",
+              "Size": null,
+              "Color": "#FFFFFF",
+              "Bold": true,
+              "Italic": false
+          }
+        },
+        {
+          "AppliesTo": "$A$6:$C$6",
+          "Type": "2",
+          "Formula": "=$E6<>\"\"",
+          "Interior": {
+              "Color": "#CAEDFB",
+              "Pattern": ""
+          },
+          "Font": {
+              "Name": "",
+              "Size": null,
+              "Color": null,
+              "Bold": null,
+              "Italic": null
+          }
+        },
+        {
+          "AppliesTo": "$H$3:$I$1000",
+          "Type": "2",
+          "Formula": "=$E3=\"Total\"",
+          "Interior": {
+              "Color": "#104861",
+              "Pattern": ""
+          },
+          "Font": {
+              "Name": "",
+              "Size": null,
+              "Color": "#FFFFFF",
+              "Bold": true,
+              "Italic": false
+          }
+        },
+        {
+          "AppliesTo": "$H$3:$I$1000",
+          "Type": "2",
+          "Formula": "=$E3<>\"\"",
+          "Interior": {
+              "Color": "#CAEDFB",
+              "Pattern": ""
+          },
+          "Font": {
+              "Name": "",
+              "Size": null,
+              "Color": null,
+              "Bold": null,
+              "Italic": null
+          }
+        }
+      ]
+    },
+    {
+      "Name": "Accounts",
+      "ListObjects": [
+        {
+          "Name": "Accounts",
+          "StartingCell": "$A$1",
+          "ColorStyle": "TableStyleMedium2",
+          "Columns": [
+            {
+              "Header": "Institution Name",
+              "Width": 17.86,
+              "Formula": ""
+            },
+            {
+              "Header": "Credential ID",
+              "Width": 10.29,
+              "Formula": ""
+            },
+            {
+              "Header": "Next Cursor",
+              "Width": 55.86,
+              "Formula": ""
+            },
+            {
+              "Header": "Balance",
+              "Width": 10.29,
+              "Formula": ""
+            },
+            {
+              "Header": "Mask",
+              "Width": 10.29,
+              "Formula": ""
+            },
+            {
+              "Header": "Name",
+              "Width": 10.29,
+              "Formula": ""
+            },
+            {
+              "Header": "Plaid Account ID",
+              "Width": 10.29,
+              "Formula": ""
+            },
+            {
+              "Header": "Subtype",
+              "Width": 10.29,
+              "Formula": ""
+            },
+            {
+              "Header": "Type",
+              "Width": 10.29,
+              "Formula": ""
+            }
+          ],
+          "Rows": [
+
+          ]
+        }
+      ],
+      "PivotTables": [
+
+      ],
+      "OtherCells": [
+
+      ],
+      "Cells": [
+
+      ],
+      "DataValidations": [
+
+      ],
+      "ConditionalFormatting": [
+
+      ]
+    },
+    {
+      "Name": "Transactions",
+      "ListObjects": [
+        {
+          "Name": "Transactions",
+          "StartingCell": "$A$1",
+          "ColorStyle": "TableStyleMedium2",
+          "Columns": [
+            {
+              "Header": "Account ID",
+              "Width": 10.29,
+              "Formula": ""
+            },
+            {
+              "Header": "Action",
+              "Width": 10.29,
+              "Formula": ""
+            },
+            {
+              "Header": "Amount",
+              "Width": 10.29,
+              "Formula": ""
+            },
+            {
+              "Header": "Categories",
+              "Width": 34.29,
+              "Formula": ""
+            },
+            {
+              "Header": "Datetime",
+              "Width": 15,
+              "Formula": ""
+            },
+            {
+              "Header": "ISO Currency Code",
+              "Width": 10.29,
+              "Formula": ""
+            },
+            {
+              "Header": "Merchant Name",
+              "Width": 10.29,
+              "Formula": ""
+            },
+            {
+              "Header": "Name",
+              "Width": 39.29,
+              "Formula": ""
+            },
+            {
+              "Header": "Payment Channel",
+              "Width": 10.29,
+              "Formula": ""
+            },
+            {
+              "Header": "Pending",
+              "Width": 11.43,
+              "Formula": ""
+            },
+            {
+              "Header": "Transaction ID",
+              "Width": 11.43,
+              "Formula": ""
+            },
+            {
+              "Header": "Account Name",
+              "Width": 20.86,
+              "Formula": "=XLOOKUP([@[Account ID]],Accounts[Plaid Account ID],Accounts[Name],\"Not Found\",0)"
+            },
+            {
+              "Header": "Bank",
+              "Width": 14,
+              "Formula": "=XLOOKUP([@[Account ID]],Accounts[Plaid Account ID],Accounts[Institution Name],\"Not Found\",0)"
+            },
+            {
+              "Header": "Operation",
+              "Width": 10.71,
+              "Formula": "=IF([@Amount]<0,\"credit\",\"debit\")"
+            },
+            {
+              "Header": "Custom Category",
+              "Width": 16.29,
+              "Formula": "=IF(    ISNUMBER(MATCH([@Categories], FILTER(Custom_Cat[Name], LEN(Custom_Cat[Name]) >= 3), 0)),    INDEX(Custom_Cat[Custom Category], MATCH([@Categories], FILTER(Custom_Cat[Name], LEN(Custom_Cat[Name]) >= 3), 0)),    IFERROR(        INDEX(            Custom_Cat[Custom Category],            MATCH(                1,                (ISNUMBER(SEARCH(LOWER(Custom_Cat[Name]), LOWER([@Name]))))                * (LEN(Custom_Cat[Name]) >= 3)                * (                    (IF(LEFT(Custom_Cat[Amount],1)=\"<\",[@Amount]<VALUE(MID(Custom_Cat[Amount], 2, LEN(Custom_Cat[Amount])-1)),TRUE))                    * (IF(LEFT(Custom_Cat[Amount],1)=\">\",[@Amount]>VALUE(MID(Custom_Cat[Amount], 2, LEN(Custom_Cat[Amount])-1)),TRUE))                ),                0            )        ),        [@Categories]    ))"
+            },
+            {
+              "Header": "Month",
+              "Width": 10.43,
+              "Formula": "=DATE(YEAR([@Datetime]),MONTH([@Datetime]),1)"
+            },
+            {
+              "Header": "Recent",
+              "Width": 15,
+              "Formula": "=AND([@Datetime]>=EDATE(MAX([Datetime]),-6),[@Datetime]<=TODAY())"
+            },
+            {
+              "Header": "6M AVG",
+              "Width": 8.43,
+              "Formula": "=AVERAGEIFS([Month''s Total],[Recent],TRUE,[Custom Category],[@[Custom Category]])"
+            },
+            {
+              "Header": "Month's Total",
+              "Width": 10.86,
+              "Formula": "=SUMIFS([Amount],[Month],[@Month],[Custom Category],[@[Custom Category]])"
+            },
+            {
+              "Header": "Budget",
+              "Width": 8.43,
+              "Formula": "=IF(COUNTIF(Budgets[Custom Category],[@[Custom Category]])=0,[@[6M AVG]],XLOOKUP([@[Custom Category]],Budgets[Custom Category],Budgets[Monthly],0,0))"
+            },
+            {
+              "Header": "Sel Month",
+              "Width": 8.43,
+              "Formula": "=IF([@Month]=Sel_Month,[@Amount],0)"
+            }
+          ],
+          "Rows": [
+
+          ]
+        }
+      ],
+      "PivotTables": [
+
+      ],
+      "OtherCells": [
+
+      ],
+      "Cells": [
+
+      ],
+      "DataValidations": [
+
+      ],
+      "ConditionalFormatting": [
+
+      ]
+    },
+    {
+      "Name": "Conf",
+      "ListObjects": [
+        {
+          "Name": "Frequency",
+          "StartingCell": "$A$1",
+          "ColorStyle": "TableStyleMedium16",
+          "Columns": [
+            {
+              "Header": "Frequency",
+              "Width": 12.29,
+              "Formula": ""
+            },
+            {
+              "Header": "Factor",
+              "Width": 8.43,
+              "Formula": ""
+            }
+          ],
+          "Rows": [
+            ["Daily", "30"],
+            ["Weekly", "4"],
+            ["Bi-Weekly", "2"],
+            ["Monthly", "1"],
+            ["Quartery", "=1/3"],
+            ["Bi-Yearly", "=1/6"],
+            ["Yearly", "=1/12"]
+          ]
+        }
+      ],
+      "PivotTables": [
+
+      ],
+      "OtherCells": [
+        {
+          "Address": "$D$1:$D$1",
+          "Formula": "=UNIQUE(Transactions[Month])",
+          "FillColor": "#FFFFFF",
+          "NumberFormat": "yyyy / mmm",
+          "Font": {
+              "Size": 11,
+              "Color": "#000000",
+              "Bold": false,
+              "Italic": false
+          }
+        }
+      ],
+      "Cells": [
+
+      ],
+      "DataValidations": [
+
+      ],
+      "ConditionalFormatting": [
+
+      ]
+    }
+  ],
+  "CustomNamedRanges": [
+    {
+      "Name": "Sel_Month",
+      "RefersTo": "=Dashboard!$I$1"
+    },    {
+      "Name": "Unique_Months",
+      "RefersTo": "=OFFSET(Conf!$D$1, 0, 0, COUNTA(Conf!$D:$D), 1)"
+    }
+  ]
+}

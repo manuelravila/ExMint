@@ -18,7 +18,7 @@ def combined_required(f):
 
         if 'X-Request-Source' in request.headers and request.headers['X-Request-Source'] == 'Excel-Add-In':
             if 'Authorization' in request.headers:
-                print('Decorator found header in request and Authorization in it')
+                #print('Decorator found header in request and Authorization in it')
                 token = request.headers['Authorization'].split(" ")[1]
                 user_id = User.verify_auth_token(token)
                 if user_id:
@@ -28,7 +28,7 @@ def combined_required(f):
                         return f(*args, **kwargs)
         else:
             token = request.cookies.get('token')
-            print(f"Token found: {token}")  # Debug statement
+            #print(f"Token found: {token}")  # Debug statement
             if token:
                 user_id = User.verify_auth_token(token)
                 if user_id:

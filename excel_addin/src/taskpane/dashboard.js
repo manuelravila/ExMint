@@ -135,6 +135,7 @@ function createCard(type, bankName, operation, transactionCount, errorCode, erro
 }
 
 let isSyncing = false;
+let isFirstRun = false; // Global flag to track the first run
 
 function syncTransactions() {
     if (isSyncing) {
@@ -151,17 +152,24 @@ function syncTransactions() {
         console.log('Syncing aborted: user not authenticated');
         return;
     }
-    console.log('User already authenticathed');
+    console.log('User already authenticated');
+    
     const loader = document.createElement('div');
     loader.className = 'loader';
-    loader.innerHTML = '<i class="fas fa-spinner fa-spin"></i><br>Loading Transactions';
     document.body.appendChild(loader);
+    
+    function updateLoaderMessage(message) {
+        loader.innerHTML = `<i class="fas fa-spinner fa-spin"></i><br>${message}`;
+    }
+    
+    updateLoaderMessage('Importing Template');
+    
     Excel.run(context => {
         const workbook = context.workbook;
         let transactionsTableExists = false;
         return workbook.load('worksheets').context.sync()
             .then(() => {
-                console.log('Worksheets in the user wb:', workbook.worksheets.items.map(ws => ws.name));
+                //console.log('Worksheets in the user workbook:', workbook.worksheets.items.map(ws => ws.name));
                 const transactionsSheet = workbook.worksheets.getItem('Transactions');
                 const transactionsTable = transactionsSheet.tables.getItemOrNullObject('Transactions');
                 
@@ -181,20 +189,12 @@ function syncTransactions() {
                 }
             })
             .then(() => {
+                updateLoaderMessage('Requesting Transactions');
                 console.log('Getting cursors');
                 return getCursors();
             })
             .then(cursors => {
-                console.log('Cursors retrieved:', cursors);
-                console.log('API URL:', window.appConfig.backEndUrl);  // Print API URL
-                console.log('Token:', token);  // Print token
-                console.log('Headers:', {
-                    'Authorization': `Bearer ${token}`,
-                    'Content-Type': 'application/json',
-                    'X-Request-Source': 'Excel-Add-In',
-                    'x-user-token': token,
-                    'cursors': JSON.stringify(cursors)
-                });  // Print headers
+                //console.log('Cursors retrieved:', cursors);
                 return fetch(window.appConfig.backEndUrl + '/sync', {
                     method: 'GET',
                     headers: {
@@ -202,7 +202,7 @@ function syncTransactions() {
                         'Content-Type': 'application/json',
                         'X-Request-Source': 'Excel-Add-In',
                         'x-user-token': token,
-                        'cursors': JSON.stringify(cursors)  // Ensure cursors is correctly formatted
+                        'cursors': cursors
                     }
                 });
             })
@@ -216,20 +216,32 @@ function syncTransactions() {
                 }
             })
             .then(data => {
+                updateLoaderMessage('Updating Tables');
                 console.log('Transaction data retrieved:', data);
                 return processTransactionData(context, workbook, data);
             })
             .then(() => {
+                updateLoaderMessage('Refreshing Formulas');
                 return applyFormulasToTransactions(context, workbook);
+            })
+            .then(() => {
+                if (isFirstRun) {
+                    updateLoaderMessage('Applying Pivot Table Settings');
+                    return createPivotTables(context, workbook).then(() => {
+                        isFirstRun = false;
+                    });
+                }
+            })
+            .then(() => {
+                return refreshAllPivotTables(context, workbook);
             })
             .catch(error => {
                 console.error('Error syncing transactions:', error);
-                createErrorCard('Sync', 'SYNC_ERROR', error.message); // Create error card for sync error
+                createErrorCard('Sync', 'SYNC_ERROR', error.message);
                 showToast('Failed to sync transactions. Please try again.', 'error');
             })
             .finally(() => {
                 isSyncing = false;
-                const loader = document.querySelector('.loader');
                 if (loader) {
                     document.body.removeChild(loader);
                 }
@@ -237,7 +249,7 @@ function syncTransactions() {
             });
     }).catch(error => {
         console.error('Error in Excel.run:', error);
-        createErrorCard('Excel', 'EXCEL_ERROR', error.message); // Create error card for Excel error
+        createErrorCard('Excel', 'EXCEL_ERROR', error.message);
         showToast('An error occurred. Please try again.', 'error');
     });
 }
@@ -284,7 +296,7 @@ async function importTemplateSheetsFromJSON(context, workbook) {
             throw new Error('Failed to fetch JSON template');
         }
         const template = await response.json();
-        console.log('JSON template loaded:', template);
+        //console.log('JSON template loaded:', template);
 
         const tablesToProcess = [];
         const pivotTablesToProcess = [];
@@ -307,9 +319,9 @@ async function importTemplateSheetsFromJSON(context, workbook) {
 
             await importListObjects(context, excelSheet, sheet.ListObjects, tablesToProcess);
 
-            if (sheet.PivotTables) {
-                pivotTablesToProcess.push({ sheet: excelSheet, pivotTables: sheet.PivotTables });
-            }
+            //if (sheet.PivotTables) {
+            //    pivotTablesToProcess.push({ sheet: excelSheet, pivotTables: sheet.PivotTables });
+            //}
  
             if (sheet.OtherCells) {
                 otherCellsToProcess.push({ sheet: excelSheet, otherCells: sheet.OtherCells });
@@ -334,7 +346,7 @@ async function importTemplateSheetsFromJSON(context, workbook) {
 
         await processTableFormulas(context, tablesToProcess);
 
-        await importPivotTables(context, workbook, pivotTablesToProcess);
+        //await importPivotTables(context, workbook, pivotTablesToProcess);
 
         await importOtherCells(context, otherCellsToProcess);
 
@@ -572,6 +584,7 @@ async function importListObjects(context, excelSheet, listObjects, tablesToProce
             await context.sync();
 
             if (table.isNullObject) {
+                isFirstRun = true;
                 console.log(`Creating table ${listObject.Name} at ${listObject.StartingCell}`);
                 // Calculate the range for the header
                 const startCell = listObject.StartingCell.replace('$', '');
@@ -643,58 +656,6 @@ async function processTableFormulas(context, tablesToProcess) {
     }
 }
 
-async function importPivotTables(context, workbook, pivotTablesToProcess) {
-    try {
-        for (const { sheet, pivotTables } of pivotTablesToProcess) {
-            for (const pivotTable of pivotTables) {
-                const existingPivotTable = sheet.pivotTables.getItemOrNullObject(pivotTable.Name);
-                await context.sync();
-
-                if (existingPivotTable.isNullObject) {
-                    console.log(`Creating PivotTable ${pivotTable.Name} at ${pivotTable.StartingCell} with source data ${pivotTable.SourceData}`);
-
-                    const pivotTableObject = sheet.pivotTables.add(pivotTable.Name, pivotTable.SourceData, pivotTable.StartingCell);
-
-                    for (const rowField of pivotTable.RowFields) {
-                        const hierarchy = pivotTableObject.hierarchies.getItem(rowField.Name);
-                        const rowHierarchy = pivotTableObject.rowHierarchies.add(hierarchy);
-                        rowHierarchy.name = rowField.CustomName;
-                        rowHierarchy.showSubtotals = rowField.Subtotals;
-                        rowHierarchy.layoutForm = rowField.LayoutForm;
-                        console.log(`Added row field: ${rowField.Name}`);
-                    }
-
-                    for (const columnField of pivotTable.ColumnFields) {
-                        const hierarchy = pivotTableObject.hierarchies.getItem(columnField.Name);
-                        pivotTableObject.columnHierarchies.add(hierarchy).name = columnField.CustomName;
-                        console.log(`Added column field: ${columnField.Name}`);
-                    }
-
-                    for (const valueField of pivotTable.ValueFields) {
-                        const hierarchy = pivotTableObject.hierarchies.getItem(valueField.Name);
-                        const dataHierarchy = pivotTableObject.dataHierarchies.add(hierarchy);
-                        dataHierarchy.load(['numberFormat', 'name']);
-                        await context.sync();
-
-                        dataHierarchy.numberFormat = valueField.NumberFormat;
-                        dataHierarchy.name = valueField.CustomName;
-                        console.log(`Added value field: ${valueField.Name}`);
-                        //await context.sync();
-                    }
-
-                    await context.sync();
-                    console.log(`PivotTable ${pivotTable.Name} created successfully.`);
-                } else {
-                    console.log(`PivotTable ${pivotTable.Name} already exists.`);
-                }
-            }
-        }
-    } catch (error) {
-        console.error('Error importing pivot tables:', error);
-        throw error;
-    }
-}
-
 async function importDataValidations(context, sheets) {
     try {
         if (!sheets || sheets.length === 0) {
@@ -752,7 +713,7 @@ async function importDataValidations(context, sheets) {
     }
 }
 
-async function applyPivotTableSettings(context, workbook, pivotTablesToProcess) {
+async function createPivotTables(context, workbook) {
     try {
         const aggregationMapping = {
             "Sum": Excel.AggregationFunction.sum,
@@ -785,34 +746,68 @@ async function applyPivotTableSettings(context, workbook, pivotTablesToProcess) 
             "RankAscending": Excel.ShowAsCalculation.rankAscending,
             "RankDescending": Excel.ShowAsCalculation.rankDescending,
             "Index": Excel.ShowAsCalculation.index,
-        };
+        };   
 
-        for (const { sheet, pivotTables } of pivotTablesToProcess) {
-            for (const pivotTable of pivotTables) {
-                const pivotTableObject = sheet.pivotTables.getItem(pivotTable.Name);
+        const response = await fetch(`${window.appConfig.frontEndUrl}/assets/template.json`);
+        if (!response.ok) {
+            throw new Error('Failed to fetch JSON template');
+        }
+        const template = await response.json();
+
+        const worksheets = workbook.worksheets.load('items');
+        await context.sync();
+        
+        console.log('Worksheets loaded:', worksheets.items.map(sheet => sheet.name));
+
+        for (const sheet of template.Sheets) {
+            const excelSheet = workbook.worksheets.getItem(sheet.Name);
+            await excelSheet.load('pivotTables/items').context.sync();
+            console.log(`Processing sheet: ${sheet.Name}`);
+
+            for (const pivotTable of sheet.PivotTables) {
+                // Create new PivotTable
+                const newPivotTable = excelSheet.pivotTables.add(pivotTable.Name, pivotTable.SourceData, pivotTable.StartingCell);
+                newPivotTable.columnGrandTotals = pivotTable.ColumnGrandTotals;
+                newPivotTable.rowGrandTotals = pivotTable.RowGrandTotals;
                 
-                // Set summarization and showAs properties for data hierarchies
-                for (const valueField of pivotTable.ValueFields) {
-                    console.log(`Applying settings for value field: ${valueField.Name}`);
-                    const dataHierarchy = pivotTableObject.dataHierarchies.getItem(valueField.Name);
-                    dataHierarchy.load(['summarizeBy', 'showAs']);
-                    await context.sync();
+                // Add row fields
+                for (const rowField of pivotTable.RowFields) {
+                    const rowHierarchy = newPivotTable.hierarchies.getItem(rowField.Name);
+                    const newRowField = newPivotTable.rowHierarchies.add(rowHierarchy);
+                    newRowField.name = rowField.CustomName;
+                    newRowField.subtotals = rowField.Subtotals;
+                }
 
-                    dataHierarchy.summarizeBy = aggregationMapping[valueField.SummarizedBy] || Excel.AggregationFunction.automatic;
-                    dataHierarchy.showAs = showAsMapping[valueField.ShowValuesAs] || Excel.ShowAsCalculation.none;
-                    console.log(`Set summarizeBy to: ${dataHierarchy.summarizeBy} and showAs to: ${dataHierarchy.showAs} for ${valueField.Name}`);
-                    await context.sync();
+                // Add column fields
+                for (const columnField of pivotTable.ColumnFields) {
+                    const columnHierarchy = newPivotTable.hierarchies.getItem(columnField.Name);
+                    const newColumnField = newPivotTable.columnHierarchies.add(columnHierarchy);
+                    newColumnField.name = columnField.CustomName;
+                    newColumnField.subtotals = columnField.Subtotals;
+                }
+
+                // Add data fields
+                for (const valueField of pivotTable.ValueFields) {
+                    const dataHierarchy = newPivotTable.hierarchies.getItem(valueField.Name);
+                    const newValueField = newPivotTable.dataHierarchies.add(dataHierarchy);
+                    newValueField.summarizeBy = aggregationMapping[valueField.SummarizedBy] || Excel.AggregationFunction.automatic;
+                    newValueField.numberFormat = valueField.NumberFormat;
+                    newValueField.name = valueField.CustomName;
                 }
 
                 await context.sync();
-                console.log(`Applied settings to PivotTable ${pivotTable.Name} successfully.`);
+                console.log(`Recreated pivot table: ${pivotTable.Name}`);
             }
         }
+
+        console.log('All pivot tables recreated successfully.');
     } catch (error) {
-        console.error('Error applying settings to pivot tables:', error);
-        throw error;
+        console.error('Error recreating pivot tables:', error);
+        createErrorCard('PivotTable', 'PIVOT_TABLE_ERROR', error.message);
+        showToast('Failed to recreate pivot tables. Please try again.', 'error');
     }
 }
+
 
 function insertTransactionData(context, workbook, data, banksWithErrors) {
     const accountsData = [];
@@ -906,25 +901,30 @@ function insertTransactionData(context, workbook, data, banksWithErrors) {
         const transactionsHeaderRange = transactionsTable.getHeaderRowRange().load('values');
 
         return context.sync().then(() => {
-            const transactionColumns = transactionsHeaderRange.values[0];
+            if (newAccountsData.length > 0) {
+                accountsTable.rows.add(null, newAccountsData);
+                console.log('Just added Accounts and ready to add these transactions: ', newTransactionsData);
+            }
 
-            const formattedTransactionsData = newTransactionsData.map(transactionRow => {
-                const formattedRow = [];
-                transactionColumns.forEach((column, index) => {
-                    formattedRow.push(transactionRow[index] || '');
+            if (newTransactionsData.length > 0) {
+                const transactionColumns = transactionsHeaderRange.values[0];
+                const formattedTransactionsData = newTransactionsData.map(transactionRow => {
+                    const formattedRow = [];
+                    transactionColumns.forEach((column, index) => {
+                        formattedRow.push(transactionRow[index] || '');
+                    });
+                    return formattedRow;
                 });
-                return formattedRow;
-            });
 
-            accountsTable.rows.add(null, newAccountsData);
-            transactionsTable.rows.add(null, formattedTransactionsData);
-
+                transactionsTable.rows.add(null, formattedTransactionsData);
+            }
         }).catch(error => {
             console.error('Error in insertTransactionData:', error);
             showToast('Failed to insert transaction data. Please try again.', 'error');
         });
     });
 }
+
 
 async function applyFormulasToTransactions(context, workbook) {
     try {
@@ -955,13 +955,19 @@ async function applyFormulasToTransactions(context, workbook) {
                         if (formula) {
                             const column = columns.items[i];
                             const columnRange = column.getDataBodyRange();
-                            await columnRange.load('rowCount').context.sync();
+                            await columnRange.load('values, rowCount').context.sync();
 
-                            const rowCount = columnRange.rowCount;
-                            const formulas = Array(rowCount).fill([formula]);
-                            console.log(`Applying formula to column: ${templateColumn.Header} with row count: ${rowCount}`);
-                            columnRange.formulas = formulas;
-                            await context.sync();
+                            // Apply formula only if the column is empty
+                            const isEmpty = columnRange.values.every(row => row.every(cell => cell === null || cell === ""));
+                            if (isEmpty) {
+                                const rowCount = columnRange.rowCount;
+                                const formulas = Array(rowCount).fill([formula]);
+                                //console.log(`Applying formula to column: ${templateColumn.Header} with row count: ${rowCount}`);
+                                columnRange.formulas = formulas;
+                                await context.sync();
+                            } else {
+                                console.log(`Skipping formula for column: ${templateColumn.Header} as it is not empty.`);
+                            }
                         }
                     }
                 }
@@ -972,6 +978,30 @@ async function applyFormulasToTransactions(context, workbook) {
     } catch (error) {
         console.error('Error applying formulas to transactions:', error);
         showToast('Failed to apply formulas. Please try again.', 'error');
+    }
+}
+
+async function refreshAllPivotTables(context, workbook) {
+    try {
+        const worksheets = workbook.worksheets.load('items');
+        await context.sync();
+
+        for (const sheet of worksheets.items) {
+            const pivotTables = sheet.pivotTables.load('items');
+            await context.sync();
+
+            for (const pivotTable of pivotTables.items) {
+                pivotTable.refresh();
+            }
+
+            console.log(`Pivot tables in sheet ${sheet.name} refreshed.`);
+        }
+
+        await context.sync();
+        console.log('All pivot tables refreshed successfully.');
+    } catch (error) {
+        console.error('Error refreshing pivot tables:', error);
+        showToast('Failed to refresh pivot tables. Please try again.', 'error');
     }
 }
 
