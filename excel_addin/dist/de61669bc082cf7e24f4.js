@@ -1,1 +1,0 @@
-!function(){var t,i=window.location.hostname;"localhost"===i||"127.0.0.1"===i||"dev.exmint.me"===i?(t="https://dev.exmint.me:5000",suffix="-dev"):"stg-addin.exmint.me"===i?(t="https://stg-app.exmint.me",suffix="-stg"):(t="https://app.exmint.me",suffix=""),window.appConfig={apiUrl:t,suffix:suffix}}();
