@@ -2,6 +2,7 @@
 
 ### Fixed
 - Completed JSON template to fix issues with the add-in on Excel 265 online
+- Fixed issue with pivot table refreshing
 
 ## [0.3.1] - 2024-06-30
 
