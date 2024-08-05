@@ -24,7 +24,7 @@ class User(UserMixin, db.Model):
     def generate_auth_token(self):
         payload = {
             'user_id': self.id,
-            'iat': datetime.datetime.now(datetime.UTC)  # Add issued-at time
+            'iat': datetime.datetime.now(datetime.timezone.UTC)  # Add issued-at time
         }
         new_token = jwt.encode(
             payload,
@@ -75,7 +75,7 @@ class Account(db.Model):
 
 class PlaidTransaction(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    timestamp = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
+    timestamp = db.Column(db.DateTime, nullable=False, default=datetime.now(datetime.timezone.utc))
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     user_ip = db.Column(db.String(45), nullable=False)  # Standard length to accommodate IPv6
     credential_id = db.Column(db.Integer, db.ForeignKey('credential.id'), nullable=True)
