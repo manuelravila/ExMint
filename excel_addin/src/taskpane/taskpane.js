@@ -76,6 +76,9 @@ function fetchProtectedData() {
 }
 
 // Dynamically set login form links
+
+console.log('Suffix:', window.appConfig.suffix);
+
 document.addEventListener('DOMContentLoaded', function () {
   // Ensure the DOM is fully loaded before attaching the event handlers
   var resetPasswordLink = document.getElementById('resetPasswordLink');
