@@ -296,10 +296,10 @@ async function importTemplateSheetsFromJSON(context, workbook) {
             throw new Error('Failed to fetch JSON template');
         }
         const template = await response.json();
-        //console.log('JSON template loaded:', template);
+        console.log('JSON template loaded:', template);
 
         const tablesToProcess = [];
-        const pivotTablesToProcess = [];
+        //const pivotTablesToProcess = [];
         const otherCellsToProcess = [];
         const cellsToProcess = [];
         const conditionalFormattingToProcess = [];
