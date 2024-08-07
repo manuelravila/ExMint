@@ -1,5 +1,5 @@
 // dashboard.js
-console.log("Dashboard script loaded v3");
+console.log("Dashboard script loaded v3.1");
 
 function showToast(message, type = 'info') {
     const toast = document.createElement('div');
