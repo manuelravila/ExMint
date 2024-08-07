@@ -903,7 +903,7 @@ function insertTransactionData(context, workbook, data, banksWithErrors) {
         return context.sync().then(() => {
             if (newAccountsData.length > 0) {
                 accountsTable.rows.add(null, newAccountsData);
-                console.log('Just added Accounts and ready to add these transactions: ', newTransactionsData);
+                //console.log('Just added Accounts and ready to add these transactions: ', newTransactionsData);
             }
 
             if (newTransactionsData.length > 0) {
