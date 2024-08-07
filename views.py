@@ -208,7 +208,7 @@ def logout():
 def reset_password():
     # If the user is already logged in, redirect them to the dashboard
     if current_user.is_authenticated:
-        #print("User is already authenticated, redirecting to dashboard.")
+        print("User is already authenticated, redirecting to notice.")
         return render_template('already_logged_in.html')
 
     if request.method == 'POST':
