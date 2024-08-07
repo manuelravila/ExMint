@@ -12,6 +12,8 @@ function showToast(message) {
 document.addEventListener('DOMContentLoaded', function () {
   const loginForm = document.querySelector('form');
   const serverAddress = window.appConfig.backEndUrl;
+  
+  console.log('Server Address:', serverAddress);
 
   loginForm.addEventListener('submit', function (e) {
       e.preventDefault(); // Prevent the default form submission
