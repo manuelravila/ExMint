@@ -75,7 +75,7 @@ class Account(db.Model):
 
 class PlaidTransaction(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    timestamp = db.Column(db.DateTime, nullable=False, default=datetime.now(datetime.timezone.utc))
+    timestamp = db.Column(db.DateTime, nullable=False, default=datetime.datetime.now(datetime.timezone.utc))
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     user_ip = db.Column(db.String(45), nullable=False)  # Standard length to accommodate IPv6
     credential_id = db.Column(db.Integer, db.ForeignKey('credential.id'), nullable=True)
