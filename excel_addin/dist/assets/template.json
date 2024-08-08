@@ -5,7 +5,7 @@
       "ListObjects": [
         {
           "Name": "Custom_Cat",
-          "StartingCell": "$P$2",
+          "StartingCell": "$O$2",
           "ColorStyle": "TableStyleMedium2",
           "Columns": [
             {
@@ -30,7 +30,7 @@
         },
         {
           "Name": "Budgets",
-          "StartingCell": "$K$2",
+          "StartingCell": "$J$2",
           "ColorStyle": "TableStyleMedium2",
           "Columns": [
             {
@@ -62,7 +62,7 @@
       "PivotTables": [
         {
           "Name": "Spending",
-          "StartingCell": "$E$2",
+          "StartingCell": "$D$2",
           "ColorStyle": "",
           "SourceData": "Transactions",
           "RowFields": [
@@ -129,13 +129,6 @@
           ],
           "ValueFields": [
             {
-              "Name": "Mask",
-              "CustomName": "Mask",
-              "SummarizedBy": "Max",
-              "ShowValuesAs": "None",
-              "NumberFormat": "General"
-            },
-            {
               "Name": "Balance",
               "CustomName": "Balance",
               "SummarizedBy": "Sum",
@@ -147,7 +140,7 @@
       ],
       "OtherCells": [
         {
-          "Address": "$H$3:$H$1000",
+          "Address": "$G$3:$G$1000",
           "Formula": "=IFS(RC[-3]=\"\",\"\",RC[-3]=\"Grand Total\",SUM(R2C:R[-1]C),TRUE,IF(COUNTIF(Transactions[Custom Category],RC[-3])>0,SUMIFS(Transactions[Amount],Transactions[Custom Category],RC[-3],Transactions[Month],Sel_Month),SUMIFS(Transactions[Amount],Transactions[Name],RC[-3],Transactions[Month],Sel_Month)))",
           "FillColor": "#FFFFFF",
           "NumberFormat": "$#,##0",
@@ -159,7 +152,7 @@
           }
         },
         {
-          "Address": "$I$3:$I$1000",
+          "Address": "$H$3:$H$1000",
           "Formula": "=IF(RC[-2]=\"\",\"\",IF(RC[-2]=0,0,1-((RC[-2]-RC[-1])/RC[-2])))",
           "FillColor": "#FFFFFF",
           "NumberFormat": "0%",
@@ -185,7 +178,7 @@
           }
         },
         {
-          "Address": "$E$1",
+          "Address": "$D$1",
           "Value": "Spending Report",
           "FillColor": "#FFFFFF",
           "NumberFormat": "General",
@@ -197,7 +190,7 @@
           }
         },
         {
-          "Address": "$H$1",
+          "Address": "$G$1",
           "Value": "Month",
           "FillColor": "#074F69",
           "NumberFormat": "General",
@@ -209,7 +202,7 @@
           }
         },
         {
-          "Address": "$K$1",
+          "Address": "$J$1",
           "Value": "Budgets",
           "FillColor": "#FFFFFF",
           "NumberFormat": "General",
@@ -221,7 +214,7 @@
           }
         },
         {
-          "Address": "$P$1",
+          "Address": "$O$1",
           "Value": "Custom Categories",
           "FillColor": "#FFFFFF",
           "NumberFormat": "General",
@@ -233,7 +226,7 @@
           }
         },
         {
-          "Address": "$H$2",
+          "Address": "$G$2",
           "Value": "Monthly Spending",
           "FillColor": "#074F69",
           "NumberFormat": "General",
@@ -245,7 +238,7 @@
           }
         },
         {
-          "Address": "$I$2",
+          "Address": "$H$2",
           "Value": "Spent",
           "FillColor": "#074F69",
           "NumberFormat": "General",
@@ -259,7 +252,7 @@
       ],
       "DataValidations": [
         {
-          "Address": "$I$1",
+          "Address": "$H$1",
           "Type": "3",
           "AlertStyle": "1",
           "Formula1": "=Unique_Months",
@@ -272,7 +265,7 @@
           "ErrorMessage": ""
         },
         {
-          "Address": "$L$3",
+          "Address": "$K$3",
           "Type": "3",
           "AlertStyle": "1",
           "Formula1": "=Conf!$A$2:$A$8",
@@ -287,9 +280,9 @@
       ],
       "ConditionalFormatting": [
         {
-          "AppliesTo": "$A$6:$C$6",
+          "AppliesTo": "$A$6",
           "Type": "2",
-          "Formula": "=$E6=\"Total\"",
+          "Formula": "=$D6=\"Total\"",
           "Interior": {
               "Color": "#104861",
               "Pattern": ""
@@ -303,9 +296,9 @@
           }
         },
         {
-          "AppliesTo": "$A$6:$C$6",
+          "AppliesTo": "$A$6",
           "Type": "2",
-          "Formula": "=$E6<>\"\"",
+          "Formula": "=$D6<>\"\"",
           "Interior": {
               "Color": "#CAEDFB",
               "Pattern": ""
@@ -319,9 +312,9 @@
           }
         },
         {
-          "AppliesTo": "$H$3:$I$1000",
+          "AppliesTo": "$G$3:$H$1000",
           "Type": "2",
-          "Formula": "=$E3=\"Total\"",
+          "Formula": "=$D3=\"Total\"",
           "Interior": {
               "Color": "#104861",
               "Pattern": ""
@@ -335,9 +328,9 @@
           }
         },
         {
-          "AppliesTo": "$H$3:$I$1000",
+          "AppliesTo": "$G$3:$H$1000",
           "Type": "2",
-          "Formula": "=$E3<>\"\"",
+          "Formula": "=$D3<>\"\"",
           "Interior": {
               "Color": "#CAEDFB",
               "Pattern": ""
@@ -387,7 +380,7 @@
             },
             {
               "Header": "Name",
-              "Width": 10.29,
+              "Width": 31.71,
               "Formula": ""
             },
             {
@@ -493,7 +486,7 @@
             {
               "Header": "Account Name",
               "Width": 20.86,
-              "Formula": "=XLOOKUP([@[Account ID]],Accounts[Plaid Account ID],Accounts[Name],\"Not Found\",0)"
+              "Formula": "=IFERROR(XLOOKUP([@[Account ID]], Accounts[Plaid Account ID], Accounts[Name]) & \" - \" & XLOOKUP([@[Account ID]], Accounts[Plaid Account ID], Accounts[Mask]), \"Not Found\")"
             },
             {
               "Header": "Bank",
@@ -623,7 +616,7 @@
   "CustomNamedRanges": [
     {
       "Name": "Sel_Month",
-      "RefersTo": "=Dashboard!$I$1"
+      "RefersTo": "=Dashboard!$H$1"
     },    {
       "Name": "Unique_Months",
       "RefersTo": "=OFFSET(Conf!$D$1, 0, 0, COUNTA(Conf!$D:$D), 1)"
