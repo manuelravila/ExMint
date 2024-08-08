@@ -107,7 +107,7 @@ def register():
             token = user.generate_auth_token()  # Generate and save the token
             login_user(user)  # Log in the user
             
-            response = redirect(Config.external_redirect('dashboard'))
+            response = redirect(Config.external_redirect())
             response.set_cookie('token', token, 
                                 httponly=True, 
                                 secure=current_app.config['SESSION_COOKIE_SECURE'], 
