@@ -91,49 +91,6 @@ function getCursors() {
   });
 }
 
-function createCard(type, bankName, operation, transactionCount, errorCode, errorMessage) {
-  const card = document.createElement('div');
-  card.className = `${type}-card ${bankName.replace(/\s+/g, '-')}-card`;
-
-  const closeButton = document.createElement('button');
-  closeButton.className = 'close-button';
-  closeButton.innerHTML = '&times;';
-  closeButton.addEventListener('click', () => {
-    card.remove();
-    if (cardsContainer.children.length === 0) {
-      cardsContainer.style.display = 'none';
-    }
-  });
-
-  const content = document.createElement('div');
-  if (type === 'success') {
-    content.innerHTML = `
-      <strong>${bankName}</strong><br>
-      Successful ${operation}<br>
-      ${transactionCount} Transactions retrieved
-    `;
-  } else if (type === 'error') {
-    const errorCodeElement = document.createElement('p');
-    errorCodeElement.textContent = `Error Code: ${errorCode}`;
-
-    let errorMessageElement;
-    if (errorCode === 'ITEM_LOGIN_REQUIRED') {
-      errorMessageElement = document.createElement('p');
-      errorMessageElement.textContent = 'This institution requires to renew your connection. Open the Dashboard and click the corresponding "Reconnect" button.';
-    } else {
-      errorMessageElement = document.createElement('p');
-      errorMessageElement.textContent = `Error Message: ${errorMessage}`;
-    }
-
-    content.appendChild(errorCodeElement);
-    content.appendChild(errorMessageElement);
-  }
-
-  card.appendChild(closeButton);
-  card.appendChild(content);
-  return card;
-}
-
 let isSyncing = false;
 let isFirstRun = false; // Global flag to track the first run
 
@@ -258,8 +215,13 @@ function processTransactionData(context, workbook, data) {
     const banksWithErrors = new Set();
 
     const cardsContainer = document.getElementById('cardsContainer');
-    while (cardsContainer.firstChild) {
-        cardsContainer.removeChild(cardsContainer.firstChild);
+    if (cardsContainer) {
+        while (cardsContainer.firstChild) {
+            cardsContainer.removeChild(cardsContainer.firstChild);
+        }
+    } else {
+        console.error('cardsContainer not found');
+        return;
     }
 
     if (data.banks) {
@@ -319,10 +281,6 @@ async function importTemplateSheetsFromJSON(context, workbook) {
 
             await importListObjects(context, excelSheet, sheet.ListObjects, tablesToProcess);
 
-            //if (sheet.PivotTables) {
-            //    pivotTablesToProcess.push({ sheet: excelSheet, pivotTables: sheet.PivotTables });
-            //}
- 
             if (sheet.OtherCells) {
                 otherCellsToProcess.push({ sheet: excelSheet, otherCells: sheet.OtherCells });
             }
@@ -344,16 +302,9 @@ async function importTemplateSheetsFromJSON(context, workbook) {
             await importCustomNamedRanges(context, workbook, template.CustomNamedRanges);
         }
 
-        await processTableFormulas(context, tablesToProcess);
-
-        //await importPivotTables(context, workbook, pivotTablesToProcess);
-
         await importOtherCells(context, otherCellsToProcess);
-
         await importCells(context, cellsToProcess);        
-
         await importConditionalFormatting(context, conditionalFormattingToProcess);
-
         await importDataValidations(context, dataValidationsToProcess);
         
         //await context.sync();
@@ -621,37 +572,6 @@ async function importListObjects(context, excelSheet, listObjects, tablesToProce
         }
     } catch (error) {
         console.error('Error importing list objects:', error);
-        throw error;
-    }
-}
-
-async function processTableFormulas(context, tablesToProcess) {
-    try {
-        // Process the tables to add initial rows with formulas and then remove them
-        for (const { table, listObject } of tablesToProcess) {
-            const initialRow = listObject.Columns.map(column => column.Formula || "");
-            if (initialRow.some(cell => cell !== "")) {
-                //console.log(`Trying to insert row with values ${initialRow}`);
-                table.rows.add(null /*add rows to the end of the table*/, [initialRow]);
-                //await context.sync();
-                //console.log(`Initial row with formulas added to table ${listObject.Name}`);
-
-                // Remove the row after setting the formulas
-                table.rows.getItemAt(0).delete();
-                //await context.sync();
-                //console.log(`Initial row with formulas removed from table ${listObject.Name}`);
-            }
-
-            // Add rows if there are any
-            if (listObject.Rows.length > 0) {
-                table.rows.add(null /*add rows to the end of the table*/, listObject.Rows);
-                //await context.sync();
-                //console.log(`Rows added to table ${listObject.Name}`);
-            }
-        }
-        await context.sync();
-    } catch (error) {
-        console.error('Error processing table formulas:', error);
         throw error;
     }
 }
@@ -928,7 +848,7 @@ function insertTransactionData(context, workbook, data, banksWithErrors) {
 
 async function applyFormulasToTransactions(context, workbook) {
     try {
-        console.log('Starting to apply formulas to transactions...');
+        console.log('Starting to apply formulas to tables...');
 
         const response = await fetch(`${window.appConfig.frontEndUrl}/assets/template.json`);
         if (!response.ok) {
@@ -958,15 +878,15 @@ async function applyFormulasToTransactions(context, workbook) {
                             await columnRange.load('values, rowCount').context.sync();
 
                             // Apply formula only if the column is empty
-                            const isEmpty = columnRange.values.every(row => row.every(cell => cell === null || cell === ""));
-                            if (isEmpty) {
+                            const hasEmptyCells  = columnRange.values.some(row => row.some(cell => cell === null || cell === ""));
+                            if (hasEmptyCells) {
                                 const rowCount = columnRange.rowCount;
                                 const formulas = Array(rowCount).fill([formula]);
                                 //console.log(`Applying formula to column: ${templateColumn.Header} with row count: ${rowCount}`);
                                 columnRange.formulas = formulas;
                                 await context.sync();
                             } else {
-                                console.log(`Skipping formula for column: ${templateColumn.Header} as it is not empty.`);
+                                console.log(`Skipping formula for column: ${templateColumn.Header} as it has not empty cells.`);
                             }
                         }
                     }
@@ -1005,12 +925,57 @@ async function refreshAllPivotTables(context, workbook) {
     }
 }
 
+function createCard(type, bankName, operation, transactionCount, errorCode, errorMessage) {
+    const card = document.createElement('div');
+    card.className = `${type}-card ${bankName.replace(/\s+/g, '-')}-card`;
+  
+    const closeButton = document.createElement('button');
+    closeButton.className = 'close-button';
+    closeButton.innerHTML = '&times;';
+    closeButton.addEventListener('click', () => {
+      card.remove();
+      if (cardsContainer.children.length === 0) {
+        cardsContainer.style.display = 'none';
+      }
+    });
+  
+    const content = document.createElement('div');
+    if (type === 'success') {
+      content.innerHTML = `
+        <strong>${bankName}</strong><br>
+        Successful ${operation}<br>
+        ${transactionCount} Transactions retrieved
+      `;
+    } else if (type === 'error') {
+      const errorCodeElement = document.createElement('p');
+      errorCodeElement.textContent = `Error Code: ${errorCode}`;
+  
+      let errorMessageElement;
+      if (errorCode === 'ITEM_LOGIN_REQUIRED') {
+        errorMessageElement = document.createElement('p');
+        errorMessageElement.textContent = 'This institution requires to renew your connection. Open the Dashboard and click the corresponding "Reconnect" button.';
+      } else {
+        errorMessageElement = document.createElement('p');
+        errorMessageElement.textContent = `Error Message: ${errorMessage}`;
+      }
+  
+      content.appendChild(errorCodeElement);
+      content.appendChild(errorMessageElement);
+    }
+  
+    card.appendChild(closeButton);
+    card.appendChild(content);
+    return card;
+  }
+
 function createErrorCard(institutionName, errorCode, errorMessage) {
+    console.log(`Creating error card for ${institutionName} with code ${errorCode}`);
     const errorCard = createCard('error', institutionName, null, null, errorCode, errorMessage);
     document.getElementById('cardsContainer').appendChild(errorCard);
 }
 
 function createSuccessCard(institutionName, operation, transactionCount) {
+    console.log(`Creating success card for ${institutionName} with ${transactionCount} transactions`);
     const successCard = createCard('success', institutionName, operation, transactionCount);
     document.getElementById('cardsContainer').appendChild(successCard);
 }
