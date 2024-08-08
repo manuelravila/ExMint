@@ -123,35 +123,13 @@ function syncTransactions() {
     
     Excel.run(context => {
         const workbook = context.workbook;
-        let transactionsTableExists = false;
-        return workbook.load('worksheets').context.sync()
-            .then(() => {
-                //console.log('Worksheets in the user workbook:', workbook.worksheets.items.map(ws => ws.name));
-                const transactionsSheet = workbook.worksheets.getItem('Transactions');
-                const transactionsTable = transactionsSheet.tables.getItemOrNullObject('Transactions');
-                
-                transactionsTable.load('name');
-                return context.sync()
-                    .then(() => {
-                        console.log('Transactions table loaded:', transactionsTable.name);
-                        transactionsTableExists = true;
-                    })
-                    .catch((error) => {
-                        console.log('Transactions table does not exist:', error);
-                    });
-            })
-            .then(() => {
-                if (!transactionsTableExists) {
-                    return importTemplateSheetsFromJSON(context, workbook);
-                }
-            })
+        return importTemplateSheetsFromJSON(context, workbook)
             .then(() => {
                 updateLoaderMessage('Requesting Transactions');
                 console.log('Getting cursors');
                 return getCursors();
             })
             .then(cursors => {
-                //console.log('Cursors retrieved:', cursors);
                 return fetch(window.appConfig.backEndUrl + '/sync', {
                     method: 'GET',
                     headers: {
