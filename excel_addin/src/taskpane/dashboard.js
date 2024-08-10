@@ -1,5 +1,5 @@
 // dashboard.js
-console.log("Dashboard script loaded v3.2");
+console.log("Dashboard script loaded v3.3");
 
 // Initially hide the cards container
 const cardsContainer = document.getElementById('cardsContainer');
