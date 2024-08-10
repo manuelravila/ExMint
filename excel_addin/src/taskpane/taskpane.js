@@ -59,10 +59,14 @@ function init() {
         return response.json(); // Only parse as JSON if response is ok
       })
       .then(data => {
+        console.log('Token received:', data.token); // Log the token value
+        if (typeof data.token !== 'string') {
+            throw new Error('Invalid token format received');
+        }
         localStorage.setItem('authToken', data.token);
         console.log('Login successful, token stored.');
         window.location.href = 'dashboard.html'; // Redirect on success
-      })
+    })
       .catch((error) => {
         console.error('Error:', error);
         showToast('Login Unsuccessful. Please check email and password'); // Call with simple text
