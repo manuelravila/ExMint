@@ -1,5 +1,5 @@
 // dashboard.js
-console.log("Dashboard script loaded v3.3");
+console.log("Dashboard script loaded v3.4");
 
 // Initially hide the cards container
 const cardsContainer = document.getElementById('cardsContainer');
@@ -718,13 +718,15 @@ function insertTransactionData(context, workbook, data, credentialsWithErrors) {
 
     if (data.banks) {
         data.banks.forEach(bank => {
-            const concatenatedName = `${account.name} (${account.mask})`;
             if (credentialsWithErrors.has(bank.credential_id)) {
                 console.log(`Skipping accounts for credential ID ${bank.credential_id} due to errors.`);
                 return;
             }
 
             bank.accounts.forEach(account => {
+
+                const concatenatedName = `${account.name} (${account.mask})`;
+
                 const accountRow = [
                     bank.institution_name,
                     bank.credential_id,
