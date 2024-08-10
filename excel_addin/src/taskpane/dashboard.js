@@ -1,5 +1,5 @@
 // dashboard.js
-console.log("Dashboard script loaded v3.4");
+console.log("Dashboard script loaded v3.5");
 
 // Initially hide the cards container
 const cardsContainer = document.getElementById('cardsContainer');
@@ -871,7 +871,7 @@ async function applyFormulasToTransactions(context, workbook) {
 
                             if (needsUpdate) {
                                 const rowCount = columnRange.rowCount;
-                                const formulas = Array(rowCount).fill([formula]);
+                                const formulas = Array(rowCount).fill([templateFormula]);
                                 console.log(`Applying formula to column: ${templateColumn.Header} with row count: ${rowCount}`);
                                 columnRange.formulas = formulas;
                                 await context.sync();
