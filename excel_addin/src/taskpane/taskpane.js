@@ -1,5 +1,5 @@
 // taskpane.js
-console.log("Taskpane script loaded");
+console.log("Taskpane script v.3.1");
 
 function showToast(message) {
   const toast = document.createElement('div');
@@ -30,10 +30,11 @@ function init() {
 
   const token = localStorage.getItem('authToken');
   if (token) {
-    // Token is present, redirect to dashboard
     console.log('Token found, redirecting to dashboard...');
     window.location.href = 'dashboard.html';
-    return; // Exit the init function to prevent the login form from showing
+    return; // Prevent further execution
+  } else {
+    console.log('No token found, showing login form.');
   }
 
   const loginForm = document.querySelector('form');
