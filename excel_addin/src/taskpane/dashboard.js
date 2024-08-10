@@ -1,5 +1,9 @@
 // dashboard.js
-console.log("Dashboard script loaded v3.1");
+console.log("Dashboard script loaded v3.2");
+
+// Initially hide the cards container
+const cardsContainer = document.getElementById('cardsContainer');
+cardsContainer.style.display = 'none';
 
 function showToast(message, type = 'info') {
     const toast = document.createElement('div');
@@ -126,7 +130,7 @@ function syncTransactions() {
         return importTemplateSheetsFromJSON(context, workbook)
             .then(() => {
                 updateLoaderMessage('Requesting Transactions');
-                console.log('Getting cursors');
+                console.log('Getting cursors...');
                 return getCursors();
             })
             .then(cursors => {
@@ -655,7 +659,7 @@ async function createPivotTables(context, workbook) {
         const worksheets = workbook.worksheets.load('items');
         await context.sync();
         
-        console.log('Worksheets loaded:', worksheets.items.map(sheet => sheet.name));
+        //console.log('Worksheets loaded:', worksheets.items.map(sheet => sheet.name));
 
         for (const sheet of template.Sheets) {
             const excelSheet = workbook.worksheets.getItem(sheet.Name);
@@ -943,6 +947,9 @@ function createCard(type, bankName, operation, transactionCount, errorCode, erro
   
     card.appendChild(closeButton);
     card.appendChild(content);
+
+    cardsContainer.style.display = 'block';
+
     return card;
   }
 
