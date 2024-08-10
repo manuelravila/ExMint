@@ -236,13 +236,15 @@ def sync_transactions():
         ).all()
 
         for account in active_accounts:
-            balance_request = AccountsBalanceGetRequest(
+            # Replace balance_request with accounts_request
+            accounts_request = AccountsGetRequest(
                 access_token=credential.access_token,
                 options={"account_ids": [account.plaid_account_id]}
             )
+
             try:
-                balance_response = current_app.plaid_client.accounts_balance_get(balance_request)
-                balance = balance_response.to_dict()['accounts'][0]['balances']['current']
+                accounts_response = current_app.plaid_client.accounts_get(accounts_request)
+                balance = accounts_response.to_dict()['accounts'][0]['balances']['current']
             except plaid.ApiException as e:
                 balance = None
 
@@ -354,13 +356,26 @@ def fetch_balances():
     access_token = data.get('access_token')
     account_ids = data.get('account_ids', [])
 
-    balance_request = AccountsBalanceGetRequest(
+    # Use AccountsGetRequest instead of AccountsBalanceGetRequest
+    accounts_request = AccountsGetRequest(
         access_token=access_token,
-        options={"account_ids": account_ids}
+        options={"account_ids": account_ids} if account_ids else None
     )
+
     try:
-        balance_response = current_app.plaid_client.accounts_balance_get(balance_request)
-        return jsonify(balance_response.to_dict())
+        accounts_response = current_app.plaid_client.accounts_get(accounts_request)
+        accounts = accounts_response.to_dict().get('accounts', [])
+
+        # Extract the necessary balance information from the accounts data
+        balances = []
+        for account in accounts:
+            balance_info = {
+                "account_id": account.get('account_id'),
+                "balances": account.get('balances')
+            }
+            balances.append(balance_info)
+
+        return jsonify({"balances": balances})
     except plaid.ApiException as e:
         return jsonify(json.loads(e.body)), e.status
 
