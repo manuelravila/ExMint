@@ -369,7 +369,8 @@ async function importOtherCells(context, sheets) {
                 }
 
                 if (cell.NumberFormat) {
-                    range.numberFormat = [[cell.NumberFormat]];
+                    const numberFormats = Array(numRows).fill(Array(numColumns).fill(cell.NumberFormat));
+                    range.numberFormat = numberFormats;
                 }
 
                 if (cell.Font) {
@@ -717,6 +718,7 @@ function insertTransactionData(context, workbook, data, credentialsWithErrors) {
 
     if (data.banks) {
         data.banks.forEach(bank => {
+            const concatenatedName = `${account.name} (${account.mask})`;
             if (credentialsWithErrors.has(bank.credential_id)) {
                 console.log(`Skipping accounts for credential ID ${bank.credential_id} due to errors.`);
                 return;
@@ -729,7 +731,7 @@ function insertTransactionData(context, workbook, data, credentialsWithErrors) {
                     bank.next_cursor,
                     account.type === 'credit' || account.type === 'loan' ? -account.balance : account.balance,
                     account.mask,
-                    account.name,
+                    concatenatedName,
                     account.plaid_account_id,
                     account.subtype,
                     account.type
@@ -853,23 +855,26 @@ async function applyFormulasToTransactions(context, workbook) {
 
                     for (let i = 0; i < listObject.Columns.length; i++) {
                         const templateColumn = listObject.Columns[i];
-                        const formula = templateColumn.Formula;
+                        const templateFormula = templateColumn.Formula;
 
-                        if (formula) {
+                        if (templateFormula) {
                             const column = columns.items[i];
                             const columnRange = column.getDataBodyRange();
-                            await columnRange.load('values, rowCount').context.sync();
+                            await columnRange.load('formulas, rowCount').context.sync();
 
-                            // Apply formula only if the column is empty
-                            const hasEmptyCells  = columnRange.values.some(row => row.some(cell => cell === null || cell === ""));
-                            if (hasEmptyCells) {
+                            // Check if there are any cells with a different formula
+                            const needsUpdate = columnRange.formulas.some((rowFormula) => 
+                                rowFormula.some((cellFormula) => cellFormula !== templateFormula)
+                            );
+
+                            if (needsUpdate) {
                                 const rowCount = columnRange.rowCount;
                                 const formulas = Array(rowCount).fill([formula]);
-                                //console.log(`Applying formula to column: ${templateColumn.Header} with row count: ${rowCount}`);
+                                console.log(`Applying formula to column: ${templateColumn.Header} with row count: ${rowCount}`);
                                 columnRange.formulas = formulas;
                                 await context.sync();
                             } else {
-                                console.log(`Skipping formula for column: ${templateColumn.Header} as it has not empty cells.`);
+                                //console.log(`Skipping formula for column: ${templateColumn.Header} as it has not empty cells.`);
                             }
                         }
                     }

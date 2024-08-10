@@ -486,7 +486,7 @@
             {
               "Header": "Account Name",
               "Width": 20.86,
-              "Formula": "=IFERROR(XLOOKUP([@[Account ID]], Accounts[Plaid Account ID], Accounts[Name]) & \" - \" & XLOOKUP([@[Account ID]], Accounts[Plaid Account ID], Accounts[Mask]), \"Not Found\")"
+              "Formula": "=IFERROR(XLOOKUP([@[Account ID]], Accounts[Plaid Account ID], Accounts[Name]),\"Account Not Found\")"
             },
             {
               "Header": "Bank",
@@ -516,7 +516,7 @@
             {
               "Header": "6M AVG",
               "Width": 8.43,
-              "Formula": "=AVERAGEIFS([Month''s Total],[Recent],TRUE,[Custom Category],[@[Custom Category]])"
+              "Formula": "=IFERROR(AVERAGEIFS([Month''s Total],[Recent],TRUE,[Custom Category],[@[Custom Category]]),0)"
             },
             {
               "Header": "Month's Total",
