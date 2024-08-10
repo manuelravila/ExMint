@@ -156,7 +156,7 @@ function syncTransactions() {
             })
             .then(data => {
                 updateLoaderMessage('Updating Tables');
-                console.log('Transaction data retrieved:', data);
+                //console.log('Transaction data retrieved:', data);
                 return processTransactionData(context, workbook, data);
             })
             .then(() => {
@@ -194,7 +194,7 @@ function syncTransactions() {
 }
 
 function processTransactionData(context, workbook, data) {
-    const banksWithErrors = new Set();
+    const credentialsWithErrors = new Set();
 
     const cardsContainer = document.getElementById('cardsContainer');
     if (cardsContainer) {
@@ -212,7 +212,7 @@ function processTransactionData(context, workbook, data) {
                 const errorCode = bank.error.error_code;
                 const errorMessage = bank.error.error_message;
                 createErrorCard(bank.institution_name, errorCode, errorMessage); // Create error card for each bank error
-                banksWithErrors.add(bank.institution_name);
+                credentialsWithErrors.add(bank.credential_id);
             } else {
                 const transactionCount = bank.accounts.reduce((total, account) => total + (account.transactions ? account.transactions.length : 0), 0);
                 createSuccessCard(bank.institution_name, bank.operation, transactionCount);
@@ -220,7 +220,7 @@ function processTransactionData(context, workbook, data) {
         });
     }
 
-    return insertTransactionData(context, workbook, data, banksWithErrors)
+    return insertTransactionData(context, workbook, data, credentialsWithErrors)
         .then(() => context.sync())
         .then(() => {
             showToast('Transactions synced successfully.', 'success');
@@ -711,13 +711,14 @@ async function createPivotTables(context, workbook) {
 }
 
 
-function insertTransactionData(context, workbook, data, banksWithErrors) {
+function insertTransactionData(context, workbook, data, credentialsWithErrors) {
     const accountsData = [];
     const transactionsData = [];
 
     if (data.banks) {
         data.banks.forEach(bank => {
-            if (banksWithErrors.has(bank.institution_name)) {
+            if (credentialsWithErrors.has(bank.credential_id)) {
+                console.log(`Skipping accounts for credential ID ${bank.credential_id} due to errors.`);
                 return;
             }
 
