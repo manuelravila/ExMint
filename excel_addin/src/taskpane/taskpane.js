@@ -1,3 +1,4 @@
+// taskpane.js
 console.log("Taskpane script loaded");
 
 function showToast(message) {
@@ -26,6 +27,15 @@ Office.onReady(function (info) {
 
 function init() {
   console.log("DOM fully loaded and parsed");
+
+  const token = localStorage.getItem('authToken');
+  if (token) {
+    // Token is present, redirect to dashboard
+    console.log('Token found, redirecting to dashboard...');
+    window.location.href = 'dashboard.html';
+    return; // Exit the init function to prevent the login form from showing
+  }
+
   const loginForm = document.querySelector('form');
   const serverAddress = window.appConfig ? window.appConfig.backEndUrl : null;
 
@@ -33,7 +43,7 @@ function init() {
     console.error('Server address not found. Check window.appConfig configuration.');
     return;
   }
-
+  
   console.log('Server Address:', serverAddress);
 
   if (loginForm) {
