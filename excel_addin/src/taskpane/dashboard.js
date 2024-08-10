@@ -211,7 +211,7 @@ function processTransactionData(context, workbook, data) {
             if (bank.error) {
                 const errorCode = bank.error.error_code;
                 const errorMessage = bank.error.error_message;
-                createErrorCard(bank.institution_name, errorCode, errorMessage); // Create error card for each bank error
+                createErrorCard(bank.institution_name, errorCode, errorMessage, bank.credential_id);
                 credentialsWithErrors.add(bank.credential_id);
             } else {
                 const transactionCount = bank.accounts.reduce((total, account) => total + (account.transactions ? account.transactions.length : 0), 0);
@@ -961,11 +961,37 @@ function createCard(type, bankName, operation, transactionCount, errorCode, erro
     return card;
   }
 
-function createErrorCard(institutionName, errorCode, errorMessage) {
-    console.log(`Creating error card for ${institutionName} with code ${errorCode}`);
-    const errorCard = createCard('error', institutionName, null, null, errorCode, errorMessage);
-    document.getElementById('cardsContainer').appendChild(errorCard);
+  function createErrorCard(bankName, errorCode, errorMessage, credentialId) {
+    console.log(`Creating error card for ${bankName} with code ${errorCode}`);
+    const card = document.createElement('div');
+    card.className = `error-card ${bankName.replace(/\s+/g, '-')}-card`;
+  
+    const closeButton = document.createElement('button');
+    closeButton.className = 'close-button';
+    closeButton.innerHTML = '&times;';
+    closeButton.addEventListener('click', () => {
+        card.remove();
+        if (cardsContainer.children.length === 0) {
+            cardsContainer.style.display = 'none';
+        }
+    });
+  
+    const content = document.createElement('div');
+  
+    // Include the bank name and credential ID in the error message
+    content.innerHTML = `
+        <p><strong>Institution:</strong> ${bankName}</p>
+        <p><strong>Credential ID:</strong> ${credentialId}</p>
+        <p><strong>Error Code:</strong> ${errorCode}</p>
+        <p>${errorMessage}</p>
+    `;
+  
+    card.appendChild(closeButton);
+    card.appendChild(content);
+    cardsContainer.style.display = 'block'; // Ensure the container is visible
+    cardsContainer.appendChild(card);
 }
+
 
 function createSuccessCard(institutionName, operation, transactionCount) {
     console.log(`Creating success card for ${institutionName} with ${transactionCount} transactions`);
