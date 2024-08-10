@@ -1,5 +1,5 @@
 // dashboard.js
-console.log("Dashboard script loaded v3.5");
+console.log("Dashboard script loaded v3.6");
 
 // Initially hide the cards container
 const cardsContainer = document.getElementById('cardsContainer');
@@ -777,24 +777,31 @@ function insertTransactionData(context, workbook, data, credentialsWithErrors) {
 
     return context.sync().then(() => {
         const existingAccounts = accountsRange.values.reduce((map, row) => {
-            map[row[6]] = row;
+            map[row[6]] = { row, index };
             return map;
         }, {});
 
         const existingTransactions = transactionsRange.values.reduce((map, row) => {
-            map[row[10]] = row;
+            map[row[10]] = { row, index }; 
             return map;
         }, {});
 
         const newAccountsData = [];
         const newTransactionsData = [];
+        const rowsToDelete = [];
 
         accountsData.forEach(accountRow => {
             const plaidAccountId = accountRow[6];
             if (existingAccounts[plaidAccountId]) {
-                accountsTable.rows.getItemAt(existingAccounts[plaidAccountId]._rowIndex).delete();
+                // If the account exists, mark it for deletion
+                rowsToDelete.push(existingAccounts[plaidAccountId].index);
             }
             newAccountsData.push(accountRow);
+        });
+
+        // Delete the rows that are no longer needed
+        rowsToDelete.sort((a, b) => b - a).forEach(rowIndex => {
+            accountsTable.rows.getItemAt(rowIndex).delete();
         });
 
         transactionsData.forEach(transactionRow => {
