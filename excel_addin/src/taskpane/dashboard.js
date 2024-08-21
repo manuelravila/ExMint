@@ -214,7 +214,12 @@ function processTransactionData(context, workbook, data) {
                 createErrorCard(bank.institution_name, errorCode, errorMessage, bank.credential_id);
                 credentialsWithErrors.add(bank.credential_id);
             } else {
-                const transactionCount = bank.accounts.reduce((total, account) => total + (account.transactions ? account.transactions.length : 0), 0);
+                const transactionCount = bank.accounts.reduce((total, account) => {
+                    if (account.transactions && Array.isArray(account.transactions)) {
+                        return total + account.transactions.length;
+                    }
+                    return total;
+                }, 0);
                 createSuccessCard(bank.institution_name, bank.operation, transactionCount);
             }
         });
