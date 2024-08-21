@@ -214,12 +214,7 @@ function processTransactionData(context, workbook, data) {
                 createErrorCard(bank.institution_name, errorCode, errorMessage, bank.credential_id);
                 credentialsWithErrors.add(bank.credential_id);
             } else {
-                const transactionCount = bank.accounts.reduce((total, account) => {
-                    if (account.transactions && Array.isArray(account.transactions)) {
-                        return total + account.transactions.length;
-                    }
-                    return total;
-                }, 0);
+                const transactionCount = bank.accounts.reduce((total, account) => total + (account.transactions ? account.transactions.length : 0), 0);
                 createSuccessCard(bank.institution_name, bank.operation, transactionCount);
             }
         });
@@ -781,12 +776,12 @@ function insertTransactionData(context, workbook, data, credentialsWithErrors) {
     const transactionsRange = transactionsTable.getDataBodyRange().load('values');
 
     return context.sync().then(() => {
-        const existingAccounts = accountsRange.values.reduce((map, row) => {
+        const existingAccounts = accountsRange.values.reduce((map, row, index) => {
             map[row[6]] = { row, index };
             return map;
         }, {});
 
-        const existingTransactions = transactionsRange.values.reduce((map, row) => {
+        const existingTransactions = transactionsRange.values.reduce((map, row, index) => {
             map[row[10]] = { row, index }; 
             return map;
         }, {});
