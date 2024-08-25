@@ -463,20 +463,26 @@ async function importConditionalFormatting(context, sheetsToProcess) {
 
             for (const cf of conditionalFormatting) {
                 const range = sheet.getRange(cf.AppliesTo);
-                let conditionalFormat;
 
-                // Handle custom formula (Type 2)
-                conditionalFormat = range.conditionalFormats.add(Excel.ConditionalFormatType.custom);
+                // Load existing conditional formats
+                range.load("conditionalFormats");
+                await context.sync();
+
+                // Delete existing conditional formats with the same formula
+                range.conditionalFormats.items.forEach(existingFormat => {
+                    if (existingFormat.custom && existingFormat.custom.rule.formula === cf.Formula) {
+                        existingFormat.delete();
+                    }
+                });
+
+                // Add the new conditional format
+                let conditionalFormat = range.conditionalFormats.add(Excel.ConditionalFormatType.custom);
                 conditionalFormat.custom.rule.formula = cf.Formula;
 
                 if (cf.Interior) {
                     const interior = conditionalFormat.custom.format.fill;
                     if (cf.Interior.Color !== undefined) {
-                        // Convert number to hex color string
                         interior.color = cf.Interior.Color;
-                    }
-                    if (cf.Interior.Pattern !== undefined) {
-                        interior.pattern = cf.Interior.Pattern;
                     }
                 }
 
