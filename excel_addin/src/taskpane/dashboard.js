@@ -464,25 +464,15 @@ async function importConditionalFormatting(context, sheetsToProcess) {
             for (const cf of conditionalFormatting) {
                 const range = sheet.getRange(cf.AppliesTo);
 
-                // Load existing conditional formats
-                range.load("conditionalFormats");
-                await context.sync();
-
-                // Load the formulas of existing conditional formats
-                range.conditionalFormats.items.forEach(format => {
-                    if (format.custom) {
-                        format.custom.load("rule.formula");
-                    }
-                });
-
+                // Load existing conditional formats with all necessary properties
+                range.load("conditionalFormats/items/custom/rule/formula");
                 await context.sync();
 
                 // Delete existing conditional formats with the same formula
-                range.conditionalFormats.items.forEach(existingFormat => {
-                    if (existingFormat.custom && existingFormat.custom.rule.formula === cf.Formula) {
-                        existingFormat.delete();
-                    }
-                });
+                const formatsToDelete = range.conditionalFormats.items.filter(
+                    format => format.custom && format.custom.rule.formula === cf.Formula
+                );
+                formatsToDelete.forEach(format => format.delete());
 
                 // Add the new conditional format
                 let conditionalFormat = range.conditionalFormats.add(Excel.ConditionalFormatType.custom);
@@ -525,7 +515,6 @@ async function importConditionalFormatting(context, sheetsToProcess) {
         showToast('Failed to import conditional formatting. Please try again.', 'error');
     }
 }
-
 
 async function importListObjects(context, excelSheet, listObjects, tablesToProcess) {
     try {
