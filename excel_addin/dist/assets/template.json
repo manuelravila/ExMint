@@ -5,7 +5,7 @@
       "ListObjects": [
         {
           "Name": "Custom_Cat",
-          "StartingCell": "$O$2",
+          "StartingCell": "$P$2",
           "ColorStyle": "TableStyleMedium2",
           "Columns": [
             {
@@ -30,7 +30,7 @@
         },
         {
           "Name": "Budgets",
-          "StartingCell": "$J$2",
+          "StartingCell": "$K$2",
           "ColorStyle": "TableStyleMedium2",
           "Columns": [
             {
@@ -83,6 +83,13 @@
 
           ],
           "ValueFields": [
+            {
+              "Name": "Amount",
+              "CustomName": "Month Total",
+              "SummarizedBy": "Sum",
+              "ShowValuesAs": "None",
+              "NumberFormat": "General"
+            },
             {
               "Name": "6M AVG",
               "CustomName": "6M Average",
@@ -140,8 +147,8 @@
       ],
       "OtherCells": [
         {
-          "Address": "$G$3:$G$1000",
-          "Formula": "=IFS(RC[-3]=\"\",\"\",RC[-3]=\"Grand Total\",SUM(R2C:R[-1]C),TRUE,IF(COUNTIF(Transactions[Custom Category],RC[-3])>0,SUMIFS(Transactions[Amount],Transactions[Custom Category],RC[-3],Transactions[Month],Sel_Month),SUMIFS(Transactions[Amount],Transactions[Name],RC[-3],Transactions[Month],Sel_Month)))",
+          "Address": "$H$3:$H$1000",
+          "Formula": "=IFS(RC[-4]=\"\",\"\",RC[-4]=\"Grand Total\",SUM(R2C:R[-1]C),TRUE,IF(COUNTIF(Transactions[Custom Category],RC[-4])>0,SUMIFS(Transactions[Amount],Transactions[Custom Category],RC[-4],Transactions[Month],Sel_Month),SUMIFS(Transactions[Amount],Transactions[Name],RC[-4],Transactions[Month],Sel_Month)))",
           "FillColor": "#FFFFFF",
           "NumberFormat": "$#,##0",
           "Font": {
@@ -152,8 +159,8 @@
           }
         },
         {
-          "Address": "$H$3:$H$1000",
-          "Formula": "=IF(RC[-2]=\"\",\"\",IF(RC[-2]=0,0,1-((RC[-2]-RC[-1])/RC[-2])))",
+          "Address": "$I$3:$I$1000",
+          "Formula": "=IF(RC[-3]=\"\",\"\",IF(RC[-3]=0,0,1-((RC[-3]-RC[-1])/RC[-3])))",
           "FillColor": "#FFFFFF",
           "NumberFormat": "0%",
           "Font": {
@@ -190,7 +197,7 @@
           }
         },
         {
-          "Address": "$G$1",
+          "Address": "$H$1",
           "Value": "Month",
           "FillColor": "#074F69",
           "NumberFormat": "General",
@@ -202,7 +209,7 @@
           }
         },
         {
-          "Address": "$J$1",
+          "Address": "$K$1",
           "Value": "Budgets",
           "FillColor": "#FFFFFF",
           "NumberFormat": "General",
@@ -214,7 +221,7 @@
           }
         },
         {
-          "Address": "$O$1",
+          "Address": "$P$1",
           "Value": "Custom Categories",
           "FillColor": "#FFFFFF",
           "NumberFormat": "General",
@@ -226,7 +233,7 @@
           }
         },
         {
-          "Address": "$G$2",
+          "Address": "$H$2",
           "Value": "Monthly Spending",
           "FillColor": "#074F69",
           "NumberFormat": "General",
@@ -238,7 +245,7 @@
           }
         },
         {
-          "Address": "$H$2",
+          "Address": "$I$2",
           "Value": "Spent",
           "FillColor": "#074F69",
           "NumberFormat": "General",
@@ -252,7 +259,7 @@
       ],
       "DataValidations": [
         {
-          "Address": "$H$1",
+          "Address": "$I$1",
           "Type": "3",
           "AlertStyle": "1",
           "Formula1": "=Unique_Months",
@@ -265,7 +272,7 @@
           "ErrorMessage": ""
         },
         {
-          "Address": "$K$3",
+          "Address": "$L$3",
           "Type": "3",
           "AlertStyle": "1",
           "Formula1": "=Conf!$A$2:$A$8",
@@ -312,7 +319,7 @@
           }
         },
         {
-          "AppliesTo": "$G$3:$H$1000",
+          "AppliesTo": "$H$3:$I$1000",
           "Type": "2",
           "Formula": "=$D3=\"Total\"",
           "Interior": {
@@ -328,7 +335,7 @@
           }
         },
         {
-          "AppliesTo": "$G$3:$H$1000",
+          "AppliesTo": "$H$3:$I$1000",
           "Type": "2",
           "Formula": "=$D3<>\"\"",
           "Interior": {
@@ -616,7 +623,7 @@
   "CustomNamedRanges": [
     {
       "Name": "Sel_Month",
-      "RefersTo": "=Dashboard!$H$1"
+      "RefersTo": "=Dashboard!$I$1"
     },    {
       "Name": "Unique_Months",
       "RefersTo": "=OFFSET(Conf!$D$1, 0, 0, COUNTA(Conf!$D:$D), 1)"
