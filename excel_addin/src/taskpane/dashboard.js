@@ -724,7 +724,6 @@ function insertTransactionData(context, workbook, data, credentialsWithErrors) {
             }
 
             bank.accounts.forEach(account => {
-
                 const concatenatedName = `${account.name} (${account.mask})`;
 
                 const accountRow = [
@@ -793,8 +792,10 @@ function insertTransactionData(context, workbook, data, credentialsWithErrors) {
         accountsData.forEach(accountRow => {
             const plaidAccountId = accountRow[6];
             if (existingAccounts[plaidAccountId]) {
-                // If the account exists, mark it for deletion
-                rowsToDelete.push(existingAccounts[plaidAccountId].index);
+                // Only mark for deletion if the account does not have errors
+                if (!credentialsWithErrors.has(existingAccounts[plaidAccountId].row[1])) {
+                    rowsToDelete.push(existingAccounts[plaidAccountId].index);
+                }
             }
             newAccountsData.push(accountRow);
         });
@@ -807,7 +808,7 @@ function insertTransactionData(context, workbook, data, credentialsWithErrors) {
         transactionsData.forEach(transactionRow => {
             const transactionId = transactionRow[10];
             if (existingTransactions[transactionId]) {
-                transactionsTable.rows.getItemAt(existingTransactions[transactionId]._rowIndex).delete();
+                transactionsTable.rows.getItemAt(existingTransactions[transactionId].index).delete();
             }
             newTransactionsData.push(transactionRow);
         });
@@ -817,7 +818,6 @@ function insertTransactionData(context, workbook, data, credentialsWithErrors) {
         return context.sync().then(() => {
             if (newAccountsData.length > 0) {
                 accountsTable.rows.add(null, newAccountsData);
-                //console.log('Just added Accounts and ready to add these transactions: ', newTransactionsData);
             }
 
             if (newTransactionsData.length > 0) {
@@ -838,7 +838,6 @@ function insertTransactionData(context, workbook, data, credentialsWithErrors) {
         });
     });
 }
-
 
 async function applyFormulasToTransactions(context, workbook) {
     try {
