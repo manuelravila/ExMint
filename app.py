@@ -23,6 +23,7 @@ def create_app():
     app.config.from_object('config.Config')
     
     # Initialize extensions
+    print('Initializing extensions')
     mail.init_app(app)
     flask_bcrypt.init_app(app)
     login_manager.init_app(app)
@@ -30,6 +31,7 @@ def create_app():
     migrate.init_app(app, db)
 
     # Configure CORS
+    print('Configuring CORS')
     cors_origins = [
         "https://localhost:3000",  # Local dev URL
         "https://dev.exmint.me:3000",  # Local dev URL
@@ -49,6 +51,7 @@ def create_app():
     ], allow_methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'])
 
     # Initialize Plaid client
+    print('Initializing Plaid')
     plaid_environment = Config.get_plaid_environment()
     configuration = plaid.Configuration(
         host=plaid_environment,
@@ -61,6 +64,7 @@ def create_app():
     plaid_client = plaid_api.PlaidApi(api_client)
 
     # Register blueprints
+    print('Registering blueprints')
     from views import views as views_blueprint
     from core_views import core as core_blueprint
     app.register_blueprint(views_blueprint)
@@ -85,6 +89,9 @@ def create_app():
 if __name__ == '__main__':
     app = create_app()
     if Config.SSL_CONTEXT:
+        print('ExMint Back-End starting on SSL')
         app.run(ssl_context=Config.SSL_CONTEXT, debug=app.config['DEBUG'], host='0.0.0.0')
     else:
+        print('ExMint Back-End starting without SSL')
         app.run(debug=Config.DEBUG, host='0.0.0.0')
+        
