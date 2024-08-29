@@ -13,7 +13,7 @@ services:
     volumes:
       - .:/app
     depends_on:
-      - node-addin
+      - node-addin  # Centralized dependency management
 
   node-addin:
     build: ./excel_addin
@@ -23,13 +23,4 @@ services:
       - ./excel_addin:/app
 
 networks:
-  staging-network:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.30.0.0/16
-  production-network:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.31.0.0/16
+  # Leave networks empty here or define any default network if needed
