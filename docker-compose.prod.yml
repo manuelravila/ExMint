@@ -1,0 +1,7 @@
+version: '3.8'
+services:
+  flask-app:
+    extra_hosts:
+      - "mysql-gateway:172.31.0.1"
+    networks:
+      - production-network
