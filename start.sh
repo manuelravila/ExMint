@@ -21,15 +21,10 @@ if [ "$FLASK_ENV" = "dev" ]; then
         echo "Error: SSH tunnel failed to establish"
         exit 1
     fi
-fi
 
-# Check for SSL certificate files
-if [ -f /app/dev_exmint_me.crt ] && [ -f /app/dev_exmint_me.key ]; then
-    echo "SSL certificate files found"
     echo "Starting Flask app with SSL..."
     exec gunicorn --certfile=/app/dev_exmint_me.crt --keyfile=/app/dev_exmint_me.key --bind=0.0.0.0:5000 "app:create_app()"
 else
-    echo "SSL certificate files not found"
     echo "Starting Flask app without SSL..."
     exec gunicorn --bind=0.0.0.0:5000 "app:app"
 fi
