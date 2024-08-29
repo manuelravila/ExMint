@@ -29,6 +29,9 @@ RUN chmod 600 /root/.ssh/id_rsa
 # Copy the current directory contents into the container at /app
 COPY . /app
 
+# Make start.sh executable
+RUN chmod +x /app/start.sh
+
 # Install any needed packages specified in requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
@@ -41,9 +44,6 @@ EXPOSE 5000
 
 # Define environment variable
 ENV FLASK_APP=app.py
-
-# Make start.sh executable
-RUN chmod +x /app/start.sh
 
 # Entry point to start the application
 ENTRYPOINT ["/app/start.sh"]
