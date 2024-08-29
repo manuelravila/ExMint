@@ -2,8 +2,5 @@ __pycache__/
 *.pyc
 logs/
 venv/
-# Ignore everything in excel_addin
-excel_addin/*
-# But not the dist folder
-!excel_addin/dist
-!excel_addin/src
+excel_addin/dist/
+excel_addin/node_modules/
