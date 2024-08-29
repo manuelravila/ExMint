@@ -1,0 +1,23 @@
+version: '3.8'
+services:
+  flask-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "5000:5000"
+    env_file:
+      - .env.${FLASK_ENV:-dev}
+    environment:
+      - FLASK_ENV=${FLASK_ENV:-dev}
+    volumes:
+      - .:/app
+    depends_on:
+      - node-addin
+
+  node-addin:
+    build: ./excel_addin
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./excel_addin:/app
