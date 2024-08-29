@@ -21,6 +21,3 @@ services:
       - "3000:3000"
     volumes:
       - ./excel_addin:/app
-
-networks:
-  # Leave networks empty here or define any default network if needed
