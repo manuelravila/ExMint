@@ -1,7 +1,14 @@
 version: '3.8'
 services:
   flask-app:
-    extra_hosts:
-      - "mysql-gateway:172.30.0.1"
     networks:
       - staging-network
+
+  node-addin:
+    networks:
+      - staging-network
+
+networks:
+  staging-network:
+    external: true
+    name: staging-network  # Explicitly set the network name
