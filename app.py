@@ -21,6 +21,8 @@ login_manager.login_view = 'views.login'
 def create_app():
     app = Flask(__name__)
     app.config.from_object('config.Config')
+
+    print(f"Using database URI: {app.config['SQLALCHEMY_DATABASE_URI']}")
     
     # Initialize extensions
     print('Initializing extensions')
@@ -84,14 +86,16 @@ def create_app():
     # Pass the Plaid client to the core_routes blueprint
     app.plaid_client = plaid_client
 
+    print(f"App created with DEBUG={app.config['DEBUG']}, SSL_CONTEXT={app.config['SSL_CONTEXT']}")
     return app
 
+app = create_app()
+
 if __name__ == '__main__':
-    app = create_app()
-    if Config.SSL_CONTEXT:
+    if app.config['SSL_CONTEXT']:
         print('ExMint Back-End starting on SSL')
-        app.run(ssl_context=Config.SSL_CONTEXT, debug=app.config['DEBUG'], host='0.0.0.0')
+        app.run(ssl_context=app.config['SSL_CONTEXT'], debug=app.config['DEBUG'], host='0.0.0.0')
     else:
         print('ExMint Back-End starting without SSL')
-        app.run(debug=Config.DEBUG, host='0.0.0.0')
+        app.run(debug=app.config['DEBUG'], host='0.0.0.0')
         

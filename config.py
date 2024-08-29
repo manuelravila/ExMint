@@ -4,7 +4,8 @@ from urllib.parse import quote_plus
 from secrets_manager import get_secret, branch
 
 def get_database_uri():
-    print('Detected branch: ', branch)
+    branch_trimmed = branch.strip()
+    print('Detected branch: ', branch_trimmed)
 
     # Map environment to the respective secret ID in Bitwarden
     secret_keys = {
@@ -13,20 +14,20 @@ def get_database_uri():
         'main': 'xmnt_prd_db'
     }
 
-    if branch in secret_keys:
+    if branch_trimmed in secret_keys:
         # Fetch and URL encode the password
-        password = quote_plus(get_secret(secret_keys[branch]))
+        password = quote_plus(get_secret(secret_keys[branch_trimmed]))
         
-        if branch == 'dev':
+        if branch_trimmed == 'dev':
             return f'mysql+pymysql://mrar1995_xmnt_dev:{password}@127.0.0.1:3307/mrar1995_xmnt_dev_db'
-        elif branch == 'stag':
+        elif branch_trimmed == 'stag':
             return f'mysql+pymysql://mrar1995_xmnt_stg:{password}@127.0.0.1:3306/mrar1995_xmnt_stg_db'
-        elif branch == 'main':
+        elif branch_trimmed == 'main':
             return f'mysql+pymysql://mrar1995_xmnt_prd:{password}@127.0.0.1:3306/mrar1995_xmnt_prd_db'
         else:
-            raise ValueError(f"Invalid branch: {branch}")
+            raise ValueError(f"Invalid branch: {branch_trimmed}")
     else:
-        raise ValueError(f"Secret Key for the branch '{branch}' not found")
+        raise ValueError(f"Secret Key for the branch '{branch_trimmed}' not found")
 
 class Config:
 
@@ -52,12 +53,12 @@ class Config:
     MAIL_USE_SSL = False  
 
     # Environment dependent configuration
-    if branch == 'main':
+    if branch.strip() == 'main':
         PLAID_ENV = 'production'
         DEBUG = False
         SUFFIX = ''
         SSL_CONTEXT = None  # No SSL context needed for production
-    elif branch == 'stag':
+    elif branch.strip() == 'stag':
         PLAID_ENV = 'sandbox'   
         DEBUG = True  
         SUFFIX = '-stg'
@@ -66,7 +67,10 @@ class Config:
         PLAID_ENV = 'sandbox' 
         DEBUG = True
         SUFFIX = '-dev'
-        SSL_CONTEXT = ('dev_exmint_me.crt', 'dev_exmint_me.key')  # SSL context for development
+        SSL_CONTEXT = ('/app/dev_exmint_me.crt', '/app/dev_exmint_me.key')   # SSL context for development
+
+    print(f"Current branch: {branch.strip()}")
+    print(f"SSL_CONTEXT: {SSL_CONTEXT}")
 
     # Select the appropriate environment
     @staticmethod
