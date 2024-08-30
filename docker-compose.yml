@@ -38,4 +38,4 @@ networks:
       config:
         - subnet: 172.21.0.0/24
     driver_opts:
-      com.docker.network.bridge.name: vps-app-network-${FLASK_ENV:-dev}
+      com.docker.network.bridge.name: app-net-${FLASK_ENV:-dev}
