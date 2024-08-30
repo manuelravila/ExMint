@@ -2,12 +2,19 @@ version: '3.8'
 services:
   flask-app:
     networks:
-      - production-network
+      production-network:
+        ipv4_address: 172.31.0.3
 
   node-addin:
     networks:
-      - production-network
+      production-network:
+        ipv4_address: 172.31.0.4
 
 networks:
   production-network:
-    name: production-network  # Explicitly set the network name
+    name: production-network
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.31.0.0/16
+          gateway: 172.31.0.1
