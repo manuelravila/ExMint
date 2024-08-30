@@ -2,12 +2,19 @@ version: '3.8'
 services:
   flask-app:
     networks:
-      - staging-network
+      staging-network:
+        ipv4_address: 172.30.0.3
 
   node-addin:
     networks:
-      - staging-network
+      staging-network:
+        ipv4_address: 172.30.0.4
 
 networks:
   staging-network:
-    name: staging-network  # Explicitly set the network name
+    name: staging-network
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/16
+          gateway: 172.30.0.1
