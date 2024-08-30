@@ -16,10 +16,10 @@ services:
       - node-addin
     extra_hosts:
       - "host.docker.internal:host-gateway"
-      - "db-host:172.20.0.1"
+      - "db-host:172.21.0.1"
     networks:
       app-network:
-        ipv4_address: 172.20.0.3
+        ipv4_address: 172.21.0.3
 
   node-addin:
     build: ./excel_addin
@@ -29,14 +29,13 @@ services:
       - ./excel_addin:/app
     networks:
       app-network:
-        ipv4_address: 172.20.0.4
+        ipv4_address: 172.21.0.4
 
 networks:
   app-network:
     driver: bridge
     ipam:
       config:
-        - subnet: 172.20.0.0/16
+        - subnet: 172.21.0.0/16
     driver_opts:
       com.docker.network.bridge.name: vps-app-network-${FLASK_ENV:-dev}
-      
