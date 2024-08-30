@@ -12,9 +12,4 @@ services:
 
 networks:
   production-network:
-    name: production-network
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.31.0.0/16
-          gateway: 172.31.0.1
+    external: true
