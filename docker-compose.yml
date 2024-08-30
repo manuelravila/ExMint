@@ -21,19 +21,3 @@ services:
       - "3000:3000"
     volumes:
       - ./excel_addin:/app
-
-# Define networks here without the "external: true" option
-networks:
-  staging-network:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.30.0.0/16
-          gateway: 172.30.0.1
-
-  production-network:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.31.0.0/16
-          gateway: 172.31.0.1
