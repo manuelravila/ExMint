@@ -36,6 +36,6 @@ networks:
     driver: bridge
     ipam:
       config:
-        - subnet: 172.21.0.0/16
+        - subnet: 172.21.0.0/24
     driver_opts:
       com.docker.network.bridge.name: vps-app-network-${FLASK_ENV:-dev}
