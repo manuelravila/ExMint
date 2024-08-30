@@ -10,5 +10,4 @@ services:
 
 networks:
   production-network:
-    external: true
     name: production-network  # Explicitly set the network name

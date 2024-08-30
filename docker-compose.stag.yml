@@ -10,5 +10,4 @@ services:
 
 networks:
   staging-network:
-    external: true
     name: staging-network  # Explicitly set the network name
