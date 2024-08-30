@@ -2,17 +2,18 @@ version: '3.8'
 services:
   flask-app:
     networks:
-      staging-network:
-        ipv4_address: 172.30.0.3
+      default:
+        ipv4_address: 172.20.0.3
 
   node-addin:
     networks:
-      staging-network:
-        ipv4_address: 172.30.0.4
+      default:
+        ipv4_address: 172.20.0.4
 
 networks:
-  staging-network:
-    driver: bridge
+  default:
     ipam:
       config:
-        - subnet: 172.30.0.0/16
+        - subnet: 172.20.0.0/16
+    driver_opts:
+      com.docker.network.bridge.name: vps-local-stag
