@@ -13,7 +13,9 @@ services:
     volumes:
       - .:/app
     depends_on:
-      - node-addin  # Centralized dependency management
+      - node-addin
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   node-addin:
     build: ./excel_addin
@@ -21,3 +23,12 @@ services:
       - "3000:3000"
     volumes:
       - ./excel_addin:/app
+
+networks:
+  default:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+    driver_opts:
+      com.docker.network.bridge.name: vps-local-${FLASK_ENV:-dev}
