@@ -5,7 +5,7 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "5000:5000"
+      - "${FLASK_HOST_PORT:-5000}:5000"
     env_file:
       - .env.${FLASK_ENV:-dev}
     environment:
@@ -24,7 +24,7 @@ services:
   node-addin:
     build: ./excel_addin
     ports:
-      - "3000:3000"
+      - "${NODE_HOST_PORT:-3000}:3000"
     volumes:
       - ./excel_addin:/app
     networks:
