@@ -42,4 +42,3 @@ networks:
         - subnet: 172.21.0.0/24
     driver_opts:
       com.docker.network.bridge.name: app-net-${FLASK_ENV:-dev}
-      
