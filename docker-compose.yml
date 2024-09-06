@@ -21,6 +21,7 @@ services:
     networks:
       app-network:
         ipv4_address: ${FLASK_IP:-172.21.0.3}
+    restart: always
 
   node-addin:
     container_name: ${FLASK_ENV:-dev}_node_addin
