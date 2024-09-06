@@ -30,9 +30,8 @@ RUN chmod 600 /root/.ssh/id_rsa
 COPY . /app
 
 # Make start.sh executable
+COPY start.sh /app/start.sh
 RUN chmod 755 /app/start.sh
-RUN ls -l /app/start.sh
-RUN sed -i 's/\r$//' /app/start.sh
 
 # Install any needed packages specified in requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
@@ -48,4 +47,6 @@ EXPOSE 5000
 ENV FLASK_APP=app.py
 
 # Entry point to start the application
+RUN ls -l /app/start.sh
+RUN cat /app/start.sh
 ENTRYPOINT ["/app/start.sh"]
