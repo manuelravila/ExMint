@@ -49,4 +49,4 @@ ENV FLASK_APP=app.py
 # Entry point to start the application
 RUN ls -l /app/start.sh
 RUN cat /app/start.sh
-ENTRYPOINT ["/app/start.sh"]
+ENTRYPOINT ["/bin/sh", "/app/start.sh"]
