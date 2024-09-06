@@ -36,7 +36,6 @@ services:
     networks:
       app-network:
         ipv4_address: ${NODE_IP:-172.21.0.4}
-
 networks:
   app-network:
     name: ${FLASK_ENV:-dev}_app_net
