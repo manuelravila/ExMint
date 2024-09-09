@@ -25,15 +25,6 @@ RUN npm install -g webpack webpack-cli
 # Build the application (this will generate the files in the dist folder)
 RUN npm run build
 
-# Rename manifest file based on environment
-# Accepts environment argument to copy the appropriate manifest file
-ARG FLASK_ENV=dev
-RUN if [ "$FLASK_ENV" = "stag" ]; then \
-        cp /app/dist/manifest-stag.xml /app/dist/manifest.xml; \
-    elif [ "$FLASK_ENV" = "main" ]; then \
-        cp /app/dist/manifest-prod.xml /app/dist/manifest.xml; \
-    fi
-
 # Serve the application from the dist directory
 WORKDIR /app/dist
 
