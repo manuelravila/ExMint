@@ -23,4 +23,4 @@ WORKDIR /app/dist
 RUN npm install -g serve
 
 # Start the application by serving the dist directory
-CMD ["serve", "-s", "."]
+CMD ["serve", "-s", ".", "--single"]

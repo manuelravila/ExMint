@@ -34,6 +34,7 @@ COPY start.sh /app/start.sh
 RUN chmod 755 /app/start.sh
 
 # Install any needed packages specified in requirements.txt
+RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy SSL certificates (only necessary if used in development)
