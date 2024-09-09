@@ -28,8 +28,11 @@ RUN npm run build
 # Serve the application from the dist directory
 WORKDIR /app/dist
 
-# Use a simple static file server like 'serve'
-RUN npm install -g serve
+# Install http-server globally to serve the dist folder
+RUN npm install -g http-server
 
-# Start the application by serving the dist directory
-CMD ["serve", "-s", "."]
+# Expose the port the application will run on
+EXPOSE 3000
+
+# Start the application by serving the dist directory using http-server
+CMD ["http-server", ".", "-p", "3000"]
