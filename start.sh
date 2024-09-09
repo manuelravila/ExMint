@@ -28,10 +28,6 @@ if [ "$FLASK_ENV" = "dev" ]; then
 else
     echo "Starting Flask app without SSL..."
     
-    # Use port 5001 for Staging, 5000 for Production
-    if [ "$FLASK_ENV" = "stag" ]; then
-        exec gunicorn --bind=0.0.0.0:5001 "app:app"
-    else
-        exec gunicorn --bind=0.0.0.0:5000 "app:app"
-    fi
+    # Always use port 5000 internally for both Staging and Production
+    exec gunicorn --bind=0.0.0.0:5000 "app:app"
 fi
