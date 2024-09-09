@@ -5,6 +5,15 @@ FLASK_ENV=$(echo "$FLASK_ENV" | xargs)
 
 echo "Current FLASK_ENV: '$FLASK_ENV'"
 
+if [ "$FLASK_ENV" = "stag" ]; then
+    echo "Using staging manifest file"
+    cp ./excel_addin/manifest-stag.xml ./excel_addin/manifest.xml
+
+elif [ "$FLASK_ENV" = "prod" ]; then
+    echo "Using production manifest file"
+    cp ./excel_addin/manifest-prod.xml ./excel_addin/manifest.xml
+fi
+
 if [ "$FLASK_ENV" = "dev" ]; then
     echo "Setting up SSH tunnel for dev environment"
     
