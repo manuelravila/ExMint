@@ -29,5 +29,5 @@ else
     echo "Starting Flask app without SSL..."
     
     # Always use port 5000 internally for both Staging and Production
-    exec gunicorn -- workers 4 --timeout 30 --bind=0.0.0.0:5000 "app:app"
+    exec gunicorn --workers 4 --timeout 30 --bind=0.0.0.0:5000 "app:app"
 fi
