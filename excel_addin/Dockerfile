@@ -35,10 +35,11 @@ RUN npm install -g http-server
 COPY start_addin.sh /app/start_addin.sh
 
 # Make start_addin.sh executable
-RUN chmod +x /app/start_addin.sh
+RUN chmod 755 /app/start_addin.sh
 
 # Expose the port the application will run on
 EXPOSE 3000
 
 # Start the application by serving the dist directory using http-server
-CMD ["/bin/bash", "/app/start_addin.sh"]
+RUN ls -l /app/start_addin.sh
+CMD ["/bin/sh", "/app/start_addin.sh"]
