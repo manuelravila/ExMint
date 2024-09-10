@@ -31,8 +31,14 @@ WORKDIR /app/dist
 # Install http-server globally to serve the dist folder
 RUN npm install -g http-server
 
+# Copy the start_addin.sh script into the container
+COPY start_addin.sh /app/start_addin.sh
+
+# Make start_addin.sh executable
+RUN chmod +x /app/start_addin.sh
+
 # Expose the port the application will run on
 EXPOSE 3000
 
 # Start the application by serving the dist directory using http-server
-CMD ["http-server", ".", "-p", "3000"]
+CMD ["/bin/bash", "/app/start_addin.sh"]
