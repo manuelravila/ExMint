@@ -105,6 +105,7 @@ function syncTransactions() {
     }
     isSyncing = true;
     console.log('Syncing commenced');
+
     const token = localStorage.getItem('authToken');
     if (!token) {
         console.error('User not authenticated');
@@ -255,7 +256,7 @@ async function importTemplateSheetsFromJSON(context, workbook) {
 
             if (excelSheet.isNullObject) {
                 excelSheet = workbook.worksheets.add(sheet.Name);
-                //await context.sync();
+                await context.sync();
                 console.log(`Worksheet ${sheet.Name} created`);
             } else {
                 console.log(`Worksheet ${sheet.Name} already exists`);
@@ -662,15 +663,15 @@ async function createPivotTables(context, workbook) {
         }
         const template = await response.json();
 
-        const worksheets = workbook.worksheets.load('items');
-        await context.sync();
+        await workbook.worksheets.load('items').context.sync();
         
         //console.log('Worksheets loaded:', worksheets.items.map(sheet => sheet.name));
 
         for (const sheet of template.Sheets) {
             const excelSheet = workbook.worksheets.getItem(sheet.Name);
-            await excelSheet.load('pivotTables/items').context.sync();
-            console.log(`Processing sheet: ${sheet.Name}`);
+            //await excelSheet.load('pivotTables/items').context.sync();
+            await excelSheet.load('name').context.sync();
+            console.log(`Processing Pivot tables in sheet: ${sheet.Name}`);
 
             for (const pivotTable of sheet.PivotTables) {
                 // Create new PivotTable
