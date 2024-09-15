@@ -1,5 +1,5 @@
 #config.py
-import plaid
+import plaid, os
 from urllib.parse import quote_plus
 from secrets_manager import get_secret, branch
 
@@ -23,7 +23,10 @@ def get_database_uri():
         elif branch_trimmed == 'stag':
             return f'mysql+pymysql://mrar1995_xmnt_stg:{password}@db-host:3306/mrar1995_xmnt_stg_db'
         elif branch_trimmed == 'main':
-            return f'mysql+pymysql://mrar1995_xmnt_prd:{password}@db-host:3306/mrar1995_xmnt_prd_db'
+            #return f'mysql+pymysql://mrar1995_xmnt_prd:{password}@db-host:3306/mrar1995_xmnt_prd_db'
+
+            # ONLY ACTIVATE THIS URI FOR PROD TROUBLESHOOTING
+            return f'mysql+pymysql://mrar1995_xmnt_prd:{password}@127.0.0.1:3307/mrar1995_xmnt_prd_db'
         else:
             raise ValueError(f"Invalid branch: {branch_trimmed}")
     else:
@@ -55,9 +58,13 @@ class Config:
     # Environment dependent configuration
     if branch.strip() == 'main':
         PLAID_ENV = 'production'
-        DEBUG = False
         SUFFIX = ''
-        SSL_CONTEXT = None  # No SSL context needed for production
+        if os.getenv('FLASK_SYS', '').lower() == 'windows':
+            SSL_CONTEXT = ('/dev_exmint_me.crt', '/dev_exmint_me.key')  # SSL context for Windows environment
+            DEBUG = True
+        else:
+            SSL_CONTEXT = None  # No SSL context for non-Windows environments
+            DEBUG = False
     elif branch.strip() == 'stag':
         PLAID_ENV = 'sandbox'   
         DEBUG = True  

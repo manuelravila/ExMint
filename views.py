@@ -15,10 +15,10 @@ views = Blueprint('views', __name__)
 def combined_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
-
         if 'X-Request-Source' in request.headers and request.headers['X-Request-Source'] == 'Excel-Add-In':
+            print("Excel Add-In request detected")
             if 'Authorization' in request.headers:
-                #print('Decorator found header in request and Authorization in it')
+                print("Authorization header found in request")
                 token = request.headers['Authorization'].split(" ")[1]
                 user_id = User.verify_auth_token(token)
                 if user_id:
@@ -26,20 +26,39 @@ def combined_required(f):
                     if user:
                         login_user(user)
                         return f(*args, **kwargs)
+                else:
+                    print("Invalid token for Excel Add-In request")
+            else:
+                print("No Authorization header in Excel Add-In request")
         else:
+            print("Non Excel Add-In request detected (Web request likely)")
             token = request.cookies.get('token')
-            #print(f"Token found: {token}")  # Debug statement
             if token:
+                print(f"Token found in cookies: {token}")
                 user_id = User.verify_auth_token(token)
                 if user_id:
+                    print(f"User ID from cookie token: {user_id}")
                     user = User.query.get(user_id)
                     if user:
+                        print(f"User found: {user.username}")
                         login_user(user)
                         return f(*args, **kwargs)
+                else:
+                    print("Invalid token in cookies")
+            else:
+                print("No token found in cookies")
 
+        # Handle web (non-API) requests
+        if 'X-Request-Source' not in request.headers:
+            print("Redirecting to login page (Web request)")
+            return redirect(url_for('views.login'))
+
+        # If it's an API request (e.g., from Excel Add-In), return the Unauthorized JSON response
+        print("Returning 401 Unauthorized JSON response (API request)")
         return jsonify({'message': 'Unauthorized'}), 401
 
     return decorated_function
+
 
 @views.route('/')
 def index():
@@ -187,22 +206,29 @@ def handle_unsuccessful_login(error_message):
         flash(error_message, 'danger')
         return redirect(url_for('views.login'))
 
+# views.py
 @views.route('/logout', methods=['GET', 'POST'])
 def logout():
     print(f"User logged in before logout: {current_user.is_authenticated}")
     logout_user()
     print(f"User logged out after logout: {not current_user.is_authenticated}")
+
+    # Create a response
     if request.method == 'POST':
         print("Request from Excel Add-in")
-        return jsonify({'message': 'Logged out successfully'})
+        response = jsonify({'message': 'Logged out successfully'})
     else:
-        print("Request from Flask UI")
+        print("Request from Flask UI or Excel Add-in via GET")
         response = make_response(redirect(url_for('views.index')))
+
+    # Delete the 'token' cookie
+    response.delete_cookie('token')
 
     # Add headers to clear localStorage on the client side
     response.headers['Clear-Site-Data'] = '"cache", "cookies", "storage"'
         
     return response
+
         
 @views.route('/reset_password', methods=['GET', 'POST'])
 def reset_password():
