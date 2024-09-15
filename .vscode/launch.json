@@ -1,19 +1,49 @@
 {
-    "version": "0.2.0",
-    "configurations": [
-      
-      {
-        "type": "msedge",
-        "request": "launch",
-        "name": "Launch Office Add-in",
-        "url": "https://dev.exmint.me:3000/taskpane.html",
-        "webRoot": "${workspaceFolder}",
-        "sourceMaps": true,
-        "sourceMapPathOverrides": {
-          "webpack:///./*": "${webRoot}/*",
-          "webpack:///*": "*",
-          "webpack:///src/*": "${webRoot}/src/*"
-        }
-      }
-    ]
-  }
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "ExMint PROD",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "flask",
+      "env": {
+        "FLASK_APP": "app.py",
+        "FLASK_DEBUG": "1",
+        "FLASK_ENV": "main",
+        "FLASK_SYS": "windows",
+        "BWS_ACCESS_TOKEN": "0.10ec7297-56b5-4a58-8d3c-b1410151b26a.IilojVqmK4CAheLPPGr4axElyIZje8:7S5R3sWZDmwGnshlNssRxQ=="
+      },
+      "args": [
+        "run",
+        "--no-debugger",
+        "--no-reload",
+        "--cert=C:/Users/manue/OneDrive/Intel/ExMint/dev_exmint_me.crt",
+        "--key=C:/Users/manue/OneDrive/Intel/ExMint/dev_exmint_me.key"
+      ],
+      "jinja": true,
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Excel Add-In",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "start:desktop"  // This will trigger the 'start' script in package.json
+      ],
+      "env": {
+        "NODE_ENV": "development"
+      },
+      "cwd": "${workspaceFolder}/excel_addin",  // Adjust to the directory containing your package.json
+      "console": "integratedTerminal"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Flask and Add-In PROD",
+      "configurations": ["ExMint PROD", "Excel Add-In"]
+    }
+  ]
+}
