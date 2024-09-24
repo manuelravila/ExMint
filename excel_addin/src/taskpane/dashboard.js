@@ -126,67 +126,61 @@ function syncTransactions() {
     
     updateLoaderMessage('Importing Template');
     
-    Excel.run(context => {
+    Excel.run(async (context) => {
         const workbook = context.workbook;
-        return importTemplateSheetsFromJSON(context, workbook)
-            .then(() => {
-                updateLoaderMessage('Requesting Transactions');
-                console.log('Getting cursors...');
-                return getCursors();
-            })
-            .then(cursors => {
-                return fetch(window.appConfig.backEndUrl + '/sync', {
-                    method: 'GET',
-                    headers: {
-                        'Authorization': `Bearer ${token}`,
-                        'Content-Type': 'application/json',
-                        'X-Request-Source': 'Excel-Add-In',
-                        'x-user-token': token,
-                        'cursors': cursors
-                    }
-                });
-            })
-            .then(response => {
-                if (response.ok) {
-                    console.log('Sync response OK');
-                    return response.json();
-                } else {
-                    console.log('Sync response failed:', response.status, response.statusText);
-                    throw new Error('Failed to sync transactions');
+        try {
+            await importTemplateSheetsFromJSON(context, workbook);
+            updateLoaderMessage('Requesting Transactions');
+            console.log('Getting cursors...');
+            const cursors = await getCursors();
+            const response = await fetch(window.appConfig.backEndUrl + '/sync', {
+                method: 'GET',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                    'X-Request-Source': 'Excel-Add-In',
+                    'x-user-token': token,
+                    'cursors': cursors
                 }
-            })
-            .then(data => {
+            });
+
+            if (response.ok) {
+                console.log('Sync response OK');
+                const data = await response.json();
                 updateLoaderMessage('Updating Tables');
-                //console.log('Transaction data retrieved:', data);
-                return processTransactionData(context, workbook, data);
-            })
-            .then(() => {
+                await processTransactionData(context, workbook, data);
                 updateLoaderMessage('Refreshing Formulas');
-                return applyFormulasToTransactions(context, workbook);
-            })
-            .then(() => {
+                await applyFormulasToTransactions(context, workbook);
+
                 if (isFirstRun) {
                     updateLoaderMessage('Applying Pivot Table Settings');
-                    return createPivotTables(context, workbook).then(() => {
-                        isFirstRun = false;
-                    });
+                    await createPivotTables(context, workbook);
+                    isFirstRun = false;
                 }
-            })
-            .then(() => {
-                return refreshAllPivotTables(context, workbook);
-            })
-            .catch(error => {
-                console.error('Error syncing transactions:', error);
-                createErrorCard('Sync', 'SYNC_ERROR', error.message);
-                showToast('Failed to sync transactions. Please try again.', 'error');
-            })
-            .finally(() => {
-                isSyncing = false;
-                if (loader) {
-                    document.body.removeChild(loader);
-                }
-                console.log('Syncing process completed, cleaning up.');
-            });
+
+                await refreshAllPivotTables(context, workbook);
+
+                // **Activate the 'Dashboard' sheet**
+                updateLoaderMessage('Finalizing');
+                const dashboardSheet = workbook.worksheets.getItem('Dashboard');
+                dashboardSheet.activate();
+                await context.sync();
+                console.log('Dashboard sheet activated.');
+            } else {
+                console.log('Sync response failed:', response.status, response.statusText);
+                throw new Error('Failed to sync transactions');
+            }
+        } catch (error) {
+            console.error('Error syncing transactions:', error);
+            createErrorCard('Sync', 'SYNC_ERROR', error.message);
+            showToast('Failed to sync transactions. Please try again.', 'error');
+        } finally {
+            isSyncing = false;
+            if (loader) {
+                document.body.removeChild(loader);
+            }
+            console.log('Syncing process completed, cleaning up.');
+        }
     }).catch(error => {
         console.error('Error in Excel.run:', error);
         createErrorCard('Excel', 'EXCEL_ERROR', error.message);
@@ -668,14 +662,18 @@ async function createPivotTables(context, workbook) {
         //console.log('Worksheets loaded:', worksheets.items.map(sheet => sheet.name));
 
         for (const sheet of template.Sheets) {
-            const excelSheet = workbook.worksheets.getItem(sheet.Name);
-            //await excelSheet.load('pivotTables/items').context.sync();
-            await excelSheet.load('name').context.sync();
             console.log(`Processing Pivot tables in sheet: ${sheet.Name}`);
 
+            const destSheet = workbook.worksheets.getItem(sheet.Name);
+            await destSheet.load('name').context.sync();
+
             for (const pivotTable of sheet.PivotTables) {
-                // Create new PivotTable
-                const newPivotTable = excelSheet.pivotTables.add(pivotTable.Name, pivotTable.SourceData, pivotTable.StartingCell);
+                // Get the destination range on the destination sheet
+                const destinationRange = destSheet.getRange(pivotTable.StartingCell);
+
+                console.log(`Creating PivotTable '${pivotTable.Name}' from source range '${pivotTable.SourceData}' on sheet '${destSheet.name}' at '${pivotTable.StartingCell}'`);
+                
+                const newPivotTable = destSheet.pivotTables.add(pivotTable.Name, pivotTable.SourceData, destinationRange);
                 newPivotTable.columnGrandTotals = pivotTable.ColumnGrandTotals;
                 newPivotTable.rowGrandTotals = pivotTable.RowGrandTotals;
                 
