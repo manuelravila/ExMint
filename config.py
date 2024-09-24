@@ -23,10 +23,10 @@ def get_database_uri():
         elif branch_trimmed == 'stag':
             return f'mysql+pymysql://mrar1995_xmnt_stg:{password}@db-host:3306/mrar1995_xmnt_stg_db'
         elif branch_trimmed == 'main':
-            #return f'mysql+pymysql://mrar1995_xmnt_prd:{password}@db-host:3306/mrar1995_xmnt_prd_db'
-
-            # ONLY ACTIVATE THIS URI FOR PROD TROUBLESHOOTING
-            return f'mysql+pymysql://mrar1995_xmnt_prd:{password}@127.0.0.1:3307/mrar1995_xmnt_prd_db'
+            if os.getenv('FLASK_SYS', '').lower() == 'windows':
+                return f'mysql+pymysql://mrar1995_xmnt_prd:{password}@127.0.0.1:3307/mrar1995_xmnt_prd_db'
+            else:
+                return f'mysql+pymysql://mrar1995_xmnt_prd:{password}@db-host:3306/mrar1995_xmnt_prd_db'
         else:
             raise ValueError(f"Invalid branch: {branch_trimmed}")
     else:
