@@ -243,6 +243,7 @@ async function importTemplateSheetsFromJSON(context, workbook) {
         const cellsToProcess = [];
         const conditionalFormattingToProcess = [];
         const dataValidationsToProcess = [];
+        const notesToProcess = []; 
 
         for (const sheet of template.Sheets) {
             let excelSheet = workbook.worksheets.getItemOrNullObject(sheet.Name);
@@ -273,6 +274,10 @@ async function importTemplateSheetsFromJSON(context, workbook) {
             if (sheet.DataValidations) {
                 dataValidationsToProcess.push({ sheet: excelSheet, dataValidations: sheet.DataValidations });
             }
+
+            if (sheet.Notes) {
+                notesToProcess.push({ sheet: excelSheet, notes: sheet.Notes }); 
+              }
         }
 
         if (template.CustomNamedRanges) {
@@ -283,14 +288,49 @@ async function importTemplateSheetsFromJSON(context, workbook) {
         await importCells(context, cellsToProcess);        
         await importConditionalFormatting(context, conditionalFormattingToProcess);
         await importDataValidations(context, dataValidationsToProcess);
+        await importNotes(context, notesToProcess);
         
-        //await context.sync();
         console.log('Sheets, tables, and pivot tables from JSON template imported successfully.');
     } catch (error) {
         console.error('Error importing sheets from JSON template:', error);
         showToast('Failed to import template. Please try again.', 'error');
     }
 }
+
+async function importNotes(context, sheetsToProcess) {
+    try {
+      if (!sheetsToProcess || sheetsToProcess.length === 0) {
+        console.log('No sheets to process for Notes.');
+        return;
+      }
+  
+      for (const sheetObj of sheetsToProcess) {
+        const sheet = sheetObj.sheet;
+        const notes = sheetObj.notes;
+  
+        sheet.load('name');
+        await context.sync();
+  
+        if (!notes || notes.length === 0) {
+          console.log(`No Notes to process for sheet ${sheet.name}.`);
+          continue;
+        }
+  
+        for (const noteObj of notes) {
+          const range = sheet.getRange(noteObj.Cell);
+  
+          // Add a note to the cell
+          range.note.text = noteObj.HTMLText;
+          range.note.visibility = Excel.NoteVisibility.visible; // or 'hidden'
+        }
+      }
+      await context.sync();
+      console.log('Notes imported successfully.');
+    } catch (error) {
+      console.error('Error importing Notes:', error);
+      showToast('Failed to import notes. Please try again.', 'error');
+    }
+  }
 
 async function importCustomNamedRanges(context, workbook, namedRanges) {
     try {
