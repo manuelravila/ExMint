@@ -10,17 +10,17 @@
           "Columns": [
             {
               "Header": "Name",
-              "Width": 20.89,
+              "Width": 21,
               "Formula": ""
             },
             {
               "Header": "Amount",
-              "Width": 10.33,
+              "Width": 10.43,
               "Formula": ""
             },
             {
               "Header": "Custom Category",
-              "Width": 25.78,
+              "Width": 25.86,
               "Formula": ""
             }
           ],
@@ -35,22 +35,22 @@
           "Columns": [
             {
               "Header": "Custom Category",
-              "Width": 25.56,
+              "Width": 25.57,
               "Formula": ""
             },
             {
               "Header": "Frequency",
-              "Width": 16.67,
+              "Width": 16.71,
               "Formula": ""
             },
             {
               "Header": "Amount",
-              "Width": 10.78,
+              "Width": 10.86,
               "Formula": ""
             },
             {
               "Header": "Monthly",
-              "Width": 9.89,
+              "Width": 10,
               "Formula": "=[@Amount]*XLOOKUP([@Frequency],Frequency[Frequency],Frequency[Factor],1,0)"
             }
           ],
@@ -60,6 +60,44 @@
         }
       ],
       "PivotTables": [
+        {
+          "Name": "Balances",
+          "StartingCell": "$A$2",
+          "ColorStyle": "",
+          "SourceData": "Accounts",
+          "RowFields": [
+            {
+              "Name": "Type",
+              "CustomName": "Type",
+              "Subtotals": true,
+              "LayoutForm": "1"
+            },
+            {
+              "Name": "Institution Name",
+              "CustomName": "Institution Name",
+              "Subtotals": true,
+              "LayoutForm": "1"
+            },
+            {
+              "Name": "Name",
+              "CustomName": "Name",
+              "Subtotals": true,
+              "LayoutForm": "1"
+            }
+          ],
+          "ColumnFields": [
+
+          ],
+          "ValueFields": [
+            {
+              "Name": "Balance",
+              "CustomName": "Balance",
+              "SummarizedBy": "Sum",
+              "ShowValuesAs": "None",
+              "NumberFormat": "$#,##0.00"
+            }
+          ]
+        },
         {
           "Name": "Spending",
           "StartingCell": "$D$2",
@@ -103,44 +141,6 @@
               "SummarizedBy": "Max",
               "ShowValuesAs": "None",
               "NumberFormat": "$#,##0"
-            }
-          ]
-        },
-        {
-          "Name": "Balances",
-          "StartingCell": "$A$2",
-          "ColorStyle": "",
-          "SourceData": "Accounts",
-          "RowFields": [
-            {
-              "Name": "Type",
-              "CustomName": "Type",
-              "Subtotals": true,
-              "LayoutForm": "1"
-            },
-            {
-              "Name": "Institution Name",
-              "CustomName": "Institution Name",
-              "Subtotals": true,
-              "LayoutForm": "1"
-            },
-            {
-              "Name": "Name",
-              "CustomName": "Name",
-              "Subtotals": true,
-              "LayoutForm": "1"
-            }
-          ],
-          "ColumnFields": [
-
-          ],
-          "ValueFields": [
-            {
-              "Name": "Balance",
-              "CustomName": "Balance",
-              "SummarizedBy": "Sum",
-              "ShowValuesAs": "None",
-              "NumberFormat": "$#,##0.00"
             }
           ]
         }
@@ -330,47 +330,47 @@
           "Columns": [
             {
               "Header": "Institution Name",
-              "Width": 17.78,
+              "Width": 17.86,
               "Formula": ""
             },
             {
               "Header": "Credential ID",
-              "Width": 10.22,
+              "Width": 10.29,
               "Formula": ""
             },
             {
               "Header": "Next Cursor",
-              "Width": 55.78,
+              "Width": 55.86,
               "Formula": ""
             },
             {
               "Header": "Balance",
-              "Width": 10.22,
+              "Width": 10.29,
               "Formula": ""
             },
             {
               "Header": "Mask",
-              "Width": 10.22,
+              "Width": 10.29,
               "Formula": ""
             },
             {
               "Header": "Name",
-              "Width": 31.67,
+              "Width": 31.71,
               "Formula": ""
             },
             {
               "Header": "Plaid Account ID",
-              "Width": 10.22,
+              "Width": 10.29,
               "Formula": ""
             },
             {
               "Header": "Subtype",
-              "Width": 10.22,
+              "Width": 10.29,
               "Formula": ""
             },
             {
               "Header": "Type",
-              "Width": 10.22,
+              "Width": 10.29,
               "Formula": ""
             }
           ],
@@ -405,107 +405,107 @@
           "Columns": [
             {
               "Header": "Account ID",
-              "Width": 10.22,
+              "Width": 10.29,
               "Formula": ""
             },
             {
               "Header": "Action",
-              "Width": 10.22,
+              "Width": 10.29,
               "Formula": ""
             },
             {
               "Header": "Amount",
-              "Width": 10.22,
+              "Width": 10.29,
               "Formula": ""
             },
             {
               "Header": "Categories",
-              "Width": 34.22,
+              "Width": 34.29,
               "Formula": ""
             },
             {
               "Header": "Datetime",
-              "Width": 14.89,
+              "Width": 15,
               "Formula": ""
             },
             {
               "Header": "ISO Currency Code",
-              "Width": 10.22,
+              "Width": 10.29,
               "Formula": ""
             },
             {
               "Header": "Merchant Name",
-              "Width": 10.22,
+              "Width": 10.29,
               "Formula": ""
             },
             {
               "Header": "Name",
-              "Width": 39.22,
+              "Width": 39.29,
               "Formula": ""
             },
             {
               "Header": "Payment Channel",
-              "Width": 10.22,
+              "Width": 10.29,
               "Formula": ""
             },
             {
               "Header": "Pending",
-              "Width": 11.33,
+              "Width": 11.43,
               "Formula": ""
             },
             {
               "Header": "Transaction ID",
-              "Width": 11.33,
+              "Width": 11.43,
               "Formula": ""
             },
             {
               "Header": "Account Name",
-              "Width": 20.78,
+              "Width": 20.86,
               "Formula": "=IFERROR(XLOOKUP([@[Account ID]], Accounts[Plaid Account ID], Accounts[Name]),\"Account Not Found\")"
             },
             {
               "Header": "Bank",
-              "Width": 13.89,
+              "Width": 14,
               "Formula": "=XLOOKUP([@[Account ID]],Accounts[Plaid Account ID],Accounts[Institution Name],\"Not Found\",0)"
             },
             {
               "Header": "Operation",
-              "Width": 10.67,
+              "Width": 10.71,
               "Formula": "=IF([@Amount]<0,\"credit\",\"debit\")"
             },
             {
               "Header": "Custom Category",
-              "Width": 16.22,
+              "Width": 16.29,
               "Formula": "=LET(    name_match, ISNUMBER(SEARCH(LOWER(Custom_Cat[Name]), LOWER([@Name]))),    name_length, LEN(Custom_Cat[Name]) >= 3,    amount_check,        IF(Custom_Cat[Amount] = \"0|\",            [@Amount] >= 0,            IF(ISNUMBER(VALUE(Custom_Cat[Amount])),                [@Amount] = VALUE(Custom_Cat[Amount]),                LET(                    split, FIND(\"|\", Custom_Cat[Amount]&\"|\"),                    left_val, IF(split>1, VALUE(LEFT(Custom_Cat[Amount], split-1)), -1E+300),                    right_val, IF(LEN(Custom_Cat[Amount])>split, VALUE(MID(Custom_Cat[Amount], split+1, 999)), 1E+300),                    AND([@Amount] >= left_val, [@Amount] <= right_val)                )            )        ),    match_all, name_match * name_length * amount_check,    category_match, ISNUMBER(MATCH([@Categories], FILTER(Custom_Cat[Name], LEN(Custom_Cat[Name]) >= 3), 0)),    IF(COUNTA(Custom_Cat[Name]) = 1,        IF(match_all, Custom_Cat[Custom Category], [@Categories]),        IF(category_match,            INDEX(Custom_Cat[Custom Category], MATCH([@Categories], FILTER(Custom_Cat[Name], LEN(Custom_Cat[Name]) >= 3), 0)),            IFERROR(                INDEX(Custom_Cat[Custom Category], MATCH(1, match_all, 0)),                [@Categories]            )        )    ))"
             },
             {
               "Header": "Month",
-              "Width": 10.33,
+              "Width": 10.43,
               "Formula": "=DATE(YEAR([@Datetime]),MONTH([@Datetime]),1)"
             },
             {
               "Header": "Recent",
-              "Width": 14.89,
+              "Width": 15,
               "Formula": "=AND([@Datetime]>=EDATE(MAX([Datetime]),-6),[@Datetime]<=TODAY())"
             },
             {
               "Header": "6M AVG",
-              "Width": 8.11,
+              "Width": 8.43,
               "Formula": "=IFERROR(AVERAGEIFS([Month''s Total],[Recent],TRUE,[Custom Category],[@[Custom Category]]),0)"
             },
             {
               "Header": "Month's Total",
-              "Width": 10.78,
+              "Width": 10.86,
               "Formula": "=SUMIFS([Amount],[Month],[@Month],[Custom Category],[@[Custom Category]])"
             },
             {
               "Header": "Budget",
-              "Width": 8.11,
+              "Width": 8.43,
               "Formula": "=IF(COUNTIF(Budgets[Custom Category],[@[Custom Category]])=0,[@[6M AVG]],XLOOKUP([@[Custom Category]],Budgets[Custom Category],Budgets[Monthly],0,0))"
             },
             {
               "Header": "Sel Month",
-              "Width": 8.11,
+              "Width": 8.43,
               "Formula": "=IF([@Month]=Sel_Month,[@Amount],0)"
             }
           ],
@@ -540,12 +540,12 @@
           "Columns": [
             {
               "Header": "Frequency",
-              "Width": 12.22,
+              "Width": 12.29,
               "Formula": ""
             },
             {
               "Header": "Factor",
-              "Width": 8.11,
+              "Width": 8.43,
               "Formula": ""
             }
           ],
@@ -590,30 +590,6 @@
   ],
   "CustomNamedRanges": [
     {
-      "Name": "_xlpm.amount_check",
-      "RefersTo": "=#NAME?"
-    },    {
-      "Name": "_xlpm.category_match",
-      "RefersTo": "=#NAME?"
-    },    {
-      "Name": "_xlpm.left_val",
-      "RefersTo": "=#NAME?"
-    },    {
-      "Name": "_xlpm.match_all",
-      "RefersTo": "=#NAME?"
-    },    {
-      "Name": "_xlpm.name_length",
-      "RefersTo": "=#NAME?"
-    },    {
-      "Name": "_xlpm.name_match",
-      "RefersTo": "=#NAME?"
-    },    {
-      "Name": "_xlpm.right_val",
-      "RefersTo": "=#NAME?"
-    },    {
-      "Name": "_xlpm.split",
-      "RefersTo": "=#NAME?"
-    },    {
       "Name": "Sel_Month",
       "RefersTo": "=Dashboard!$I$1"
     },    {
