@@ -1,5 +1,5 @@
 // dashboard.js
-console.log("Dashboard script loaded v3.6");
+console.log("Dashboard script loaded v3.17");
 
 // Initially hide the cards container
 const cardsContainer = document.getElementById('cardsContainer');
@@ -238,7 +238,6 @@ async function importTemplateSheetsFromJSON(context, workbook) {
         console.log('JSON template loaded:', template);
 
         const tablesToProcess = [];
-        //const pivotTablesToProcess = [];
         const otherCellsToProcess = [];
         const cellsToProcess = [];
         const conditionalFormattingToProcess = [];
@@ -288,7 +287,7 @@ async function importTemplateSheetsFromJSON(context, workbook) {
         await importCells(context, cellsToProcess);        
         await importConditionalFormatting(context, conditionalFormattingToProcess);
         await importDataValidations(context, dataValidationsToProcess);
-        await importNotes(context, notesToProcess);
+        await importNotes(context, workbook, notesToProcess);
         
         console.log('Sheets, tables, and pivot tables from JSON template imported successfully.');
     } catch (error) {
@@ -297,40 +296,56 @@ async function importTemplateSheetsFromJSON(context, workbook) {
     }
 }
 
-async function importNotes(context, sheetsToProcess) {
+async function importNotes(context, workbook, notesToProcess) {
     try {
-      if (!sheetsToProcess || sheetsToProcess.length === 0) {
-        console.log('No sheets to process for Notes.');
-        return;
-      }
-  
-      for (const sheetObj of sheetsToProcess) {
-        const sheet = sheetObj.sheet;
-        const notes = sheetObj.notes;
-  
-        sheet.load('name');
+        if (!notesToProcess || notesToProcess.length === 0) {
+            console.log('No Notes to process.');
+            return;
+        }
+
+        for (const sheetObj of notesToProcess) {
+            const sheet = sheetObj.sheet;
+            const notes = sheetObj.notes;
+
+            sheet.load('name');
+            await context.sync();
+
+            if (!notes || notes.length === 0) {
+                console.log(`No Notes to process for sheet ${sheet.name}.`);
+                continue;
+            }
+
+            for (const noteObj of notes) {
+                const cellAddress = `${sheet.name}!${noteObj.Cell}`;
+
+                let comment;
+                try {
+                    // Attempt to get the existing comment
+                    comment = workbook.comments.getItemByCell(cellAddress);
+                    comment.load('content');
+                    await context.sync();
+
+                    // Update the existing comment
+                    comment.content = noteObj.HTMLText;
+                } catch (error) {
+                    // If the comment does not exist, add a new one
+                    workbook.comments.add(cellAddress, noteObj.HTMLText);
+                }
+            }
+        }
+
         await context.sync();
-  
-        if (!notes || notes.length === 0) {
-          console.log(`No Notes to process for sheet ${sheet.name}.`);
-          continue;
-        }
-  
-        for (const noteObj of notes) {
-          const range = sheet.getRange(noteObj.Cell);
-  
-          // Add a note to the cell
-          range.note.text = noteObj.HTMLText;
-          range.note.visibility = Excel.NoteVisibility.visible; // or 'hidden'
-        }
-      }
-      await context.sync();
-      console.log('Notes imported successfully.');
+
+        // Log all comments for verification
+        const comments = workbook.comments.load('items');
+        await context.sync();
+
+        console.log('Notes imported successfully as comments.');
     } catch (error) {
-      console.error('Error importing Notes:', error);
-      showToast('Failed to import notes. Please try again.', 'error');
+        console.error('Error importing Notes:', error);
+        showToast('Failed to import notes. Please try again.', 'error');
     }
-  }
+}
 
 async function importCustomNamedRanges(context, workbook, namedRanges) {
     try {
@@ -551,7 +566,7 @@ async function importConditionalFormatting(context, sheetsToProcess) {
     }
 }
 
-async function importListObjects(context, excelSheet, listObjects, tablesToProcess) {
+async function importListObjects(context, excelSheet, listObjects) {
     try {
         for (const listObject of listObjects) {
             const table = excelSheet.tables.getItemOrNullObject(listObject.Name);
@@ -560,6 +575,7 @@ async function importListObjects(context, excelSheet, listObjects, tablesToProce
             if (table.isNullObject) {
                 isFirstRun = true;
                 console.log(`Creating table ${listObject.Name} at ${listObject.StartingCell}`);
+
                 // Calculate the range for the header
                 const startCell = listObject.StartingCell.replace('$', '');
                 const startColumn = startCell.match(/[A-Z]+/)[0];
@@ -577,9 +593,6 @@ async function importListObjects(context, excelSheet, listObjects, tablesToProce
                 await context.sync();
                 console.log(`Table ${listObject.Name} created with headers: ${headers}`);
 
-                // Store the table and listObject for later processing
-                tablesToProcess.push({ table: newTable, listObject });
-
                 // Set column widths if provided
                 for (let i = 0; i < listObject.Columns.length; i++) {
                     const column = listObject.Columns[i];
@@ -589,6 +602,33 @@ async function importListObjects(context, excelSheet, listObjects, tablesToProce
                         tableColumn.getRange().format.columnWidth = column.Width * 5;
                     }
                 }
+
+                // Now, add the rows to the table
+                if (listObject.Rows && listObject.Rows.length > 0) {
+                    console.log(`Adding ${listObject.Rows.length} rows to table ${newTable.name}`);
+
+                    // Add the rows with values first
+                    newTable.rows.add(null, listObject.Rows);
+                    await context.sync();
+
+                    // Handle formulas in the rows
+                    const dataBodyRange = newTable.getDataBodyRange().load("values, formulas, rowCount, columnCount");
+                    await context.sync();
+
+                    for (let i = 0; i < dataBodyRange.rowCount; i++) {
+                        for (let j = 0; j < dataBodyRange.columnCount; j++) {
+                            const cellValue = dataBodyRange.values[i][j];
+                            if (typeof cellValue === "string" && cellValue.startsWith("=")) {
+                                dataBodyRange.getCell(i, j).formulas = [[cellValue]];
+                            }
+                        }
+                    }
+
+                    await context.sync();
+                } else {
+                    console.log(`No rows to add to table ${newTable.name}`);
+                }
+
             } else {
                 console.log(`Table ${listObject.Name} already exists.`);
             }
@@ -667,25 +707,7 @@ async function createPivotTables(context, workbook) {
             "Product": Excel.AggregationFunction.product,
             "CountNumbers": Excel.AggregationFunction.countNumbers,
             "StandardDeviation": Excel.AggregationFunction.standardDeviation,
-            "StandardDeviationP": Excel.AggregationFunction.standardDeviationP,
-            "Variance": Excel.AggregationFunction.variance,
-            "VarianceP": Excel.AggregationFunction.varianceP,
-            "Automatic": Excel.AggregationFunction.automatic,
-        };
-
-        const showAsMapping = {
-            "None": Excel.ShowAsCalculation.none,
-            "PercentOfGrandTotal": Excel.ShowAsCalculation.percentOfGrandTotal,
-            "PercentOfRowTotal": Excel.ShowAsCalculation.percentOfRowTotal,
-            "PercentOfColumnTotal": Excel.ShowAsCalculation.percentOfColumnTotal,
-            "PercentOfParentRowTotal": Excel.ShowAsCalculation.percentOfParentRowTotal,
-            "PercentOfParentColumnTotal": Excel.ShowAsCalculation.percentOfParentColumnTotal,
-            "PercentOfParentTotal": Excel.ShowAsCalculation.percentOfParentTotal,
-            "PercentOf": Excel.ShowAsCalculation.percentOf,
-            "RunningTotal": Excel.ShowAsCalculation.runningTotal,
-            "PercentRunningTotal": Excel.ShowAsCalculation.percentRunningTotal,
-            "DifferenceFrom": Excel.ShowAsCalculation.differenceFrom,
-            "PercentDifferenceFrom": Excel.ShowAsCalculation.percentDifferenceFrom,
+            "StandardDeviationP": Excel.ShowAsCalculation.percentDifferenceFrom,
             "RankAscending": Excel.ShowAsCalculation.rankAscending,
             "RankDescending": Excel.ShowAsCalculation.rankDescending,
             "Index": Excel.ShowAsCalculation.index,
@@ -699,62 +721,71 @@ async function createPivotTables(context, workbook) {
 
         await workbook.worksheets.load('items').context.sync();
         
-        //console.log('Worksheets loaded:', worksheets.items.map(sheet => sheet.name));
-
         for (const sheet of template.Sheets) {
             console.log(`Processing Pivot tables in sheet: ${sheet.Name}`);
 
-            const destSheet = workbook.worksheets.getItem(sheet.Name);
+            // Ensure the sheet exists
+            const destSheet = workbook.worksheets.getItemOrNullObject(sheet.Name);
             await destSheet.load('name').context.sync();
+            if (destSheet.isNullObject) {
+                console.error(`Sheet ${sheet.Name} does not exist.`);
+                continue;
+            }
 
             for (const pivotTable of sheet.PivotTables) {
-                // Get the destination range on the destination sheet
-                const destinationRange = destSheet.getRange(pivotTable.StartingCell);
-
-                console.log(`Creating PivotTable '${pivotTable.Name}' from source range '${pivotTable.SourceData}' on sheet '${destSheet.name}' at '${pivotTable.StartingCell}'`);
-                
-                const newPivotTable = destSheet.pivotTables.add(pivotTable.Name, pivotTable.SourceData, destinationRange);
-                newPivotTable.columnGrandTotals = pivotTable.ColumnGrandTotals;
-                newPivotTable.rowGrandTotals = pivotTable.RowGrandTotals;
-                
-                // Add row fields
-                for (const rowField of pivotTable.RowFields) {
-                    const rowHierarchy = newPivotTable.hierarchies.getItem(rowField.Name);
-                    const newRowField = newPivotTable.rowHierarchies.add(rowHierarchy);
-                    newRowField.name = rowField.CustomName;
-                    newRowField.subtotals = rowField.Subtotals;
-                }
-
-                // Add column fields
-                for (const columnField of pivotTable.ColumnFields) {
-                    const columnHierarchy = newPivotTable.hierarchies.getItem(columnField.Name);
-                    const newColumnField = newPivotTable.columnHierarchies.add(columnHierarchy);
-                    newColumnField.name = columnField.CustomName;
-                    newColumnField.subtotals = columnField.Subtotals;
-                }
-
-                // Add data fields
-                for (const valueField of pivotTable.ValueFields) {
-                    const dataHierarchy = newPivotTable.hierarchies.getItem(valueField.Name);
-                    const newValueField = newPivotTable.dataHierarchies.add(dataHierarchy);
-                    newValueField.summarizeBy = aggregationMapping[valueField.SummarizedBy] || Excel.AggregationFunction.automatic;
-                    newValueField.numberFormat = valueField.NumberFormat;
-                    newValueField.name = valueField.CustomName;
-                }
-
+                const existingPivotTable = destSheet.pivotTables.getItemOrNullObject(pivotTable.Name);
                 await context.sync();
-                console.log(`Recreated pivot table: ${pivotTable.Name}`);
+
+                if (existingPivotTable.isNullObject) {
+                    // Get the destination range on the destination sheet
+                    const destinationRange = destSheet.getRange(pivotTable.StartingCell);
+
+                    console.log(`Creating PivotTable '${pivotTable.Name}' from source range '${pivotTable.SourceData}' on sheet '${destSheet.name}' at '${pivotTable.StartingCell}'`);
+
+                    const newPivotTable = destSheet.pivotTables.add(pivotTable.Name, pivotTable.SourceData, destinationRange);
+                    newPivotTable.columnGrandTotals = pivotTable.ColumnGrandTotals;
+                    newPivotTable.rowGrandTotals = pivotTable.RowGrandTotals;
+                    
+                    // Add row fields
+                    for (const rowField of pivotTable.RowFields) {
+                        const rowHierarchy = newPivotTable.hierarchies.getItem(rowField.Name);
+                        const newRowField = newPivotTable.rowHierarchies.add(rowHierarchy);
+                        newRowField.name = rowField.CustomName;
+                        newRowField.subtotals = rowField.Subtotals;
+                    }
+
+                    // Add column fields
+                    for (const columnField of pivotTable.ColumnFields) {
+                        const columnHierarchy = newPivotTable.hierarchies.getItem(columnField.Name);
+                        const newColumnField = newPivotTable.columnHierarchies.add(columnHierarchy);
+                        newColumnField.name = columnField.CustomName;
+                        newColumnField.subtotals = columnField.Subtotals;
+                    }
+
+                    // Add data fields
+                    for (const valueField of pivotTable.ValueFields) {
+                        const dataHierarchy = newPivotTable.hierarchies.getItem(valueField.Name);
+                        const newValueField = newPivotTable.dataHierarchies.add(dataHierarchy);
+                        newValueField.summarizeBy = aggregationMapping[valueField.SummarizedBy] || Excel.AggregationFunction.automatic;
+                        newValueField.numberFormat = valueField.NumberFormat;
+                        newValueField.name = valueField.CustomName;
+                    }
+
+                    await context.sync();
+                    console.log(`Created pivot table: ${pivotTable.Name}`);
+                } else {
+                    console.log(`Pivot table ${pivotTable.Name} already exists, skipping.`);
+                }
             }
         }
 
-        console.log('All pivot tables recreated successfully.');
+        console.log('All pivot tables processed successfully.');
     } catch (error) {
         console.error('Error recreating pivot tables:', error);
         createErrorCard('PivotTable', 'PIVOT_TABLE_ERROR', error.message);
         showToast('Failed to recreate pivot tables. Please try again.', 'error');
     }
 }
-
 
 function insertTransactionData(context, workbook, data, credentialsWithErrors) {
     const accountsData = [];
