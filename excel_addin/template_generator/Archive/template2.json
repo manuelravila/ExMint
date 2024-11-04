@@ -94,11 +94,11 @@
           ],
           "ValueFields": [
             {
-              "Name": "Amount",
+              "Name": "ABS_Amount",
               "CustomName": "Subtotal",
               "SummarizedBy": "Sum",
               "ShowValuesAs": "None",
-              "NumberFormat": "General"
+              "NumberFormat": "$#,##0.00"
             },
             {
               "Name": "6M AVG",
@@ -382,6 +382,129 @@
               "Italic": null
           }
         }
+      ]
+    },
+    {
+      "Name": "Chart",
+      "ListObjects": [
+
+      ],
+      "PivotTables": [
+        {
+          "Name": "PivotTable1",
+          "StartingCell": "$A$3",
+          "ColorStyle": "",
+          "SourceData": "Transactions",
+          "RowFields": [
+
+          ],
+          "ColumnFields": [
+
+          ],
+          "ValueFields": [
+            {
+              "Name": "ABS_Amount",
+              "CustomName": "Sum of ABS_Amount",
+              "SummarizedBy": "Sum",
+              "ShowValuesAs": "None",
+              "NumberFormat": "$#,##0.00"
+            },
+            {
+              "Name": "6M AVG",
+              "CustomName": "6M Average",
+              "SummarizedBy": "Max",
+              "ShowValuesAs": "None",
+              "NumberFormat": "$#,##0"
+            },
+            {
+              "Name": "Budget",
+              "CustomName": "Budget",
+              "SummarizedBy": "Max",
+              "ShowValuesAs": "None",
+              "NumberFormat": "$#,##0"
+            },
+            {
+              "Name": "Remainder",
+              "CustomName": "Remainder",
+              "SummarizedBy": "Max",
+              "ShowValuesAs": "None",
+              "NumberFormat": "$#,##0"
+            }
+          ]
+        }
+      ],
+      "Charts": [
+      {
+        "Name": "Historical",
+        "ChartType": "65",
+        "Left": 0,
+        "Top": 1.5,
+        "Width": 1092.75,
+        "Height": 578.249938964844,
+        "HasTitle": false,
+        "HasLegend": true,
+        "Series": [
+          {
+            "Name": "Sum of ABS_Amount",
+            "Values": "=SERIES(Chart!$A$3,Chart!$A$4,Chart!$A$4,1)"
+          },
+          {
+            "Name": "6M Average",
+            "Values": "=SERIES(Chart!$B$3,Chart!$A$4,Chart!$B$4,2)"
+          },
+          {
+            "Name": "Budget",
+            "Values": "=SERIES(Chart!$C$3,Chart!$A$4,Chart!$C$4,3)"
+          },
+          {
+            "Name": "Remainder ",
+            "Values": "=SERIES(Chart!$D$3,Chart!$A$4,Chart!$D$4,4)"
+          }
+        ],
+        "Axes": {
+          "Value": {
+            "HasTitle": false,
+            "MajorUnit": 0.1,
+            "MinorUnit": 0.02,
+            "Minimum": 0,
+            "Maximum": 1
+          },
+          "Category": {
+            "HasTitle": false
+          }
+        }
+      }
+      ],
+      "Notes": [
+        {
+          "Cell": "$W$2",
+          "HTMLText": "Select the category or categories you want to see in the chart using the selector at the top left. You can see the monthly total for the category, its 6-month average spending and the budget cap. ",
+          "Width": 165.75,
+          "Height": 91.5
+        }
+      ],
+      "OtherCells": [
+
+      ],
+      "Cells": [
+        {
+          "Address": "$W$2",
+          "Value": "Exmint Help",
+          "FillColor": "#FFFFFF",
+          "NumberFormat": "General",
+          "Font": {
+              "Size": 11,
+              "Color": "#000000",
+              "Bold": true,
+              "Italic": false
+          }
+        }
+      ],
+      "DataValidations": [
+
+      ],
+      "ConditionalFormatting": [
+
       ]
     },
     {
