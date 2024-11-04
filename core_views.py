@@ -214,11 +214,12 @@ def sync_transactions():
 
             except plaid.ApiException as e:
                 error_response = json.loads(e.body)
-                print(f"Error fetching transactions: {error_response['error_message']}")
+                print(f"Error fetching transactions: {error_response.get('error_code')}-> {error_response['error_message']}")
                 if error_response.get('error_code') == 'DEVELOPMENT_ENVIRONMENT_BROWNOUT':
                     return jsonify({'error': 'Plaid Development environment is undergoing a scheduled brownout. Please try again later.'}), 503
                 elif error_response.get('error_code') == 'ITEM_LOGIN_REQUIRED':
                     credential.requires_update = True
+                    print ('Credential ', credential, ' requires update. Should get flagged')
                     db.session.commit()
                     credential_error = {
                         'error_code': error_response['error_code'],
