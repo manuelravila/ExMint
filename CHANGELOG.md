@@ -1,3 +1,9 @@
+## [0.5.0] - 2024-11-04
+
+### Added
+- Updated formulas and tables in the template.
+- Added support for notes and help notes in the template.
+
 ## [0.4.0] - 2024-08-05
 
 ### Fixed
