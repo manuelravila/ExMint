@@ -33,8 +33,8 @@ services:
       - FLASK_ENV=${FLASK_ENV:-dev}
     ports:
       - "${NODE_HOST_PORT:-3000}:3000"
-    volumes:
-      - ./excel_addin:/app
+    #volumes:
+    #  - ./excel_addin:/app
     networks:
       app-network:
         ipv4_address: ${NODE_IP:-172.21.0.4}
