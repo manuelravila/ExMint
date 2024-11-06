@@ -31,19 +31,47 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": [
         "run",
-        "start:desktop"  // This will trigger the 'start' script in package.json
+        "start:desktop"
       ],
       "env": {
         "NODE_ENV": "development"
       },
-      "cwd": "${workspaceFolder}/excel_addin",  // Adjust to the directory containing your package.json
+      "cwd": "${workspaceFolder}/excel_addin",
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Add-In WEB PROD",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "start:web",
+        "--",
+        "--document",
+        "https://1drv.ms/x/s!AjErl85sZBkZ09ZpE_SzRrURg01lCg?e=hSds4T"
+      ],
+      "env": {
+        "NODE_ENV": "development"
+      },
+      "cwd": "${workspaceFolder}/excel_addin",
       "console": "integratedTerminal"
     }
   ],
   "compounds": [
     {
       "name": "Flask and Add-In PROD",
-      "configurations": ["ExMint PROD", "Excel Add-In"]
+      "configurations": [
+        "ExMint PROD",
+        "Excel Add-In"
+      ]
+    },
+    {
+      "name": "Flask and Add-In WEB PROD",
+      "configurations": [
+        "ExMint PROD",
+        "Add-In WEB PROD"
+      ]
     }
   ]
 }
