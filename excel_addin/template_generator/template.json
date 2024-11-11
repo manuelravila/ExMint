@@ -77,6 +77,12 @@
           "SourceData": "Transactions",
           "RowFields": [
             {
+              "Name": "Datetime",
+              "CustomName": "Datetime",
+              "Subtotals": true,
+              "LayoutForm": "1"
+            },
+            {
               "Name": "Custom Category",
               "CustomName": "Custom Category",
               "Subtotals": true,
