@@ -877,7 +877,7 @@ function insertTransactionData(context, workbook, data, credentialsWithErrors) {
             if (existingAccounts[plaidAccountId]) {
                 // Only mark for deletion if the account does not have errors
                 if (!credentialsWithErrors.has(existingAccounts[plaidAccountId].row[1])) {
-                    console.log(`Marking account with ID ${plaidAccountId} for deletion.`);
+                    //console.log(`Marking account with ID ${plaidAccountId} for deletion.`);
                     rowsToDeleteAccounts.push(existingAccounts[plaidAccountId].index);
                 }
             }
@@ -889,14 +889,14 @@ function insertTransactionData(context, workbook, data, credentialsWithErrors) {
             // Sort indices in descending order to prevent shifting
             rowsToDeleteAccounts.sort((a, b) => b - a);
             rowsToDeleteAccounts.forEach(rowIndex => {
-                console.log(`Deleting account row at index ${rowIndex}.`);
+                //console.log(`Deleting account row at index ${rowIndex}.`);
                 accountsTable.rows.getItemAt(rowIndex).delete();
             });
         }
 
         // Insert new accounts data
         if (newAccountsData.length > 0) {
-            console.log(`Adding ${newAccountsData.length} new accounts.`);
+            //console.log(`Adding ${newAccountsData.length} new accounts.`);
             accountsTable.rows.add(null, newAccountsData);
         }
 
@@ -907,18 +907,18 @@ function insertTransactionData(context, workbook, data, credentialsWithErrors) {
             const transactionId = transactionRow[10];
             
             if (!plaidAccountId || !transactionId) {
-                console.warn(`Skipping transaction due to missing plaidAccountId or transactionId:`, transactionRow);
+                //console.warn(`Skipping transaction due to missing plaidAccountId or transactionId:`, transactionRow);
                 return; // Skip this transaction as it lacks necessary identifiers
             }
             
             const compositeKey = createCompositeKey(plaidAccountId.trim(), transactionId.trim());
             
             if (existingTransactions[compositeKey]) {
-                console.log(`Marking existing transaction with composite key: ${compositeKey} for deletion.`);
+                //console.log(`Marking existing transaction with composite key: ${compositeKey} for deletion.`);
                 rowsToDeleteTransactions.push(existingTransactions[compositeKey].index);
             }
             
-            console.log(`Adding new transaction with composite key: ${compositeKey}`);
+            //console.log(`Adding new transaction with composite key: ${compositeKey}`);
             newTransactionsData.push(transactionRow);
         });
 
