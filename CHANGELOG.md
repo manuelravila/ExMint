@@ -1,3 +1,15 @@
+## [5.1] - 2024-11-14
+
+### Added
+- Added account ID to Transaction Identifier to avoid deletion of incorrect transactions.
+
+### Fixed
+- Fixed issue with deletion of existing transactions.
+- Fixed error when adding comments.
+
+### Removed
+- Removed width and height from comments.
+
 ## [0.5.0] - 2024-11-04
 
 ### Added

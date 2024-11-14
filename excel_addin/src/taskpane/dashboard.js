@@ -1,5 +1,5 @@
 // dashboard.js
-console.log("Dashboard script loaded v3.17");
+console.log("Dashboard script loaded v3.23");
 
 // Initially hide the cards container
 const cardsContainer = document.getElementById('cardsContainer');
@@ -297,53 +297,50 @@ async function importTemplateSheetsFromJSON(context, workbook) {
 }
 
 async function importNotes(context, workbook, notesToProcess) {
-    try {
-        if (!notesToProcess || notesToProcess.length === 0) {
-            console.log('No Notes to process.');
-            return;
+    if (!notesToProcess || notesToProcess.length === 0) {
+        console.log('No Notes to process.');
+        return;
+    }
+
+    for (const sheetObj of notesToProcess) {
+        const sheet = sheetObj.sheet;
+        const notes = sheetObj.notes;
+
+        sheet.load('name');
+        await context.sync();
+
+        if (!notes || notes.length === 0) {
+            console.log(`No Notes to process for sheet ${sheet.name}.`);
+            continue;
         }
 
-        for (const sheetObj of notesToProcess) {
-            const sheet = sheetObj.sheet;
-            const notes = sheetObj.notes;
+        for (const noteObj of notes) {
+            const cellAddress = `${sheet.name}!${noteObj.Cell}`;
+            console.log(`Processing note for cell: ${cellAddress}`);
+            console.log(`Note content to be added: ${noteObj.Text}`);
 
-            sheet.load('name');
-            await context.sync();
-
-            if (!notes || notes.length === 0) {
-                console.log(`No Notes to process for sheet ${sheet.name}.`);
-                continue;
-            }
-
-            for (const noteObj of notes) {
-                const cellAddress = `${sheet.name}!${noteObj.Cell}`;
-
-                let comment;
-                try {
-                    // Attempt to get the existing comment
-                    comment = workbook.comments.getItemByCell(cellAddress);
-                    comment.load('content');
-                    await context.sync();
-
-                    // Update the existing comment
-                    comment.content = noteObj.HTMLText;
-                } catch (error) {
-                    // If the comment does not exist, add a new one
-                    workbook.comments.add(cellAddress, noteObj.HTMLText);
+            // Attempt to delete any existing comment using a try/catch block
+            try {
+                //console.log(`Attempting to delete existing comment at ${cellAddress}`);
+                context.workbook.comments.getItemByCell(cellAddress).delete();
+                await context.sync();
+                //console.log(`Deleted existing comment at ${cellAddress}`);
+            } catch (error) {
+                // Handle the case where the comment does not exist
+                if (error.code === "ItemNotFound") {
+                    console.log(`No existing comment found at ${cellAddress}. Proceeding to add a new comment.`);
+                } else {
+                    // Re-throw the error if it's something else
+                    console.error(`Error deleting comment at ${cellAddress}:`, error);
+                    throw error;
                 }
             }
+            // Add the new comment using context
+            console.log(`Adding new comment at ${cellAddress}`);
+            context.workbook.comments.add(cellAddress, noteObj.Text);
+            await context.sync();
+            console.log(`Successfully added comment at ${cellAddress}`);
         }
-
-        await context.sync();
-
-        // Log all comments for verification
-        const comments = workbook.comments.load('items');
-        await context.sync();
-
-        console.log('Notes imported successfully as comments.');
-    } catch (error) {
-        console.error('Error importing Notes:', error);
-        showToast('Failed to import notes. Please try again.', 'error');
     }
 }
 
@@ -360,10 +357,9 @@ async function importCustomNamedRanges(context, workbook, namedRanges) {
                 workbook.names.add(name, refersTo);
                 console.log(`Named range ${name} added.`);
             } else {
-                existingName.delete();
-                await context.sync();
-                workbook.names.add(name, refersTo);
-                console.log(`Named range ${name} updated with new refersTo value.`);
+                // Update the "RefersTo" formula of the existing named range
+                existingName.formula = refersTo;
+                console.log(`Named range "${name}" updated with new RefersTo value.`);
             }
         }
         await context.sync();
@@ -787,6 +783,10 @@ async function createPivotTables(context, workbook) {
     }
 }
 
+function createCompositeKey(plaidAccountId, transactionId) {
+    return `${plaidAccountId}_${transactionId}`;
+}
+
 function insertTransactionData(context, workbook, data, credentialsWithErrors) {
     const accountsData = [];
     const transactionsData = [];
@@ -851,52 +851,100 @@ function insertTransactionData(context, workbook, data, credentialsWithErrors) {
 
     return context.sync().then(() => {
         const existingAccounts = accountsRange.values.reduce((map, row, index) => {
-            map[row[6]] = { row, index };
+            map[row[6]] = { row, index }; // plaid_account_id is at index 6
             return map;
         }, {});
 
         const existingTransactions = transactionsRange.values.reduce((map, row, index) => {
-            map[row[10]] = { row, index }; 
+            const plaidAccountId = row[0]; 
+            const transactionId = row[10];
+            if (plaidAccountId && transactionId) {
+                const compositeKey = createCompositeKey(plaidAccountId, transactionId);
+                map[compositeKey] = { row, index };
+            } else {
+                console.warn(`Skipping transaction at row ${index} due to missing plaidAccountId or transactionId.`);
+            }
             return map;
         }, {});
 
         const newAccountsData = [];
         const newTransactionsData = [];
-        const rowsToDelete = [];
+        const rowsToDeleteAccounts = [];
 
+        // Process Accounts
         accountsData.forEach(accountRow => {
             const plaidAccountId = accountRow[6];
             if (existingAccounts[plaidAccountId]) {
                 // Only mark for deletion if the account does not have errors
                 if (!credentialsWithErrors.has(existingAccounts[plaidAccountId].row[1])) {
-                    rowsToDelete.push(existingAccounts[plaidAccountId].index);
+                    console.log(`Marking account with ID ${plaidAccountId} for deletion.`);
+                    rowsToDeleteAccounts.push(existingAccounts[plaidAccountId].index);
                 }
             }
             newAccountsData.push(accountRow);
         });
 
-        // Delete the rows that are no longer needed
-        rowsToDelete.sort((a, b) => b - a).forEach(rowIndex => {
-            accountsTable.rows.getItemAt(rowIndex).delete();
-        });
+        // Delete the account rows that are no longer needed
+        if (rowsToDeleteAccounts.length > 0) {
+            // Sort indices in descending order to prevent shifting
+            rowsToDeleteAccounts.sort((a, b) => b - a);
+            rowsToDeleteAccounts.forEach(rowIndex => {
+                console.log(`Deleting account row at index ${rowIndex}.`);
+                accountsTable.rows.getItemAt(rowIndex).delete();
+            });
+        }
 
+        // Insert new accounts data
+        if (newAccountsData.length > 0) {
+            console.log(`Adding ${newAccountsData.length} new accounts.`);
+            accountsTable.rows.add(null, newAccountsData);
+        }
+
+        // Process Transactions: Collect rows to delete
+        const rowsToDeleteTransactions = [];
         transactionsData.forEach(transactionRow => {
+            const plaidAccountId = transactionRow[0];
             const transactionId = transactionRow[10];
-            if (existingTransactions[transactionId]) {
-                transactionsTable.rows.getItemAt(existingTransactions[transactionId].index).delete();
+            
+            if (!plaidAccountId || !transactionId) {
+                console.warn(`Skipping transaction due to missing plaidAccountId or transactionId:`, transactionRow);
+                return; // Skip this transaction as it lacks necessary identifiers
             }
+            
+            const compositeKey = createCompositeKey(plaidAccountId.trim(), transactionId.trim());
+            
+            if (existingTransactions[compositeKey]) {
+                console.log(`Marking existing transaction with composite key: ${compositeKey} for deletion.`);
+                rowsToDeleteTransactions.push(existingTransactions[compositeKey].index);
+            }
+            
+            console.log(`Adding new transaction with composite key: ${compositeKey}`);
             newTransactionsData.push(transactionRow);
         });
 
-        const transactionsHeaderRange = transactionsTable.getHeaderRowRange().load('values');
+        // Delete the transaction rows that are no longer needed
+        if (rowsToDeleteTransactions.length > 0) {
+            // Sort indices in descending order to prevent shifting
+            rowsToDeleteTransactions.sort((a, b) => b - a);
+            rowsToDeleteTransactions.forEach(rowIndex => {
+                // Fetch transaction details for logging before deletion
+                const row = transactionsRange.values[rowIndex];
+                const plaidAccountId = row[0];
+                const transactionId = row[10];
+                //console.log(`Deleting existing transaction:
+    //- Institution (plaid_account_id): ${plaidAccountId}
+    //- Transaction ID: ${transactionId}
+    //- Reason: Transaction updated by institution.`);
+                
+                transactionsTable.rows.getItemAt(rowIndex).delete();
+            });
+        }
 
+        // After deletions, sync to ensure rows are deleted before insertions
         return context.sync().then(() => {
-            if (newAccountsData.length > 0) {
-                accountsTable.rows.add(null, newAccountsData);
-            }
-
             if (newTransactionsData.length > 0) {
-                const transactionColumns = transactionsHeaderRange.values[0];
+                console.log(`Adding ${newTransactionsData.length} new transactions.`);
+                const transactionColumns = transactionsRange.values[0]; // Assuming headers are loaded
                 const formattedTransactionsData = newTransactionsData.map(transactionRow => {
                     const formattedRow = [];
                     transactionColumns.forEach((column, index) => {
@@ -1072,7 +1120,6 @@ function createCard(type, bankName, operation, transactionCount, errorCode, erro
     cardsContainer.style.display = 'block'; // Ensure the container is visible
     cardsContainer.appendChild(card);
 }
-
 
 function createSuccessCard(institutionName, operation, transactionCount) {
     console.log(`Creating success card for ${institutionName} with ${transactionCount} transactions`);
