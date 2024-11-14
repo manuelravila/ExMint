@@ -77,6 +77,12 @@
           "SourceData": "Transactions",
           "RowFields": [
             {
+              "Name": "Month",
+              "CustomName": "Month",
+              "Subtotals": true,
+              "LayoutForm": "1"
+            },
+            {
               "Name": "Custom Category",
               "CustomName": "Custom Category",
               "Subtotals": true,
@@ -168,117 +174,79 @@
       "Notes": [
         {
           "Cell": "$A$1",
-          "HTMLText": "Recent balances of synced accounts (Not real time updated). Negative values are credit or loans.",
-          "Width": 155.25,
-          "Height": 87.75
+          "Text": "Recent balances of synced accounts (Not real time updated). Negative values are credit or loans."
         },
         {
           "Cell": "$B$1",
-          "HTMLText": "BalancesThis column shows the RECENT balance of each account. Keep in mind that ExMint won't get real time balances.",
-          "Width": 133.5,
-          "Height": 84
+          "Text": "BalancesThis column shows the RECENT balance of each account. Keep in mind that ExMint won't get real time balances."
         },
         {
           "Cell": "$D$1",
-          "HTMLText": "Summary of income and expenses from synced accounts. Both credit and debit are positive in this table. Expand groups to see details. See additional help on each column.",
-          "Width": 154.5,
-          "Height": 75.75
+          "Text": "Summary of income and expenses from synced accounts. Both credit and debit are positive in this table. Expand groups to see details. See additional help on each column."
         },
         {
           "Cell": "$E$1",
-          "HTMLText": "SubtotalShows subtotal per category in each month. Expand to see individual transaction names within a category. ",
-          "Width": 154.5,
-          "Height": 77.25
+          "Text": "SubtotalShows subtotal per category in each month. Expand to see individual transaction names within a category. "
         },
         {
           "Cell": "$F$1",
-          "HTMLText": "6M AverageShows average spending / income per category over the previous 6 months.",
-          "Width": 138.75,
-          "Height": 72
+          "Text": "6M AverageShows average spending / income per category over the previous 6 months."
         },
         {
           "Cell": "$G$1",
-          "HTMLText": "BudgetShows the monthly budget specified for the category in the table Budgets if a budget is available. Otherwise, just repeats the 6M Average.",
-          "Width": 153,
-          "Height": 92.25
+          "Text": "BudgetShows the monthly budget specified for the category in the table Budgets if a budget is available. Otherwise, just repeats the 6M Average."
         },
         {
           "Cell": "$H$1",
-          "HTMLText": "RemainderCalculates the reminder (or overage) of the category budget for the selected month. Overages are presented with negative values.",
-          "Width": 161.25,
-          "Height": 83.25
+          "Text": "RemainderCalculates the reminder (or overage) of the category budget for the selected month. Overages are presented with negative values."
         },
         {
           "Cell": "$J$1",
-          "HTMLText": "Budgets lets you define allowances for specific spending or income categories. Then you can check on the Spending Report how much of each budget you have left or in excess. ",
-          "Width": 177.75,
-          "Height": 105.75
+          "Text": "Budgets lets you define allowances for specific spending or income categories. Then you can check on the Spending Report how much of each budget you have left or in excess. "
         },
         {
           "Cell": "$O$1",
-          "HTMLText": "This table assists in the definition and mapping of custom Categories. Each line is a rule that will automatically assign a custom category to a group of transactions. Rules apply to previously synced as well as to future synced transactions.",
-          "Width": 182.25,
-          "Height": 99.75
+          "Text": "This table assists in the definition and mapping of custom Categories. Each line is a rule that will automatically assign a custom category to a group of transactions. Rules apply to previously synced as well as to future synced transactions."
         },
         {
           "Cell": "$D$2",
-          "HTMLText": "Categories of spending / income, synced or from the Custom Categories table. Expand Years and Months to see active categories.",
-          "Width": 146.25,
-          "Height": 75.75
+          "Text": "Categories of spending / income, synced or from the Custom Categories table. Expand Years and Months to see active categories."
         },
         {
           "Cell": "$J$2",
-          "HTMLText": "Enter here the name of a category to which the budget will be assigned. Must match one of the categories in the Spending report.",
-          "Width": 165.75,
-          "Height": 97.5
+          "Text": "Enter here the name of a category to which the budget will be assigned. Must match one of the categories in the Spending report."
         },
         {
           "Cell": "$K$2",
-          "HTMLText": "Select the period after which the budget will reset. You can assign a Weekly, Biweekly, Monthly, Quarterly, Biannual or Yearly budget. Exmint will calculate the montly allowance based on this field.",
-          "Width": 199.5,
-          "Height": 99
+          "Text": "Select the period after which the budget will reset. You can assign a Weekly, Biweekly, Monthly, Quarterly, Biannual or Yearly budget. Exmint will calculate the montly allowance based on this field."
         },
         {
           "Cell": "$L$2",
-          "HTMLText": "Enter here the amount that you want to set aside for this budget on every perdiod defined in the previous column.",
-          "Width": 135,
-          "Height": 84
+          "Text": "Enter here the amount that you want to set aside for this budget on every perdiod defined in the previous column."
         },
         {
           "Cell": "$M$2",
-          "HTMLText": "This is a formula column that gets automatically filled with the monthly allowance corresponding to the frequency and amount columns. YOU CAN HIDE THIS COLUMN",
-          "Width": 151.5,
-          "Height": 92.25
+          "Text": "This is a formula column that gets automatically filled with the monthly allowance corresponding to the frequency and amount columns. YOU CAN HIDE THIS COLUMN"
         },
         {
           "Cell": "$O$2",
-          "HTMLText": "The text entered in this column will be matched agains the column 'Name' in the Transactions table. Transactions that contain this text (case insensitive) in the 'Name' column will be positive matches.",
-          "Width": 167.25,
-          "Height": 101.25
+          "Text": "The text entered in this column will be matched agains the column 'Name' in the Transactions table. Transactions that contain this text (case insensitive) in the 'Name' column will be positive matches."
         },
         {
           "Cell": "$P$2",
-          "HTMLText": "The text entered in this column will be matched agains the column 'Categories' in the Transactions table. Transactions that contain this text (case insensitive) in the 'Categories' column will be positive matches. If you enter text in both 'Name' and 'Category' then only transactions where those strings are found in BOTH 'Name' AND 'Categories' will be positive matches.",
-          "Width": 239.25,
-          "Height": 110.25
+          "Text": "The text entered in this column will be matched agains the column 'Categories' in the Transactions table. Transactions that contain this text (case insensitive) in the 'Categories' column will be positive matches. If you enter text in both 'Name' and 'Category' then only transactions where those strings are found in BOTH 'Name' AND 'Categories' will be positive matches."
         },
         {
           "Cell": "$Q$2",
-          "HTMLText": "If a numeric value is present in this column, then only transactions with 'Amount' value GREATER than or equal to this value will be positive matches.",
-          "Width": 161.25,
-          "Height": 83.25
+          "Text": "If a numeric value is present in this column, then only transactions with 'Amount' value GREATER than or equal to this value will be positive matches."
         },
         {
           "Cell": "$R$2",
-          "HTMLText": "If a numeric value is present in this column, then only transactions with 'Amount' value SMALLER than or equal to this value will be positive matches.",
-          "Width": 159,
-          "Height": 72
+          "Text": "If a numeric value is present in this column, then only transactions with 'Amount' value SMALLER than or equal to this value will be positive matches."
         },
         {
           "Cell": "$S$2",
-          "HTMLText": "The text in this column will be used as the 'Custom Category' value for line items in the table 'Transactions' that are positive matches to the rule in this table's line item.",
-          "Width": 160.5,
-          "Height": 84.75
+          "Text": "The text in this column will be used as the 'Custom Category' value for line items in the table 'Transactions' that are positive matches to the rule in this table's line item."
         }
       ],
       "OtherCells": [
@@ -452,57 +420,39 @@
       "Notes": [
         {
           "Cell": "$A$1",
-          "HTMLText": "The Accounts table contains the accounts synced from the ExMint back-en through Plaid. DO NOT DELETE THIS TABLE or ExMint will be unable to sync transactions. Insitution Name: Bank of financial institution where the account is held.",
-          "Width": 204.75,
-          "Height": 98.25
+          "Text": "The Accounts table contains the accounts synced from the ExMint back-en through Plaid. DO NOT DELETE THIS TABLE or ExMint will be unable to sync transactions. Insitution Name: Bank of financial institution where the account is held."
         },
         {
           "Cell": "$B$1",
-          "HTMLText": "Internal number used by ExMint to determine the Plaid connection token used for each account.",
-          "Width": 149.25,
-          "Height": 78.75
+          "Text": "Internal number used by ExMint to determine the Plaid connection token used for each account."
         },
         {
           "Cell": "$C$1",
-          "HTMLText": "Values used by ExMint to identify the last successful transactions sync process.",
-          "Width": 161.25,
-          "Height": 76.5
+          "Text": "Values used by ExMint to identify the last successful transactions sync process."
         },
         {
           "Cell": "$D$1",
-          "HTMLText": "Most recent account balance updated by Plaid. This is NOT a realtime balance, so it may not be accurate at the time of synchronization.",
-          "Width": 175.5,
-          "Height": 71.25
+          "Text": "Most recent account balance updated by Plaid. This is NOT a realtime balance, so it may not be accurate at the time of synchronization."
         },
         {
           "Cell": "$E$1",
-          "HTMLText": "Last 4 digits of the account number as reported by the Financial Institution.",
-          "Width": 140.25,
-          "Height": 74.25
+          "Text": "Last 4 digits of the account number as reported by the Financial Institution."
         },
         {
           "Cell": "$F$1",
-          "HTMLText": "Name of the account as reported by Plaid from the financial institution.",
-          "Width": 158.25,
-          "Height": 75.75
+          "Text": "Name of the account as reported by Plaid from the financial institution."
         },
         {
           "Cell": "$G$1",
-          "HTMLText": "Internal identifier of the account used by Plaid and ExMint.",
-          "Width": 144,
-          "Height": 82.5
+          "Text": "Internal identifier of the account used by Plaid and ExMint."
         },
         {
           "Cell": "$H$1",
-          "HTMLText": "Subtype of account as reported by Plaid.",
-          "Width": 152.25,
-          "Height": 80.25
+          "Text": "Subtype of account as reported by Plaid."
         },
         {
           "Cell": "$I$1",
-          "HTMLText": "Type of account as reported by Plaid.",
-          "Width": 126,
-          "Height": 70.5
+          "Text": "Type of account as reported by Plaid."
         }
       ],
       "OtherCells": [
@@ -636,117 +586,79 @@
       "Notes": [
         {
           "Cell": "$A$1",
-          "HTMLText": "Account id used by ExMint to connect this table with the Accounts table.",
-          "Width": 123,
-          "Height": 63
+          "Text": "Account id used by ExMint to connect this table with the Accounts table."
         },
         {
           "Cell": "$B$1",
-          "HTMLText": "Most recent action taken by ExMint on the record. You can safely delete the lines flagged as \"removed\"",
-          "Width": 129.75,
-          "Height": 69
+          "Text": "Most recent action taken by ExMint on the record. You can safely delete the lines flagged as \"removed\""
         },
         {
           "Cell": "$C$1",
-          "HTMLText": "Transaction amount. Negative for debit/loan/spend operations and positive for credit/income transactions.",
-          "Width": 159.75,
-          "Height": 56.25
+          "Text": "Transaction amount. Negative for debit/loan/spend operations and positive for credit/income transactions."
         },
         {
           "Cell": "$D$1",
-          "HTMLText": "This is an AUTOMATIC categorization that PLAID applies to every transaction based on the merchant. You can edit this value to assign a custom category to a specific transaction instead of using the Custom Category table. NOTE 1: Custom Category rules will still be applied to edited values in this column. NOTE 2: If the transaction is not settled, i. e. , Pending column = TRUE then the entire row will be rewritten in a future sync when the transaction is settled.",
-          "Width": 246,
-          "Height": 127.5
+          "Text": "This is an AUTOMATIC categorization that PLAID applies to every transaction based on the merchant. You can edit this value to assign a custom category to a specific transaction instead of using the Custom Category table. NOTE 1: Custom Category rules will still be applied to edited values in this column. NOTE 2: If the transaction is not settled, i. e. , Pending column = TRUE then the entire row will be rewritten in a future sync when the transaction is settled."
         },
         {
           "Cell": "$E$1",
-          "HTMLText": "Date and time when the transaction was recorded",
-          "Width": 157.5,
-          "Height": 81.75
+          "Text": "Date and time when the transaction was recorded"
         },
         {
           "Cell": "$F$1",
-          "HTMLText": "Currency the transaction was settled in.",
-          "Width": 108,
-          "Height": 43.5
+          "Text": "Currency the transaction was settled in."
         },
         {
           "Cell": "$G$1",
-          "HTMLText": "Name or identification of the merchant who received the payment. NOTE: This value is NOT always present.",
-          "Width": 159,
-          "Height": 63.75
+          "Text": "Name or identification of the merchant who received the payment. NOTE: This value is NOT always present."
         },
         {
           "Cell": "$H$1",
-          "HTMLText": "Description of the transaction as recorded by the merchant and reported by the financial institution to Plaid.",
-          "Width": 179.25,
-          "Height": 79.5
+          "Text": "Description of the transaction as recorded by the merchant and reported by the financial institution to Plaid."
         },
         {
           "Cell": "$I$1",
-          "HTMLText": "Identifies whether the transaction was made online, on a store or at an unidentified location (other).",
-          "Width": 144,
-          "Height": 66.75
+          "Text": "Identifies whether the transaction was made online, on a store or at an unidentified location (other)."
         },
         {
           "Cell": "$J$1",
-          "HTMLText": "This column is TRUE when the transaction is still not settled, which means that the transaction may be adjusted, cancelled or confirmed at a future sync.",
-          "Width": 159.75,
-          "Height": 78
+          "Text": "This column is TRUE when the transaction is still not settled, which means that the transaction may be adjusted, cancelled or confirmed at a future sync."
         },
         {
           "Cell": "$K$1",
-          "HTMLText": "Internal unique identifier used by PLAID and ExMint for every transaction.",
-          "Width": 175.5,
-          "Height": 74.25
+          "Text": "Internal unique identifier used by PLAID and ExMint for every transaction."
         },
         {
           "Cell": "$L$1",
-          "HTMLText": "The FORMULA in this column retrieves the name of the account that holds the transaction.",
-          "Width": 183,
-          "Height": 84
+          "Text": "The FORMULA in this column retrieves the name of the account that holds the transaction."
         },
         {
           "Cell": "$M$1",
-          "HTMLText": "The FORMULA in this column retrieves the name of the Financial Institution that holds the account and the transaction.",
-          "Width": 141,
-          "Height": 73.5
+          "Text": "The FORMULA in this column retrieves the name of the Financial Institution that holds the account and the transaction."
         },
         {
           "Cell": "$N$1",
-          "HTMLText": "The complex FORMULA in this column determines the transaction's custom category from the rules in the Custom Category table in the Dashboard. If no rule is a positive match for a transaction, then this column will show the same text from the column 'Categories'.",
-          "Width": 237,
-          "Height": 86.25
+          "Text": "The complex FORMULA in this column determines the transaction's custom category from the rules in the Custom Category table in the Dashboard. If no rule is a positive match for a transaction, then this column will show the same text from the column 'Categories'."
         },
         {
           "Cell": "$O$1",
-          "HTMLText": "This FORMULA calculates the month from the 'Datetime' column. Used in other calculations and filters.",
-          "Width": 165,
-          "Height": 72.75
+          "Text": "This FORMULA calculates the month from the 'Datetime' column. Used in other calculations and filters."
         },
         {
           "Cell": "$P$1",
-          "HTMLText": "This FORMULA calculates the average spending/income for the transaction's category over the trailing 6 months prior to the transaction's month.",
-          "Width": 197.25,
-          "Height": 82.5
+          "Text": "This FORMULA calculates the average spending/income for the transaction's category over the trailing 6 months prior to the transaction's month."
         },
         {
           "Cell": "$Q$1",
-          "HTMLText": "This FORMULA calculates the current month's running total spending/income for the Custom Category associated with the transaction.",
-          "Width": 182.25,
-          "Height": 81.75
+          "Text": "This FORMULA calculates the current month's running total spending/income for the Custom Category associated with the transaction."
         },
         {
           "Cell": "$R$1",
-          "HTMLText": "The FORMULA in this column retrieves the budget created for the transaction's Custom Category using the Budget table in the Dashboard. If no budget has been created for the category, this column uses the value from the 6M Average column.",
-          "Width": 208.5,
-          "Height": 96.75
+          "Text": "The FORMULA in this column retrieves the budget created for the transaction's Custom Category using the Budget table in the Dashboard. If no budget has been created for the category, this column uses the value from the 6M Average column."
         },
         {
           "Cell": "$S$1",
-          "HTMLText": "This FORMULA calulates the remainder of the Custom Category's assigned budget when substracting the monthly spending for that category in the month the transaction happened.",
-          "Width": 193.5,
-          "Height": 80.25
+          "Text": "This FORMULA calulates the remainder of the Custom Category's assigned budget when substracting the monthly spending for that category in the month the transaction happened."
         }
       ],
       "OtherCells": [
@@ -801,9 +713,7 @@
       "Notes": [
         {
           "Cell": "$A$1",
-          "HTMLText": "This auxiliary table is used to determine the monthly alllowance for a budget no matter what frequency the user selects.",
-          "Width": 174.75,
-          "Height": 67.5
+          "Text": "This auxiliary table is used to determine the monthly alllowance for a budget no matter what frequency the user selects."
         }
       ],
       "OtherCells": [
