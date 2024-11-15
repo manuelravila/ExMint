@@ -40,7 +40,7 @@
       "console": "integratedTerminal"
     },
     {
-      "name": "Add-In WEB PROD",
+      "name": "Add-In WEB",
       "type": "node",
       "request": "launch",
       "runtimeExecutable": "npm",
@@ -49,7 +49,7 @@
         "start:web",
         "--",
         "--document",
-        "https://1drv.ms/x/s!AjErl85sZBkZ09ZpE_SzRrURg01lCg?e=hSds4T"
+        "https://1drv.ms/x/s!AjErl85sZBkZ1vg8_KUEEeJwnuRaJw?e=e7mfro"
       ],
       "env": {
         "NODE_ENV": "development"
@@ -60,17 +60,17 @@
   ],
   "compounds": [
     {
-      "name": "Flask and Add-In PROD",
+      "name": "Flask PROD and Add-In",
       "configurations": [
         "ExMint PROD",
         "Excel Add-In"
       ]
     },
     {
-      "name": "Flask and Add-In WEB PROD",
+      "name": "Flask PROD and Add-In WEB",
       "configurations": [
         "ExMint PROD",
-        "Add-In WEB PROD"
+        "Add-In WEB"
       ]
     }
   ]
