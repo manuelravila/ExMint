@@ -1,5 +1,5 @@
 // dashboard.js
-console.log("Dashboard script loaded v3.23");
+console.log("Dashboard script loaded v3.26");
 
 // Initially hide the cards container
 const cardsContainer = document.getElementById('cardsContainer');
@@ -316,8 +316,8 @@ async function importNotes(context, workbook, notesToProcess) {
 
         for (const noteObj of notes) {
             const cellAddress = `${sheet.name}!${noteObj.Cell}`;
-            console.log(`Processing note for cell: ${cellAddress}`);
-            console.log(`Note content to be added: ${noteObj.Text}`);
+            //console.log(`Processing note for cell: ${cellAddress}`);
+            //console.log(`Note content to be added: ${noteObj.Text}`);
 
             // Attempt to delete any existing comment using a try/catch block
             try {
@@ -336,10 +336,10 @@ async function importNotes(context, workbook, notesToProcess) {
                 }
             }
             // Add the new comment using context
-            console.log(`Adding new comment at ${cellAddress}`);
+            //console.log(`Adding new comment at ${cellAddress}`);
             context.workbook.comments.add(cellAddress, noteObj.Text);
             await context.sync();
-            console.log(`Successfully added comment at ${cellAddress}`);
+            //console.log(`Successfully added comment at ${cellAddress}`);
         }
     }
 }
@@ -790,11 +790,13 @@ function createCompositeKey(plaidAccountId, transactionId) {
 function insertTransactionData(context, workbook, data, credentialsWithErrors) {
     const accountsData = [];
     const transactionsData = [];
+    let transactionsUpdated = 0;
+    let transactionsAdded = 0;
+    let transactionsRemoved = 0;
 
     if (data.banks) {
         data.banks.forEach(bank => {
             if (credentialsWithErrors.has(bank.credential_id)) {
-                console.log(`Skipping accounts for credential ID ${bank.credential_id} due to errors.`);
                 return;
             }
 
@@ -816,6 +818,11 @@ function insertTransactionData(context, workbook, data, credentialsWithErrors) {
 
                 if (account.transactions) {
                     account.transactions.forEach(transaction => {
+                        // Skip transactions with "removed" action
+                        if (transaction.action === 'removed') {
+                            return;
+                        }
+
                         const categories = transaction.category ? transaction.category.join(', ') : '';
                         const jsDate = new Date(transaction.date);
                         const excelDate = jsDate.getTime() / (1000 * 60 * 60 * 24) + 25569 + (jsDate.getTimezoneOffset() / (60 * 24));
@@ -851,18 +858,16 @@ function insertTransactionData(context, workbook, data, credentialsWithErrors) {
 
     return context.sync().then(() => {
         const existingAccounts = accountsRange.values.reduce((map, row, index) => {
-            map[row[6]] = { row, index }; // plaid_account_id is at index 6
+            map[row[6]] = { row, index };
             return map;
         }, {});
 
         const existingTransactions = transactionsRange.values.reduce((map, row, index) => {
-            const plaidAccountId = row[0]; 
+            const plaidAccountId = row[0];
             const transactionId = row[10];
             if (plaidAccountId && transactionId) {
                 const compositeKey = createCompositeKey(plaidAccountId, transactionId);
                 map[compositeKey] = { row, index };
-            } else {
-                console.warn(`Skipping transaction at row ${index} due to missing plaidAccountId or transactionId.`);
             }
             return map;
         }, {});
@@ -871,77 +876,75 @@ function insertTransactionData(context, workbook, data, credentialsWithErrors) {
         const newTransactionsData = [];
         const rowsToDeleteAccounts = [];
 
-        // Process Accounts
         accountsData.forEach(accountRow => {
             const plaidAccountId = accountRow[6];
-            if (existingAccounts[plaidAccountId]) {
-                // Only mark for deletion if the account does not have errors
-                if (!credentialsWithErrors.has(existingAccounts[plaidAccountId].row[1])) {
-                    console.log(`Marking account with ID ${plaidAccountId} for deletion.`);
-                    rowsToDeleteAccounts.push(existingAccounts[plaidAccountId].index);
-                }
+            if (existingAccounts[plaidAccountId] && !credentialsWithErrors.has(existingAccounts[plaidAccountId].row[1])) {
+                rowsToDeleteAccounts.push(existingAccounts[plaidAccountId].index);
             }
             newAccountsData.push(accountRow);
         });
 
-        // Delete the account rows that are no longer needed
         if (rowsToDeleteAccounts.length > 0) {
-            // Sort indices in descending order to prevent shifting
             rowsToDeleteAccounts.sort((a, b) => b - a);
             rowsToDeleteAccounts.forEach(rowIndex => {
-                console.log(`Deleting account row at index ${rowIndex}.`);
                 accountsTable.rows.getItemAt(rowIndex).delete();
             });
         }
 
-        // Insert new accounts data
         if (newAccountsData.length > 0) {
-            console.log(`Adding ${newAccountsData.length} new accounts.`);
             accountsTable.rows.add(null, newAccountsData);
         }
 
-        // Process Transactions: Collect rows to delete
+        // First, collect indices of all rows to delete
         const rowsToDeleteTransactions = [];
+
+        // Add indices of rows with "removed" action
+        transactionsRange.values.forEach((row, index) => {
+            if (row[1] === 'removed') {
+                rowsToDeleteTransactions.push(index);
+                transactionsRemoved++;
+            }
+        });
+
+        // Process new transactions and mark existing ones for update
         transactionsData.forEach(transactionRow => {
             const plaidAccountId = transactionRow[0];
             const transactionId = transactionRow[10];
             
             if (!plaidAccountId || !transactionId) {
-                console.warn(`Skipping transaction due to missing plaidAccountId or transactionId:`, transactionRow);
-                return; // Skip this transaction as it lacks necessary identifiers
+                console.error('Transaction skipped: Missing plaidAccountId or transactionId');
+                return;
             }
             
             const compositeKey = createCompositeKey(plaidAccountId.trim(), transactionId.trim());
             
             if (existingTransactions[compositeKey]) {
-                console.log(`Marking existing transaction with composite key: ${compositeKey} for deletion.`);
                 rowsToDeleteTransactions.push(existingTransactions[compositeKey].index);
+                transactionsUpdated++;
+            } else {
+                transactionsAdded++;
             }
             
-            //console.log(`Adding new transaction with composite key: ${compositeKey}`);
             newTransactionsData.push(transactionRow);
         });
 
-        // Delete the transaction rows that are no longer needed
-        if (rowsToDeleteTransactions.length > 0) {
-            // Sort indices in descending order to prevent shifting
-            rowsToDeleteTransactions.sort((a, b) => b - a);
-            rowsToDeleteTransactions.forEach(rowIndex => {
-                // Fetch transaction details for logging before deletion
-                const row = transactionsRange.values[rowIndex];
-                const plaidAccountId = row[0];
-                const transactionId = row[10];
-                console.log(`Deleting existing transaction: ${plaidAccountId}-${transactionId}.`);
-                
+        // Remove duplicates and sort in descending order
+        const uniqueRowsToDelete = [...new Set(rowsToDeleteTransactions)].sort((a, b) => b - a);
+
+        // Delete all marked rows
+        if (uniqueRowsToDelete.length > 0) {
+            uniqueRowsToDelete.forEach(rowIndex => {
                 transactionsTable.rows.getItemAt(rowIndex).delete();
             });
         }
 
-        // After deletions, sync to ensure rows are deleted before insertions
+        console.log(`Transactions updated: ${transactionsUpdated}`);
+        console.log(`Transactions added: ${transactionsAdded}`);
+        console.log(`Transactions removed: ${transactionsRemoved}`);
+
         return context.sync().then(() => {
             if (newTransactionsData.length > 0) {
-                console.log(`Adding ${newTransactionsData.length} new transactions.`);
-                const transactionColumns = transactionsRange.values[0]; // Assuming headers are loaded
+                const transactionColumns = transactionsRange.values[0];
                 const formattedTransactionsData = newTransactionsData.map(transactionRow => {
                     const formattedRow = [];
                     transactionColumns.forEach((column, index) => {
