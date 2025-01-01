@@ -53,6 +53,7 @@ class User(UserMixin, db.Model):
 
 class Credential(db.Model):
     id = db.Column(db.Integer, primary_key=True)
+    item_id = db.Column(db.String(100), nullable=False) 
     status = db.Column(db.String(10), nullable=False, default='Active')
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     institution_name = db.Column(db.String(100))

@@ -1,4 +1,25 @@
-## [5.1] - 2024-11-14
+## [0.6] - 2024-12-30
+
+### Added
+- **`item_id` field** in the `Credential` model:  
+  - This field stores the unique Plaid `item_id` associated with each financial institution connection.  
+  - It allows the backend to correctly identify and handle institutions when Plaid sends webhooks or when existing connections are refreshed.
+- **Plaid webhooks functionality** in the backend:  
+  - **`/handle_token_and_accounts`** (POST) endpoint:  
+    - Uses the new `item_id` to refresh or set up a webhook for an existing institution connection.  
+    - Saves the `item_id` from the Plaid response into the corresponding `Credential` record.  
+  - **`/plaid_webhook`** (POST) endpoint:  
+    - Receives and processes Plaid webhook events.  
+    - Sets `requires_update = True` on the relevant `Credential` if an `ITEM_LOGIN_REQUIRED` or `NEW_ACCOUNTS_AVAILABLE` event is triggered.  
+    - Inserts a record in the `PlaidTransaction` table to log the webhook event and the corresponding institution connection details.  
+
+### Changed
+- **`core_views`** logic enhanced to handle incoming Plaid webhooks.  
+- Existing connection refresh flow updated to incorporate the new `item_id`.
+
+No other changes were introduced in this version.
+
+## [0.5.1] - 2024-11-14
 
 ### Added
 - Added account ID to Transaction Identifier to avoid deletion of incorrect transactions.

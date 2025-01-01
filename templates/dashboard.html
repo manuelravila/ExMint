@@ -80,7 +80,10 @@
                             <ul>
                                 <li v-for="bank in banks" :key="bank.id" class="list-group-item d-flex justify-content-between align-items-center">
                                     <span class="bank-name">[[ bank.institution_name ]]</span>
-                                    <button class="btn btn-danger btn-sm" @click="removeBank(bank)">Remove</button>
+                                    <div class="button-group">
+                                        <button class="btn btn-secondary btn-sm me-2" @click="reconnectBank(bank.id)">Reconnect</button>
+                                        <button class="btn btn-danger btn-sm" @click="removeBank(bank)">Remove</button>
+                                    </div>
                                 </li>
                             </ul>
                         </div>
