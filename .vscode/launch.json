@@ -25,6 +25,29 @@
       "console": "integratedTerminal"
     },
     {
+      "name": "ExMint DEV",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "flask",
+      "env": {
+        "FLASK_APP": "app.py",
+        "FLASK_DEBUG": "1",
+        "FLASK_ENV": "dev",
+        "FLASK_SYS": "windows",
+        "BWS_ACCESS_TOKEN": "0.84191f75-fb78-4c9d-b09e-b141016289a7.yESoFIpw8QnIvvaz2pFlBoKfIOTBLg:KO9PvWb7pQsYbazY91u57A==",
+        "PLAID_WEBHOOK_URL": "https://858d-142-113-182-222.ngrok-free.app/plaid_webhook"
+      },
+      "args": [
+        "run",
+        "--no-reload",
+        "--cert=C:/Users/manue/OneDrive/Intel/ExMint/dev_exmint_me.crt",
+        "--key=C:/Users/manue/OneDrive/Intel/ExMint/dev_exmint_me.key"
+      ],
+      "jinja": true,
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },    
+    {
       "name": "Excel Add-In",
       "type": "node",
       "request": "launch",
@@ -71,6 +94,13 @@
       "configurations": [
         "ExMint PROD",
         "Add-In WEB"
+      ]
+    },
+    {
+      "name": "Flask DEV and Add-In",
+      "configurations": [
+        "ExMint DEV",
+        "Excel Add-In"
       ]
     }
   ]
