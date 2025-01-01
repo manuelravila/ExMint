@@ -4,11 +4,13 @@ from flask_login import login_required, current_user
 from models import db, User, Credential, Account, PlaidTransaction
 from plaid.model.item_remove_request import ItemRemoveRequest
 from plaid.model.accounts_get_request import AccountsGetRequest
-from plaid.model.accounts_balance_get_request import AccountsBalanceGetRequest
+from plaid.model.item_webhook_update_request import ItemWebhookUpdateRequest
+#from plaid.model.accounts_balance_get_request import AccountsBalanceGetRequest
 from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
 from sqlalchemy import and_
 import plaid
 import json
+from datetime import datetime
 from io import StringIO
 import csv
 from config import Config
@@ -22,7 +24,8 @@ def create_link_token():
     data = request.json
     user_id = data.get('user_id')
     access_token = data.get('access_token', None)
-
+    is_refresh = data.get('is_refresh', False)
+    
     link_token_request = {
         'user': {
             'client_user_id': str(user_id),
@@ -32,8 +35,12 @@ def create_link_token():
         'country_codes': ['CA','US'],
         'language': 'en',
         'redirect_uri': 'https://automatos.ca',
+        'webhook': current_app.config['PLAID_WEBHOOK_URL'],
     }
-
+    # Add the "update" field dynamically if is_refresh is True
+    if is_refresh:
+        link_token_request["update"] = {"account_selection_enabled": True}
+        
     if access_token:
         link_token_request['access_token'] = access_token
 
@@ -55,12 +62,38 @@ def handle_token_and_accounts():
         return jsonify({'error': 'User not authenticated'}), 401
 
     try:
+        # Fetch the webhook URL from the environment (via Config)
+        webhook_url = current_app.config['PLAID_WEBHOOK_URL']
+        if not webhook_url:
+            return jsonify({'error': 'Webhook URL is not configured in the environment.'}), 500
+
         if is_refresh:
             print(f"Trying to refresh connection...")
             credential = Credential.query.get(credential_id)
             if not credential:
                 return jsonify({'error': 'Credential not found'}), 404
+            
             access_token = credential.access_token
+            print(f"** Debug: Refreshing with access_token: {access_token}")
+
+            # Update the webhook for the existing item
+            webhook_update_request = {
+                'client_id': current_app.config['PLAID_CLIENT_ID'],
+                'secret': current_app.config['PLAID_SECRET'],
+                'access_token': access_token,
+                'webhook': webhook_url
+            }
+            webhook_update_response = current_app.plaid_client.item_webhook_update(webhook_update_request)
+            webhook_update_data = webhook_update_response.to_dict()
+            print(f"** Debug: Webhook updated for refresh. Response: {webhook_update_data}")
+
+            # Extract and update the item_id in the Credential table
+            item_id = webhook_update_data['item']['item_id']
+            print(f"Item ID during refresh: {item_id}")
+            credential.item_id = item_id
+            db.session.commit()
+            print(f"Connection refreshed...")
+
         else:
             print(f"Trying to add new connection...")
             public_token = data['public_token']
@@ -68,21 +101,25 @@ def handle_token_and_accounts():
             exchange_request = ItemPublicTokenExchangeRequest(public_token=public_token)
             exchange_response = current_app.plaid_client.item_public_token_exchange(exchange_request)
             access_token = exchange_response['access_token']
+            item_id = exchange_response['item']['item_id']  # Extract item_id
+            print(f"Item ID during creation: {item_id}")
 
             credential = Credential(
                 user_id=current_user.id,
                 access_token=access_token,
                 institution_name=institution_name,
+                item_id=item_id,  # Store the item_id
                 requires_update=False
             )
             db.session.add(credential)
             db.session.commit()
-            
+
             credential_id = credential.id
 
+        # Fetch accounts using the access token
         accounts_request = AccountsGetRequest(access_token=access_token)
         accounts_response = current_app.plaid_client.accounts_get(accounts_request)
-        
+
         accounts_data = accounts_response.to_dict().get('accounts', [])
         for account in accounts_data:
             plaid_account_id = account.get('account_id')
@@ -101,7 +138,7 @@ def handle_token_and_accounts():
                 existing_account.is_enabled = is_enabled
             else:
                 new_account = Account(
-                    status='Active',  # Assuming status is 'Active' since it's not in the account data
+                    status='Active', 
                     credential_id=credential_id,
                     plaid_account_id=plaid_account_id,
                     name=name,
@@ -112,7 +149,7 @@ def handle_token_and_accounts():
                 )
                 db.session.add(new_account)
         db.session.commit()
-        
+
         filtered_response = {
             'item': accounts_response['item'],
             'request_id': accounts_response['request_id']
@@ -133,7 +170,7 @@ def handle_token_and_accounts():
         db.session.refresh(credential)  # Refresh the instance to get the latest state from the DB
 
         return jsonify({'status': 'success', 'message': 'Bank connection added successfully'})
-    
+
     except Exception as e:
         print(f"Error in handle_token_and_accounts: {str(e)}")
         db.session.rollback()
@@ -458,6 +495,68 @@ def refresh_accounts(credential_id, accounts_data):
             existing_account.status = 'Inactive'
 
     db.session.commit()
+
+@core.route('/plaid_webhook', methods=['POST'])
+def plaid_webhook():
+    data = request.get_json()
+
+    # Extract relevant fields from the payload
+    timestamp = datetime.now()
+    environment = data.get('environment', 'Unknown')
+    error = data.get('error', {}) or {}  # Handle None by defaulting to an empty dictionary
+    error_code = error.get('error_code', 'None')
+    item_id = data.get('item_id', 'Unknown')
+    webhook_code = data.get('webhook_code', 'Unknown')
+    webhook_type = data.get('webhook_type', 'Unknown')
+    request_id = data.get('request_id', 'Unknown')
+    status = error.get('status', 'Unknown')
+
+    # Log the incoming webhook
+    print("***** INCOMING WEBHOOK *****")
+    print(f"Data: {data}")
+
+    # Handle ITEM_LOGIN_REQUIRED
+    if webhook_type == "ITEM" and webhook_code in ["ERROR", "NEW_ACCOUNTS_AVAILABLE"]:
+        try:
+            # Find the related Credential in the database
+            credential = Credential.query.filter_by(item_id=item_id).first()
+
+            if credential:
+                # Extract the user_id from the Credential
+                user_id = credential.user_id
+                if not user_id:
+                    print(f"Warning: No user_id found for Credential ID: {credential.id}")
+                    return jsonify({"status": "ok"}), 200
+
+                credential.requires_update = True
+                db.session.commit()
+                print(f"Updated Credential (ID: {credential.id}) with requires_update=True")
+
+                # Add a record to the PlaidTransaction table
+                plaid_transaction = PlaidTransaction(
+                    timestamp=timestamp,
+                    user_id=user_id,
+                    user_ip='3.171.22.34', 
+                    credential_id=credential.id,
+                    account_id=None,  # Not relevant for ITEM_LOGIN_REQUIRED or NEW_ACCOUNTS_AVAILABLE
+                    operation=error_code if webhook_code == "ERROR" else webhook_code,
+                    response=str(data),  # Store the entire webhook payload
+                    posted_transactions=None,
+                    pending_transactions=None
+                )
+                db.session.add(plaid_transaction)
+                db.session.commit()
+
+                print(f"Updated Credential (ID: {credential.id}) with requires_update=True")
+                print(f"Added PlaidTransaction record for Credential ID: {credential.id}")
+            else:
+                print(f"No Credential found for Item ID: {item_id}")
+        except Exception as e:
+            print(f"Error handling ITEM_LOGIN_REQUIRED: {str(e)}")
+            db.session.rollback()
+
+    return jsonify({"status": "ok"}), 200
+
 
 def json_csv(transactions, action):
     si = StringIO()

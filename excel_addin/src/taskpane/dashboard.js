@@ -1,5 +1,5 @@
 // dashboard.js
-console.log("Dashboard script loaded v3.26");
+console.log("Dashboard script loaded v3.3");
 
 // Initially hide the cards container
 const cardsContainer = document.getElementById('cardsContainer');
@@ -22,6 +22,13 @@ $('.sync-transactions-btn').click(function () {
 
 Office.onReady(() => {
     $(document).ready(function () {
+        // Check if user is authenticated
+        const token = localStorage.getItem('authToken');
+        if (token) {
+            // Call our new function to show success/error cards
+            loadBankData();
+        }
+
         $('.open-dashboard-btn').click(function () {
             const token = localStorage.getItem('authToken');
             if (token) {
@@ -1042,6 +1049,104 @@ async function refreshAllPivotTables(context, workbook) {
         console.error('Error refreshing pivot tables:', error);
         showToast('Failed to refresh pivot tables. Please try again.', 'error');
     }
+}
+
+function loadBankData() {
+    const token = localStorage.getItem('authToken');
+    if (!token) {
+        console.error('No token found. User might not be logged in.');
+        return;
+    }
+
+    // Clear existing cards (so we don't get duplicates each time)
+    while (cardsContainer.firstChild) {
+        cardsContainer.removeChild(cardsContainer.firstChild);
+    }
+    cardsContainer.style.display = 'none';
+
+    fetch(`${window.appConfig.backEndUrl}/dashboard-data`, {
+        method: 'GET',
+        headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+            'X-Request-Source': 'Excel-Add-In'
+        }
+    })
+    .then(response => {
+        if (!response.ok) {
+            // For example, 401 if token is invalid
+            throw new Error('Failed to fetch bank data');
+        }
+        return response.json(); // { banks: [...] }
+    })
+    .then(data => {
+        if (!data.banks) {
+            console.warn('No banks found in response');
+            return;
+        }
+
+        const banks = data.banks;
+        const banksNeedingUpdate = banks.filter(b => b.requires_update);
+        const banksNotNeedingUpdate = banks.filter(b => !b.requires_update);
+
+        const updateCount = banksNeedingUpdate.length;
+        const successCount = banksNotNeedingUpdate.length;
+
+        // If there's at least one bank that does NOT require update => success card
+        if (successCount > 0) {
+            const successCard = document.createElement('div');
+            successCard.className = 'success-card institutions-success-card';
+
+            const closeButton = document.createElement('button');
+            closeButton.className = 'close-button';
+            closeButton.innerHTML = '&times;';
+            closeButton.addEventListener('click', () => {
+                successCard.remove();
+                if (cardsContainer.children.length === 0) {
+                    cardsContainer.style.display = 'none';
+                }
+            });
+
+            const message = document.createElement('div');
+            message.innerHTML = `<strong>${successCount} Institutions loaded successfully</strong>`;
+
+            successCard.appendChild(closeButton);
+            successCard.appendChild(message);
+            cardsContainer.appendChild(successCard);
+            cardsContainer.style.display = 'block';
+        }
+
+        // If there's at least one bank that DOES require update => error card
+        if (updateCount > 0) {
+            const errorCard = document.createElement('div');
+            errorCard.className = 'error-card institutions-error-card';
+
+            const closeButton = document.createElement('button');
+            closeButton.className = 'close-button';
+            closeButton.innerHTML = '&times;';
+            closeButton.addEventListener('click', () => {
+                errorCard.remove();
+                if (cardsContainer.children.length === 0) {
+                    cardsContainer.style.display = 'none';
+                }
+            });
+
+            const message = document.createElement('div');
+            message.innerHTML = `
+                <strong>${updateCount} Institutions require update.</strong><br>
+                Click 'Open Dashboard' and reconnect the required banks.
+            `;
+
+            errorCard.appendChild(closeButton);
+            errorCard.appendChild(message);
+            cardsContainer.appendChild(errorCard);
+            cardsContainer.style.display = 'block';
+        }
+    })
+    .catch(error => {
+        console.error('Error in loadBankData:', error);
+        showToast('Failed to load institution info. Please try again.', 'error');
+    });
 }
 
 function createCard(type, bankName, operation, transactionCount, errorCode, errorMessage) {

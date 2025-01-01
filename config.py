@@ -46,6 +46,7 @@ class Config:
     # Plaid credentials
     PLAID_CLIENT_ID = get_secret('PLAID_CLIENT_ID')
     PLAID_SECRET = get_secret('PLAID_SECRET')
+    PLAID_WEBHOOK_URL = os.getenv('PLAID_WEBHOOK_URL')
     
     # Email configuration
     MAIL_SERVER = 'mail.exmint.me'

@@ -111,6 +111,25 @@ def dashboard():
 
     return render_template('dashboard.html', title='Dashboard', form=form, is_profile_update=True, modal_open=modal_open, connections_modal_open=connections_modal_open)
 
+@views.route('/dashboard-data', methods=['GET'])
+@combined_required
+def dashboard_data():
+    user = current_user
+
+    # Retrieve the user’s banks from DB
+    banks = Credential.query.filter_by(user_id=user.id, status='Active').all()
+
+    # Build the JSON response
+    banks_data = []
+    for bank in banks:
+        banks_data.append({
+            'id': bank.id,
+            'institution_name': bank.institution_name,
+            'requires_update': bank.requires_update
+        })
+
+    return jsonify({'banks': banks_data})
+
 @views.route('/register', methods=['GET', 'POST'])
 def register():
     if current_user.is_authenticated:
