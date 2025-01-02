@@ -13,12 +13,12 @@ rm -f /app/dist/catalog/manifest*.xml
 if [ "$FLASK_ENV" = "stag" ]; then
     echo "Using staging manifest file"
     cp /app/dist/manifest-stag.xml /app/dist/manifest.xml
-    cp /app/dist/manifest-stag.xml /app/dist/catalog/manifest-stag.xml
+    cp /app/dist/manifest-stag.xml /app/dist/catalog/manifest.xml
 
 elif [ "$FLASK_ENV" = "main" ]; then
     echo "Using production manifest file"
     cp /app/dist/manifest-prod.xml /app/dist/manifest.xml
-    cp /app/dist/manifest-prod.xml /app/dist/catalog/manifest-prod.xml
+    cp /app/dist/manifest-prod.xml /app/dist/catalog/manifest.xml
 fi
 
 # Start the http-server to serve the application
