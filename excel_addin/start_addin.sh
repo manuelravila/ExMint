@@ -6,8 +6,8 @@ FLASK_ENV=$(echo "$FLASK_ENV" | xargs)
 echo "Current FLASK_ENV: '$FLASK_ENV'"
 
 # Create catalog folder and remove old manifests
-mkdir -p ./app/dist/catalog
-rm -f ./app/dist/catalog/manifest*.xml
+mkdir -p /app/dist/catalog
+rm -f /app/dist/catalog/manifest*.xml
 
 # Use the correct directory for copying the manifest files
 if [ "$FLASK_ENV" = "stag" ]; then
