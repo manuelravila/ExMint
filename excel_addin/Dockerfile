@@ -1,5 +1,5 @@
 # Use an official Node.js runtime as a parent image
-FROM node:18
+FROM node:20
 
 # Set the working directory
 WORKDIR /app
@@ -8,10 +8,10 @@ WORKDIR /app
 COPY . /app
 
 # Upgrade npm to the latest version
-RUN npm install -g npm@11.0.0
+RUN npm install -g npm@latest
 
 # Upgrade @azure/msal-node package to the latest version
-RUN npm install @azure/msal-node@2.6.2
+RUN npm install @azure/msal-node@latest
 
 # Install dependencies, including devDependencies
 RUN npm install
