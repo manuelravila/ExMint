@@ -8,10 +8,10 @@ WORKDIR /app
 COPY . /app
 
 # Upgrade npm to the latest version
-RUN npm install -g npm@latest
+RUN npm install -g npm@11.0.0
 
 # Upgrade @azure/msal-node package to the latest version
-RUN npm install @azure/msal-node@latest
+RUN npm install @azure/msal-node@2.6.2
 
 # Install dependencies, including devDependencies
 RUN npm install
