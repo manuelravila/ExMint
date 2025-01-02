@@ -13,13 +13,19 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
+# Create catalog folder and remove old manifests
+mkdir -p ./excel_addin/catalog
+rm -f ./excel_addin/catalog/manifest-*.xml
+
 if [ "$FLASK_ENV" = "stag" ]; then
     echo "Using staging manifest file"
     cp ./excel_addin/manifest-stag.xml ./excel_addin/manifest.xml
+    cp ./excel_addin/manifest-stag.xml ./excel_addin/catalog/manifest-stag.xml
 
 elif [ "$FLASK_ENV" = "prod" ]; then
     echo "Using production manifest file"
     cp ./excel_addin/manifest-prod.xml ./excel_addin/manifest.xml
+    cp ./excel_addin/manifest-prod.xml ./excel_addin/catalog/manifest-prod.xml
 fi
 
 if [ "$FLASK_ENV" = "dev" ]; then
