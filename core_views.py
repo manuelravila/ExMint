@@ -463,8 +463,7 @@ def get_access_token_for_bank(credential_id):
     except Exception as e:
         return jsonify({'error': 'Failed to retrieve access token', 'message': str(e)}), 500
 
-# Helper functions
-
+# CANDIDATE FOR DELETION, THIS FUNCTION DOES NOT SEEM TO BE USED ANYWHERE:
 def refresh_accounts(credential_id, accounts_data):
     existing_accounts = Account.query.filter_by(credential_id=credential_id).all()
     existing_account_ids = {account.plaid_account_id for account in existing_accounts}
