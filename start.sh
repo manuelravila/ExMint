@@ -5,6 +5,14 @@ FLASK_ENV=$(echo "$FLASK_ENV" | xargs)
 
 echo "Current FLASK_ENV: '$FLASK_ENV'"
 
+# Apply database migrations
+echo "Applying database migrations..."
+flask db upgrade
+if [ $? -ne 0 ]; then
+    echo "Error: Database migration failed!"
+    exit 1
+fi
+
 if [ "$FLASK_ENV" = "stag" ]; then
     echo "Using staging manifest file"
     cp ./excel_addin/manifest-stag.xml ./excel_addin/manifest.xml
