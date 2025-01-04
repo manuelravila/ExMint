@@ -36,10 +36,12 @@ def create_link_token():
         'language': 'en',
         'redirect_uri': 'https://automatos.ca',
         'webhook': current_app.config['PLAID_WEBHOOK_URL'],
+        "update": {
+        "account_selection_enabled": True
+        },
     }
-    # Add the "update" field dynamically if is_refresh is True
-    if is_refresh:
-        link_token_request["update"] = {"account_selection_enabled": True}
+
+    link_token_request["update"] = {"account_selection_enabled": True}
         
     if access_token:
         link_token_request['access_token'] = access_token
