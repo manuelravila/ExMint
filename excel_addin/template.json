@@ -98,7 +98,7 @@
               "CustomName": "Subtotal",
               "SummarizedBy": "Sum",
               "ShowValuesAs": "None",
-              "NumberFormat": "$#,##0.00"
+              "NumberFormat": "$#,##0"
             },
             {
               "Name": "6M AVG",
