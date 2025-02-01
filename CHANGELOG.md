@@ -1,4 +1,4 @@
-## [0.61] - 2025-02-01
+## [0.6.1] - 2025-02-01
 
 ### Fixed
 - **Plaid Token Exchange Parsing in `/handle_token_and_accounts`:**  
