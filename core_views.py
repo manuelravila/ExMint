@@ -103,7 +103,7 @@ def handle_token_and_accounts():
             exchange_request = ItemPublicTokenExchangeRequest(public_token=public_token)
             exchange_response = current_app.plaid_client.item_public_token_exchange(exchange_request)
             access_token = exchange_response['access_token']
-            item_id = exchange_response['item']['item_id']  # Extract item_id
+            item_id = exchange_response['item_id']  # Extract item_id
             print(f"Item ID during creation: {item_id}")
 
             credential = Credential(
