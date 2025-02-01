@@ -1,3 +1,11 @@
+## [0.61] - 2025-02-01
+
+### Fixed
+- **Plaid Token Exchange Parsing in `/handle_token_and_accounts`:**  
+  - Corrected the extraction of the `item_id` from Plaid’s public token exchange response when adding new accounts.  
+  - The code now retrieves `item_id` directly from the top-level of the response (i.e., using `exchange_response['item_id']`) instead of attempting to access a nested `item` attribute.  
+  - This fix resolves the error encountered during the creation of new bank connections.
+
 ## [0.6] - 2024-12-30
 
 ### Added

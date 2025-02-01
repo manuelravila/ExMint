@@ -11,7 +11,8 @@
         "FLASK_DEBUG": "1",
         "FLASK_ENV": "main",
         "FLASK_SYS": "windows",
-        "BWS_ACCESS_TOKEN": "0.10ec7297-56b5-4a58-8d3c-b1410151b26a.IilojVqmK4CAheLPPGr4axElyIZje8:7S5R3sWZDmwGnshlNssRxQ=="
+        "BWS_ACCESS_TOKEN": "0.10ec7297-56b5-4a58-8d3c-b1410151b26a.IilojVqmK4CAheLPPGr4axElyIZje8:7S5R3sWZDmwGnshlNssRxQ==",
+        "PLAID_WEBHOOK_URL": "https://app.exmint.me/plaid_webhook"
       },
       "args": [
         "run",
@@ -35,7 +36,7 @@
         "FLASK_ENV": "dev",
         "FLASK_SYS": "windows",
         "BWS_ACCESS_TOKEN": "0.84191f75-fb78-4c9d-b09e-b141016289a7.yESoFIpw8QnIvvaz2pFlBoKfIOTBLg:KO9PvWb7pQsYbazY91u57A==",
-        "PLAID_WEBHOOK_URL": "https://858d-142-113-182-222.ngrok-free.app/plaid_webhook"
+        "PLAID_WEBHOOK_URL": "https://b2e1-99-237-185-46.ngrok-free.app/plaid_webhook"
       },
       "args": [
         "run",
