@@ -1,3 +1,4 @@
+// vueProfile.js
 function showToast(message, type = 'success') {
     var container = document.getElementById('toast-container');
     var toast = document.createElement('div');
@@ -17,7 +18,6 @@ function showToast(message, type = 'success') {
 var app = new Vue({
     el: '#profileModal',
     data: {
-        username: '',
         email: '',
         password: '',
         passwordConfirmation: '',
@@ -28,7 +28,6 @@ var app = new Vue({
             var csrfToken = document.getElementById('csrf_token').value; // Retrieve CSRF token
 
             var payload = {
-                username: this.username,
                 email: this.email
             };
 
@@ -96,7 +95,6 @@ var app = new Vue({
                 })
                 .then(data => {
                     console.log("User info received:", data);  // Log received data
-                    this.username = data.username;
                     this.email = data.email;
                     this.token = data.token;  // Adjust to use token_info
                     // Example: Accessing a specific field in token payload

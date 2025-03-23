@@ -89,7 +89,8 @@ function getCursors() {
     const uniquePairs = new Set();
     credentialIdValues.values.flat().forEach((credentialId, index) => {
       const cursor = nextCursorValues.values.flat()[index];
-      if (cursor) {
+      // Only add the pair if the cursor is non-empty and (optionally) meets a length requirement
+      if (cursor && cursor.length >= 10) {
         uniquePairs.add(`${credentialId}:${cursor}`);
       }
     });
@@ -154,6 +155,7 @@ function syncTransactions() {
             if (response.ok) {
                 console.log('Sync response OK');
                 const data = await response.json();
+
                 updateLoaderMessage('Updating Tables');
                 await processTransactionData(context, workbook, data);
                 updateLoaderMessage('Refreshing Formulas');
