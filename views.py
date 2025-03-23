@@ -40,7 +40,7 @@ def combined_required(f):
                     print(f"User ID from cookie token: {user_id}")
                     user = User.query.get(user_id)
                     if user:
-                        print(f"User found: {user.username}")
+                        print(f"User found: {user.email}")
                         login_user(user)
                         return f(*args, **kwargs)
                 else:
@@ -66,10 +66,35 @@ def index():
         return redirect(url_for('views.dashboard'))
     return redirect(url_for('views.login'))
 
+def send_activation_email_to(email, subject):
+    """
+    Generates an activation token using 'email-activate-salt', builds the activation URL,
+    and sends an activation email using Flask-Mail.
+    """
+    from itsdangerous import URLSafeTimedSerializer
+    serializer = URLSafeTimedSerializer(current_app.config['SECRET_KEY'])
+    activation_token = serializer.dumps(email, salt='email-activate-salt')
+    activation_url = url_for('views.activate_account', token=activation_token, _external=True, suffix=current_app.config.get('SUFFIX', ''))
+    
+    html_content = render_template('activation_email.html', activation_url=activation_url, suffix=current_app.config.get('SUFFIX', ''))
+    
+    from flask_mail import Message
+    msg = Message(subject,
+                  sender=current_app.config['MAIL_USERNAME'],
+                  recipients=[email])
+    msg.html = html_content
+    try:
+        mail.send(msg)
+        print(f"Activation email sent to {email}")
+        return True
+    except Exception as e:
+        current_app.logger.error("Error sending activation email: %s", e)
+        return False
+
+
 @views.route('/dashboard', methods=['GET', 'POST'])
 @combined_required
 def dashboard():
-    
     user = current_user
     form = ProfileForm(obj=user)
 
@@ -83,31 +108,43 @@ def dashboard():
 
     if form.validate_on_submit():
         if 'submit' in request.form:
-            # Update user profile
-            user.username = form.username.data
-            user.email = form.email.data
+            # If the email has changed, update email/username, mark user as pending, and send reactivation email
+            if form.email.data != user.email:
+                user.email = form.email.data
+                user.status = 'Pending'
+                
+                if send_activation_email_to(user.email, "Re-Activate Your ExMint Account"):
+                    flash("Your email has been changed. Please check your new email to re-activate your account.", "info")
+                else:
+                    flash("Error sending re-activation email. Please try again.", "danger")
+            
+            # Update password if provided
             if form.password.data:
-                user.set_password(form.password.data)  # Assuming you have a method to set password
-
-            # Feedback message for profile update
+                user.set_password(form.password.data)
+            
+            # (Ignore any changes to the username field)
             flash('Your profile has been updated!', 'success')
 
         elif 'regenerate_token' in request.form:
             # Logic to regenerate token
-            new_token = user.generate_auth_token()
-            form.token.data = new_token 
-            flash('Token regenerated successfully!', 'success')
-            session['modal_open'] = True  # Set session variable
-            return redirect(url_for('views.dashboard', modal_open='true'))  # Add query parameter
-
-        # Save changes to the database
-        db.session.commit()
-
-        # Clear the session variables
-        session.pop('modal_open', None)  
-        session.pop('connections_modal_open', None)
-
-        return redirect(url_for('views.dashboard'))
+            new_token = user.generate_auth_token()  # This now returns the token value
+            form.token.data = new_token
+            
+            # Make sure new_token is not None before setting cookie
+            if new_token:
+                flash('Token regenerated successfully!', 'success')
+                session['modal_open'] = True  # Set session variable
+                
+                # Create a response that updates the cookie
+                response = redirect(url_for('views.dashboard', modal_open='true'))
+                response.set_cookie('token', new_token, 
+                                    httponly=True, 
+                                    secure=current_app.config['SESSION_COOKIE_SECURE'], 
+                                    samesite=current_app.config['SESSION_COOKIE_SAMESITE'])
+                return response
+            else:
+                flash('Error regenerating token!', 'danger')
+                return redirect(url_for('views.dashboard'))
 
     return render_template('dashboard.html', title='Dashboard', form=form, is_profile_update=True, modal_open=modal_open, connections_modal_open=connections_modal_open)
 
@@ -137,26 +174,51 @@ def register():
 
     form = RegistrationForm()
     if form.validate_on_submit():
+        email = form.email.data
         hashed_password = generate_password_hash(form.password.data)
-        try:
-            user = User(username=form.username.data, email=form.email.data, password_hash=hashed_password)
-            db.session.add(user)
-            db.session.commit()
-            token = user.generate_auth_token()  # Generate and save the token
-            login_user(user)  # Log in the user
-            
-            response = redirect(url_for('views.dashboard'))
-            response.set_cookie('token', token, 
-                                httponly=True, 
-                                secure=current_app.config['SESSION_COOKIE_SECURE'], 
-                                samesite=current_app.config['SESSION_COOKIE_SAMESITE'])
-            flash('Your account has been created! You are now logged in.', 'success')
-            return response
-        except Exception as e:
-            flash(str(e), 'danger')
-            return render_template('register.html', suffix=current_app.config['SUFFIX'], form=form)
+        
+        # Create new user with status 'Pending'; set username to email temporarily
+        user = User(email=email, password_hash=hashed_password, status='Pending')
+        db.session.add(user)
+        db.session.commit()
+        
+        # Generate and send activation email using the helper
+        if not send_activation_email_to(email, "Activate Your ExMint Account"):
+            flash("Error sending activation email. Please try again.", "danger")
+            return redirect(url_for('views.register'))
+        
+        flash("Registration successful! Please check your email to activate your account.", "info")
+        return redirect(url_for('views.login'))
 
-    return render_template('register.html', title='Register', suffix=current_app.config['SUFFIX'], form=form)
+    return render_template('register.html', title='Register', suffix=current_app.config.get('SUFFIX', ''), form=form)
+
+
+@views.route('/activate/<token>')
+def activate_account(token):
+    serializer = URLSafeTimedSerializer(current_app.config['SECRET_KEY'])
+    try:
+        email = serializer.loads(token, salt='email-activate-salt', max_age=86400)  # Token valid for 1 day
+    except (SignatureExpired, BadSignature):
+        flash("The activation link is invalid or has expired.", "danger")
+        return redirect(url_for('views.login'))
+
+    user = User.query.filter_by(email=email).first()
+    if not user:
+        flash("User not found.", "danger")
+        return redirect(url_for('views.register'))
+
+    if user.status == "Active":
+        flash("Your account is already active. You can log in directly.", "warning")
+        return redirect(url_for('views.login'))
+
+    # Update user status to Active
+    user.status = "Active"
+    # Generate semipermanent token
+    user.generate_auth_token()
+    db.session.commit()
+
+    flash("Your account has been activated! You may now log in.", "success")
+    return redirect(url_for('views.login'))
 
 @views.route('/login', methods=['GET', 'POST'])
 def login():
@@ -183,12 +245,17 @@ def handle_login_request():
 
     # Authenticate the user
     if username_or_email and password:
-        user = User.query.filter((User.username == username_or_email) | (User.email == username_or_email)).first()
+        user = User.query.filter(User.email == username_or_email).first()
         if user and check_password_hash(user.password_hash, password):
-            login_user(user, remember=True)
+            # Check if user has activated their account
+            if user.status != 'Active':  # Add this check
+                error_message = 'Account not activated. Please check your email for the activation link.'
+                return handle_unsuccessful_login(error_message)
+            
+            login_user(user, remember=False)
             return handle_successful_login(user)
         else:
-            error_message = 'Login Unsuccessful. Please check username and password'
+            error_message = 'Login Unsuccessful. Please check email and password'
     else:
         error_message = 'Login or password not provided'
 
@@ -335,7 +402,6 @@ def get_user_info():
         user.generate_auth_token()  # Renew the token
 
     user_info = {
-        "username": user.username,
         "email": user.email,
         "token": user.token # Return the token string directly
     }

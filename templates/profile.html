@@ -1,12 +1,10 @@
+<!-- profile.html -->
 {% extends 'base.html' %}
 
 {% block content %}
     <h1>Profile Page</h1>
     <form method="POST" action="/profile">
         {{ form.hidden_tag() }}
-        <div>
-            {{ form.username.label }} {{ form.username }}
-        </div>
         <div>
             {{ form.email.label }} {{ form.email }}
         </div>
