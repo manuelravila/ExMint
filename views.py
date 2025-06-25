@@ -68,8 +68,7 @@ def index():
 
 def send_activation_email_to(email, subject):
     """
-    Generates an activation token using 'email-activate-salt', builds the activation URL,
-    and sends an activation email using Flask-Mail.
+    Generates an activation token using 'email-activate-salt', builds the activation URL, and sends an activation email using Flask-Mail.
     """
     from itsdangerous import URLSafeTimedSerializer
     serializer = URLSafeTimedSerializer(current_app.config['SECRET_KEY'])
