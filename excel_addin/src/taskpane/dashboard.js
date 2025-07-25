@@ -1,6 +1,8 @@
 // dashboard.js
 console.log("Dashboard script loaded v3.3");
 
+
+
 // Initially hide the cards container
 const cardsContainer = document.getElementById('cardsContainer');
 cardsContainer.style.display = 'none';
@@ -792,8 +794,16 @@ async function createPivotTables(context, workbook) {
     }
 }
 
+// dashboard.js
+
 function createCompositeKey(plaidAccountId, transactionId) {
     return `${plaidAccountId}_${transactionId}`;
+}
+
+// NEW: Function to create a more robust transaction fingerprint
+function createTransactionFingerprint(transaction, account) {
+    // A fingerprint based on stable properties to identify duplicates across different credentials
+    return `${transaction.date}_${transaction.amount.toFixed(2)}_${transaction.name.trim()}_${account.mask}`;
 }
 
 function insertTransactionData(context, workbook, data, credentialsWithErrors) {
@@ -802,6 +812,9 @@ function insertTransactionData(context, workbook, data, credentialsWithErrors) {
     let transactionsUpdated = 0;
     let transactionsAdded = 0;
     let transactionsRemoved = 0;
+
+    // NEW: Set to track fingerprints of transactions processed in this sync run
+    const processedFingerprints = new Set();
 
     if (data.banks) {
         data.banks.forEach(bank => {
@@ -831,6 +844,15 @@ function insertTransactionData(context, workbook, data, credentialsWithErrors) {
                         if (transaction.action === 'removed') {
                             return;
                         }
+
+                        // CHANGED: Use the new fingerprinting logic to avoid duplicates
+                        const fingerprint = createTransactionFingerprint(transaction, account);
+                        if (processedFingerprints.has(fingerprint)) {
+                            console.log(`Skipping duplicate transaction (by fingerprint): ${transaction.name}`);
+                            return; // Skip this duplicate transaction
+                        }
+                        processedFingerprints.add(fingerprint);
+                        // END CHANGED
 
                         const categories = transaction.category ? transaction.category.join(', ') : '';
                         const jsDate = new Date(transaction.date);
