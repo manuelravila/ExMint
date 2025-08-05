@@ -157,3 +157,15 @@ No other changes were introduced in this version.
 
 ### Changed
 - Updated Flask framework from 1.1.2 to 1.1.3 for improved security.
+
+Of course, Manuel. Here is the changelog entry for the recent changes.
+
+## [0.63] - 2024-05-24
+### Fixed
+- Resolved a critical issue where duplicate transactions would appear in the Excel `Transactions` table if the same bank account was linked to ExMint more than once.
+
+### Added
+- A new `createTransactionFingerprint` helper function in `dashboard.js` to generate a unique identifier for transactions based on their stable properties (date, amount, name, account mask).
+
+### Changed
+- Updated the transaction processing logic in `dashboard.js` (`insertTransactionData` function) to use the new fingerprinting method, ensuring that transactions from duplicate bank connections are identified and skipped during the sync process.
