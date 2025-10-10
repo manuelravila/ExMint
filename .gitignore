@@ -2,5 +2,7 @@ __pycache__/
 *.pyc
 logs/
 venv/
+.venv/
 excel_addin/dist/
 excel_addin/node_modules/
+secrets.lock

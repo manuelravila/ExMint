@@ -11,14 +11,31 @@
                     <form action="{{ url_for('views.login') }}" method="post" class="border p-4 rounded">
                         {{ form.hidden_tag() }}
                         <div class="form-group">
-                            {{ form.login.label(class="form-control-label") }}
-                            {{ form.login(class="form-control", placeholder="Email") }}
+                            <label for="login" class="form-control-label">Email</label>
+                            <input
+                                type="email"
+                                id="login"
+                                name="login"
+                                class="form-control"
+                                placeholder="Email"
+                                required
+                                value="{{ request.form.get('login', '') }}"
+                                autocomplete="username"
+                            >
                         </div>
                         <div class="form-group">
-                            {{ form.password.label(class="form-control-label") }}
-                            {{ form.password(class="form-control", placeholder="Password") }}
+                            <label for="password" class="form-control-label">Password</label>
+                            <input
+                                type="password"
+                                id="password"
+                                name="password"
+                                class="form-control"
+                                placeholder="Password"
+                                required
+                                autocomplete="current-password"
+                            >
                         </div>
-                        {{ form.submit(class="btn btn-primary") }}
+                        <button type="submit" class="btn btn-primary">Log In</button>
                     </form>
                     <div class="login-links mt-3">
                         <a href="{{ url_for('views.reset_password') }}">I forgot my password 🤦‍♂️</a><br>

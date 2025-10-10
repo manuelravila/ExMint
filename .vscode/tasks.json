@@ -1,0 +1,25 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Open Dev DB tunnel",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "-lc",
+        "if lsof -iTCP:3307 -sTCP:LISTEN -Pn 2>/dev/null | grep -q ssh; then exit 0; fi; ssh -f -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o StrictHostKeyChecking=accept-new -L 3307:127.0.0.1:3306 root@automatos.ca"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Open Prod DB tunnel",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "-lc",
+        "if lsof -iTCP:3308 -sTCP:LISTEN -Pn 2>/dev/null | grep -q ssh; then exit 0; fi; ssh -f -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o StrictHostKeyChecking=accept-new -L 3308:127.0.0.1:3306 root@automatos.ca"
+      ],
+      "problemMatcher": []
+    }
+  ]
+}

@@ -2,9 +2,8 @@
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import UserMixin
 from sqlalchemy_utils import EncryptedType
-import jwt
+from werkzeug.security import generate_password_hash
 import datetime
-from flask import request
 from config import Config
 
 db = SQLAlchemy()
@@ -19,48 +18,11 @@ class User(UserMixin, db.Model):
     status = db.Column(db.String(20), nullable=False, default='Active')
     role = db.Column(db.String(20), nullable=False, default='User')
 
-    token = db.Column(EncryptedType(db.String, key))
-
     # Relationship with Subscription
     subscriptions = db.relationship('Subscription', backref='owner', lazy=True)
 
-    def generate_auth_token(self):
-        print(f"Generating new token for user ID: {self.id}")
-
-        payload = {
-            'user_id': self.id,
-            'iat': datetime.datetime.now(datetime.timezone.utc),
-            'exp': datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=3650)
-        }
-        new_token = jwt.encode(
-            payload,
-            Config.SECRET_KEY,
-            algorithm='HS256'
-        )
-
-        print(f"New token generated: {new_token}")
-
-        self.token = new_token
-
-        try:
-            db.session.commit()
-            print(f"Database commit successful for token regeneration of user ID: {self.id}")
-            return new_token  # Return the token here
-        except Exception as e:
-            print(f"Error during database commit in generate_auth_token: {e}")
-            db.session.rollback()
-            return new_token  # Still return the token even if there's an error
-    
-    @staticmethod
-    def verify_auth_token(token):
-        try:
-            payload = jwt.decode(token, Config.SECRET_KEY, algorithms=['HS256'])
-            user_id = payload['user_id']
-            if User.query.get(user_id) is not None:
-                return user_id
-            return None
-        except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
-            return None
+    def set_password(self, password):
+        self.password_hash = generate_password_hash(password)
 
     def __repr__(self):
         return f'<User {self.email}>'

@@ -23,10 +23,6 @@ class ProfileForm(FlaskForm):
     confirm_password = PasswordField('Confirm Password', validators=[validators.EqualTo('password', message='Passwords must match')])
     submit = SubmitField('Update')
 
-    # Token management elements
-    token = StringField('Token', render_kw={'readonly': True})
-    regenerate_token = SubmitField('Regenerate Token')
-
     def __init__(self, *args, **kwargs):
         self.is_registration = kwargs.pop('is_registration', False)
         super(ProfileForm, self).__init__(*args, **kwargs)

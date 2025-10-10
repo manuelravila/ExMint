@@ -6,103 +6,47 @@
       "type": "debugpy",
       "request": "launch",
       "module": "flask",
+      "python": "${workspaceFolder}/.venv/bin/python",
       "env": {
         "FLASK_APP": "app.py",
-        "FLASK_DEBUG": "1",
-        "FLASK_ENV": "main",
-        "FLASK_SYS": "windows",
-        "BWS_ACCESS_TOKEN": "0.10ec7297-56b5-4a58-8d3c-b1410151b26a.IilojVqmK4CAheLPPGr4axElyIZje8:7S5R3sWZDmwGnshlNssRxQ==",
-        "PLAID_WEBHOOK_URL": "https://app.exmint.me/plaid_webhook"
+        "FLASK_SYS": "linux"
       },
+      "envFile": "${workspaceFolder}/.env.main",
       "args": [
         "run",
         "--no-debugger",
         "--no-reload",
-        "--cert=C:/Users/manue/OneDrive/Intel/ExMint/dev_exmint_me.crt",
-        "--key=C:/Users/manue/OneDrive/Intel/ExMint/dev_exmint_me.key"
+        "--host=127.0.0.1",
+        "--port=5000"
       ],
       "jinja": true,
       "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal"
+      "console": "integratedTerminal",
+      "preLaunchTask": "Open Prod DB tunnel"
     },
     {
       "name": "ExMint DEV",
       "type": "debugpy",
       "request": "launch",
       "module": "flask",
+      "python": "${workspaceFolder}/.venv/bin/python",
       "env": {
         "FLASK_APP": "app.py",
-        "FLASK_DEBUG": "1",
-        "FLASK_ENV": "dev",
-        "FLASK_SYS": "windows",
-        "BWS_ACCESS_TOKEN": "0.84191f75-fb78-4c9d-b09e-b141016289a7.yESoFIpw8QnIvvaz2pFlBoKfIOTBLg:KO9PvWb7pQsYbazY91u57A==",
-        "PLAID_WEBHOOK_URL": "https://b2e1-99-237-185-46.ngrok-free.app/plaid_webhook"
+        "FLASK_SYS": "linux",
+        "FLASK_DEBUG": "1"
       },
+      "envFile": "${workspaceFolder}/.env.dev",
       "args": [
         "run",
+        "--no-debugger",
         "--no-reload",
-        "--cert=C:/Users/manue/OneDrive/Intel/ExMint/dev_exmint_me.crt",
-        "--key=C:/Users/manue/OneDrive/Intel/ExMint/dev_exmint_me.key"
+        "--host=127.0.0.1",
+        "--port=5000"
       ],
       "jinja": true,
       "cwd": "${workspaceFolder}",
-      "console": "integratedTerminal"
-    },    
-    {
-      "name": "Excel Add-In",
-      "type": "node",
-      "request": "launch",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": [
-        "run",
-        "start:desktop"
-      ],
-      "env": {
-        "NODE_ENV": "development"
-      },
-      "cwd": "${workspaceFolder}/excel_addin",
-      "console": "integratedTerminal"
-    },
-    {
-      "name": "Add-In WEB",
-      "type": "node",
-      "request": "launch",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": [
-        "run",
-        "start:web",
-        "--",
-        "--document",
-        "https://1drv.ms/x/s!AjErl85sZBkZ1vg8_KUEEeJwnuRaJw?e=e7mfro"
-      ],
-      "env": {
-        "NODE_ENV": "development"
-      },
-      "cwd": "${workspaceFolder}/excel_addin",
-      "console": "integratedTerminal"
-    }
-  ],
-  "compounds": [
-    {
-      "name": "Flask PROD and Add-In",
-      "configurations": [
-        "ExMint PROD",
-        "Excel Add-In"
-      ]
-    },
-    {
-      "name": "Flask PROD and Add-In WEB",
-      "configurations": [
-        "ExMint PROD",
-        "Add-In WEB"
-      ]
-    },
-    {
-      "name": "Flask DEV and Add-In",
-      "configurations": [
-        "ExMint DEV",
-        "Excel Add-In"
-      ]
+      "console": "integratedTerminal",
+      "preLaunchTask": "Open Dev DB tunnel"
     }
   ]
 }
