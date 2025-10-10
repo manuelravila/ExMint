@@ -121,14 +121,6 @@
                             {{ form.confirm_password.label }}
                             {{ form.confirm_password(class='form-control') }}
                         </div>
-                        <!-- Token Fields -->
-                        <div class="form-group">
-                            {{ form.token.label }}
-                            {{ form.token(class='form-control') }}
-                        </div>
-                        <div class="form-group">
-                            {{ form.regenerate_token(class='btn btn-primary') }}
-                        </div>
                     </div>
                     <div class="modal-footer">
                         <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
@@ -145,10 +137,6 @@
     <script src="{{ url_for('static', filename='js/vuePlaid.js') }}"></script>
     <script type="text/javascript">
         $(document).ready(function() {
-            {% if modal_open %}
-                $('#profileModal').modal('show');
-            {% endif %}
-
             // Check if the my connections modal should be open
             {% if connections_modal_open %}
                 $('#myConnectionsModal').modal('show');
@@ -156,4 +144,3 @@
         });
     </script>   
 {% endblock %}
-

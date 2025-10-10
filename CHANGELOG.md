@@ -1,3 +1,16 @@
+## [0.6.4] - 2025-10-10
+
+### Changed
+- Reworked authentication to rely exclusively on Flask-Login session cookies: removed Excel add-in token handling, converted all dashboard/API routes to `login_required`, and simplified login/logout responses.
+- Adjusted configuration and CORS settings so session cookies function in local dev while keeping environment-specific behaviour (`SESSION_COOKIE_*` overrides, trimmed allow-list headers).
+- Updated profile management to drop token fields and rely on password resets via the new `User.set_password` helper.
+
+### Removed
+- Token regeneration UI and related endpoints, along with model helpers for generating/validating application tokens.
+
+### Fixed
+- Ensured the login form always renders email/password inputs explicitly, avoiding browser autofill conflicts with hidden fields.
+
 ## [0.6.1] - 2025-02-01
 
 ### Fixed

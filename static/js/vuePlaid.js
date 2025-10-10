@@ -4,13 +4,14 @@ let linkHandler = null;
 
 // Function to handle the creation of the link token, adapted to support update mode
 async function createLinkToken(access_token = null) {
-    // Always prepare a JSON payload, with access_token included only if provided
-    let body = JSON.stringify({ user_id: "your_user_id", access_token: access_token }); // Ensure you have a user_id or similar if needed
-
+    const payload = {};
+    if (access_token) {
+        payload.access_token = access_token;
+    }
     const response = await fetch('/create_link_token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: body // This now consistently sends a JSON object, with or without access_token
+        body: JSON.stringify(payload)
     });
 
     if (!response.ok) {

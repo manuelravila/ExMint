@@ -11,12 +11,11 @@
         <div>
             {{ form.password.label }} {{ form.password }}
         </div>
-        <!-- Add other form fields and buttons -->
+        <div>
+            {{ form.confirm_password.label }} {{ form.confirm_password }}
+        </div>
         <div>
             {{ form.submit }}
-            {{ form.generate_token }}
-            {{ form.regenerate_token }}
-            {{ form.delete_token }}
         </div>
     </form>
 {% endblock %}

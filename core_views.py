@@ -1,7 +1,7 @@
 # core_views.py
 from flask import Blueprint, jsonify, request, session, current_app
 from flask_login import login_required, current_user
-from models import db, User, Credential, Account, PlaidTransaction
+from models import db, Credential, Account, PlaidTransaction
 from plaid.model.item_remove_request import ItemRemoveRequest
 from plaid.model.accounts_get_request import AccountsGetRequest
 from plaid.model.item_webhook_update_request import ItemWebhookUpdateRequest
@@ -14,21 +14,20 @@ from datetime import datetime
 from io import StringIO
 import csv
 from config import Config
-from views import combined_required
 from version import __version__ as VERSION
 
 core = Blueprint('core', __name__)
 
 @core.route('/create_link_token', methods=['POST'])
+@login_required
 def create_link_token():
-    data = request.json
-    user_id = data.get('user_id')
-    access_token = data.get('access_token', None)
+    data = request.json or {}
+    access_token = data.get('access_token')
     is_refresh = data.get('is_refresh', False)
     
     link_token_request = {
         'user': {
-            'client_user_id': str(user_id),
+            'client_user_id': str(current_user.id),
         },
         'client_name': "ExMint",
         'products': ["transactions"],
@@ -53,15 +52,12 @@ def create_link_token():
         return jsonify({'error': str(e)})
 
 @core.route('/handle_token_and_accounts', methods=['POST'])
-@combined_required
+@login_required
 def handle_token_and_accounts():
     data = request.json
     credential_id = data.get('credential_id')
     public_token = data.get('public_token', None)
     is_refresh = data.get('is_refresh', False)
-
-    if not current_user.is_authenticated:
-        return jsonify({'error': 'User not authenticated'}), 401
 
     try:
         # Fetch the webhook URL from the environment (via Config)
@@ -179,19 +175,9 @@ def handle_token_and_accounts():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @core.route('/sync', methods=['GET'])
+@login_required
 def sync_transactions():
-    user_token = request.headers.get('x-user-token')
-    if not user_token:
-        return jsonify({'error': 'Missing user token'}), 401
-
-    user_id = User.verify_auth_token(user_token)
-    if user_id is None:
-        return jsonify({'error': 'Invalid or expired user token'}), 401
-
-    user = User.query.get(user_id)
-    if not user:
-        return jsonify({'error': 'User not found'}), 404
-
+    user = current_user
     banks = []
     cursors_data = request.headers.get('cursors', '')
     cursor_dict = {}
@@ -351,7 +337,7 @@ def sync_transactions():
     return jsonify({'banks': banks, 'version': VERSION})
 
 @core.route('/api/accounts', methods=['GET'])
-@combined_required
+@login_required
 def get_accounts():
     user_id = current_user.id
     bank_id = request.args.get('bank_id')
@@ -369,17 +355,9 @@ def get_accounts():
     return jsonify(accounts=accounts_data)
 
 @core.route('/api/banks', methods=['GET'])
-@combined_required
+@login_required
 def get_banks():
-    token = request.args.get('token')
-    if token:
-        user = User.verify_auth_token(token)
-        if not user or user != current_user:
-            return jsonify({'message': 'Invalid or missing token'}), 401
-    else:
-        user = current_user
-
-    banks = Credential.query.filter_by(user_id=user.id, status='Active').all()
+    banks = Credential.query.filter_by(user_id=current_user.id, status='Active').all()
     banks_data = [
         {
             'id': bank.id,
@@ -390,7 +368,7 @@ def get_banks():
     return jsonify(banks=banks_data)
 
 @core.route('/api/balance', methods=['POST'])
-@combined_required
+@login_required
 def fetch_balances():
     data = request.json
     access_token = data.get('access_token')
@@ -420,7 +398,7 @@ def fetch_balances():
         return jsonify(json.loads(e.body)), e.status
 
 @core.route('/api/remove_bank/<int:bank_id>', methods=['DELETE'])
-@combined_required
+@login_required
 def remove_bank(bank_id):
     credential = Credential.query.filter_by(id=bank_id, user_id=current_user.id).first()
     
@@ -446,13 +424,13 @@ def remove_bank(bank_id):
             return jsonify({'success': True, 'message': 'Bank connection removed'}), 200
         else:
             print(f"Failed to deactivate token: {plaid_response}")
-            session['modal_open'] = True
+            session['connections_modal_open'] = True
             return jsonify({'success': False, 'message': 'Failed to remove bank connection', 'error': plaid_response}), 400
     else:
         return jsonify({'success': False, 'message': 'Credential not found'}), 404
 
 @core.route('/api/get_access_token/<int:credential_id>', methods=['GET'])
-@combined_required
+@login_required
 def get_access_token_for_bank(credential_id):
     credential = Credential.query.filter_by(id=credential_id, user_id=current_user.id).first()
 

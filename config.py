@@ -71,11 +71,15 @@ class Config:
         DEBUG = True  
         SUFFIX = '-stg'
         SSL_CONTEXT = None  # No SSL context needed for staging
+        SESSION_COOKIE_SECURE = False  # Staging served over HTTP during local testing
+        SESSION_COOKIE_SAMESITE = 'Lax'
     else:
         PLAID_ENV = 'sandbox' 
         DEBUG = True
         SUFFIX = '-dev'
         SSL_CONTEXT = ('/app/dev_exmint_me.crt', '/app/dev_exmint_me.key')   # SSL context for development
+        SESSION_COOKIE_SECURE = False  # Allow cookies on http://localhost
+        SESSION_COOKIE_SAMESITE = 'Lax'
 
     print(f"Current branch: {branch.strip()}")
     print(f"SSL_CONTEXT: {SSL_CONTEXT}")

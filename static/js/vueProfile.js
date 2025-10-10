@@ -20,8 +20,7 @@ var app = new Vue({
     data: {
         email: '',
         password: '',
-        passwordConfirmation: '',
-        token: ''
+        passwordConfirmation: ''
     },
     methods: {
         submitForm: function() {
@@ -58,32 +57,6 @@ var app = new Vue({
                 showToast('An error occurred. Please try again.', 'error');
             });
         },
-        renewToken: async function() {
-            try {
-                const response = await fetch('/user-info', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ renew_token: true })
-                });
-        
-                if (!response.ok) {
-                    throw new Error(`Server responded with status: ${response.status}`);
-                }
-        
-                const data = await response.json();
-                //console.log("Response data:", data); // Debugging line
-        
-                if (data.token) {
-                    this.token = data.token;
-                    showToast('Token renewed successfully!', 'success');
-                } else {
-                    throw new Error('Server response did not include a token');
-                }
-            } catch (error) {
-                showToast('An error occurred while renewing the token', 'error'); 
-            }
-        },
-        
         fetchUserInfo: function() {
             //console.log("Fetching user info...");  // Log before fetching
             fetch('/user-info')
@@ -96,9 +69,6 @@ var app = new Vue({
                 .then(data => {
                     console.log("User info received:", data);  // Log received data
                     this.email = data.email;
-                    this.token = data.token;  // Adjust to use token_info
-                    // Example: Accessing a specific field in token payload
-                    // this.user_id = data.token_info.user_id;
                 })
                 .catch(error => {
                     console.error('Error fetching user info:', error);  // Log any errors

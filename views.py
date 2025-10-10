@@ -1,8 +1,7 @@
 # views.py
-from flask import current_app, render_template, redirect, url_for, flash, request, jsonify, Blueprint, session, make_response, g
+from flask import current_app, render_template, redirect, url_for, flash, request, jsonify, Blueprint, session, make_response
 from flask_login import login_user, current_user, logout_user, login_required
 from extensions import mail
-from functools import wraps
 from flask_mail import Message
 from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadSignature
 from forms import LoginForm, RegistrationForm, ProfileForm
@@ -11,53 +10,6 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from config import Config
 
 views = Blueprint('views', __name__)
-
-def combined_required(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if 'X-Request-Source' in request.headers and request.headers['X-Request-Source'] == 'Excel-Add-In':
-            print("Excel Add-In request detected")
-            if 'Authorization' in request.headers:
-                print("Authorization header found in request")
-                token = request.headers['Authorization'].split(" ")[1]
-                user_id = User.verify_auth_token(token)
-                if user_id:
-                    user = User.query.get(user_id)
-                    if user:
-                        login_user(user)
-                        return f(*args, **kwargs)
-                else:
-                    print("Invalid token for Excel Add-In request")
-            else:
-                print("No Authorization header in Excel Add-In request")
-        else:
-            print("Non Excel Add-In request detected (Web request likely)")
-            token = request.cookies.get('token')
-            if token:
-                print(f"Token found in cookies: {token}")
-                user_id = User.verify_auth_token(token)
-                if user_id:
-                    print(f"User ID from cookie token: {user_id}")
-                    user = User.query.get(user_id)
-                    if user:
-                        print(f"User found: {user.email}")
-                        login_user(user)
-                        return f(*args, **kwargs)
-                else:
-                    print("Invalid token in cookies")
-            else:
-                print("No token found in cookies")
-
-        # Handle web (non-API) requests
-        if 'X-Request-Source' not in request.headers:
-            print("Redirecting to login page (Web request)")
-            return redirect(url_for('views.login'))
-
-        # If it's an API request (e.g., from Excel Add-In), return the Unauthorized JSON response
-        print("Returning 401 Unauthorized JSON response (API request)")
-        return jsonify({'message': 'Unauthorized'}), 401
-
-    return decorated_function
 
 
 @views.route('/')
@@ -92,18 +44,13 @@ def send_activation_email_to(email, subject):
 
 
 @views.route('/dashboard', methods=['GET', 'POST'])
-@combined_required
+@login_required
 def dashboard():
     user = current_user
     form = ProfileForm(obj=user)
 
-    # Only set the token if the request is authenticated via token
-    if request.headers.get('X-Request-Source') == 'Excel-Add-In' and 'Authorization' in request.headers:
-        form.token.data = user.token
-
     # Check for open modals query parameter
     connections_modal_open = session.pop('connections_modal_open', False)
-    modal_open = session.pop('modal_open', False)
 
     if form.validate_on_submit():
         if 'submit' in request.form:
@@ -124,31 +71,13 @@ def dashboard():
             # (Ignore any changes to the username field)
             flash('Your profile has been updated!', 'success')
 
-        elif 'regenerate_token' in request.form:
-            # Logic to regenerate token
-            new_token = user.generate_auth_token()  # This now returns the token value
-            form.token.data = new_token
-            
-            # Make sure new_token is not None before setting cookie
-            if new_token:
-                flash('Token regenerated successfully!', 'success')
-                session['modal_open'] = True  # Set session variable
-                
-                # Create a response that updates the cookie
-                response = redirect(url_for('views.dashboard', modal_open='true'))
-                response.set_cookie('token', new_token, 
-                                    httponly=True, 
-                                    secure=current_app.config['SESSION_COOKIE_SECURE'], 
-                                    samesite=current_app.config['SESSION_COOKIE_SAMESITE'])
-                return response
-            else:
-                flash('Error regenerating token!', 'danger')
-                return redirect(url_for('views.dashboard'))
+        db.session.commit()
+        return redirect(url_for('views.dashboard'))
 
-    return render_template('dashboard.html', title='Dashboard', form=form, is_profile_update=True, modal_open=modal_open, connections_modal_open=connections_modal_open)
+    return render_template('dashboard.html', title='Dashboard', form=form, is_profile_update=True, connections_modal_open=connections_modal_open)
 
 @views.route('/dashboard-data', methods=['GET'])
-@combined_required
+@login_required
 def dashboard_data():
     user = current_user
 
@@ -212,8 +141,6 @@ def activate_account(token):
 
     # Update user status to Active
     user.status = "Active"
-    # Generate semipermanent token
-    user.generate_auth_token()
     db.session.commit()
 
     flash("Your account has been activated! You may now log in.", "success")
@@ -263,29 +190,20 @@ def handle_login_request():
 
 def handle_authenticated_user():
     # Decide response based on the source of the request
-    if request.headers.get('X-Request-Source') == 'Excel-Add-In':
+    if request.is_json:
         return jsonify({'message': 'User already logged in'}), 200
     return redirect(url_for('views.dashboard'))
 
 
 def handle_successful_login(user):
-    print('SUCCESSFUL login initiated')
-    if request.headers.get('X-Request-Source') == 'Excel-Add-In':
-        token = user.generate_auth_token()
-        return jsonify({'message': 'User logged in successfully', 'token': token}), 200
-    else:
-        # Set the token as a cookie in the response for web login
-        print('Using secure cookies: ',current_app.config['SESSION_COOKIE_SECURE'])
-        response = redirect(url_for('views.dashboard'))
-        response.set_cookie('token', user.token, 
-                            httponly=True, 
-                            secure=current_app.config['SESSION_COOKIE_SECURE'], 
-                            samesite=current_app.config['SESSION_COOKIE_SAMESITE'])
-        print(response.headers)
-        return response
+    if request.is_json:
+        return jsonify({'message': 'User logged in successfully'}), 200
+
+    next_page = request.args.get('next')
+    return redirect(next_page or url_for('views.dashboard'))
 
 def handle_unsuccessful_login(error_message):
-    if request.headers.get('X-Request-Source') == 'Excel-Add-In':
+    if request.is_json:
         return jsonify({'message': error_message}), 401
     else:
         flash(error_message, 'danger')
@@ -293,25 +211,15 @@ def handle_unsuccessful_login(error_message):
 
 # views.py
 @views.route('/logout', methods=['GET', 'POST'])
+@login_required
 def logout():
-    print(f"User logged in before logout: {current_user.is_authenticated}")
     logout_user()
-    print(f"User logged out after logout: {not current_user.is_authenticated}")
-
-    # Create a response
-    if request.method == 'POST':
-        print("Request from Excel Add-in")
+    if request.is_json or request.method == 'POST':
         response = jsonify({'message': 'Logged out successfully'})
     else:
-        print("Request from Flask UI or Excel Add-in via GET")
         response = make_response(redirect(url_for('views.index')))
 
-    # Delete the 'token' cookie
-    response.delete_cookie('token')
-
-    # Add headers to clear localStorage on the client side
     response.headers['Clear-Site-Data'] = '"cache", "cookies", "storage"'
-        
     return response
 
         
@@ -390,21 +298,10 @@ def reset_password_token(token):
         flash('Invalid or expired reset token.', 'danger')
         return redirect(Config.external_redirect())
 
-@views.route('/user-info', methods=['GET', 'POST'])
-@combined_required
+@views.route('/user-info', methods=['GET'])
+@login_required
 def get_user_info():
-    user = User.query.filter_by(id=current_user.id).first()
-    if not user:
-        return jsonify({"error": "User not found"}), 404
-
-    if request.method == 'POST' and request.json.get('renew_token'):
-        user.generate_auth_token()  # Renew the token
-
-    user_info = {
-        "email": user.email,
-        "token": user.token # Return the token string directly
-    }
-    return jsonify(user_info)
+    return jsonify({"email": current_user.email})
 
 @views.route('/api/accounts/enable/<int:account_id>', methods=['POST'])
 def enable_account(account_id):
