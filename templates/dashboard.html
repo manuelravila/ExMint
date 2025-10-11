@@ -30,41 +30,185 @@
         </nav>
     </header>
 
-    <div class="container-fluid">
-        <div class="row" id="vue-app">
-            <!-- Left Sidebar: Connected Banks -->
-            <div class="col-lg-2 bg-light sidebar">
-                <div class="sidebar-sticky pt-3">
-                    <h6 class="sidebar-heading d-flex justify-content-between align-items-center px-3 mt-4 mb-1 text-muted">
-                        <span>Connected Banks</span>
-                    </h6>                    
-                    <ul class="nav flex-column">
-                        <li class="nav-item" v-for="bank in banks" :key="bank.id"
-                            :class="{'selected-bank': bank.id === selectedBankId, 'text-danger': bank.requires_update}">
-                            <a class="nav-link" href="#" @click.prevent="toggleBankSelection(bank.id)">
-                                [[ bank.institution_name ]]
-                                <span v-if="bank.requires_update" class="btn btn-danger btn-sm" @click="reconnectBank(bank.id)">Reconnect</span>
-                            </a>
-                        </li>
-
-                    </ul>                 
+    <div class="dashboard-shell" id="vue-app">
+        <!-- Left Sidebar: Connected Banks and Accounts -->
+        <aside class="accounts-pane">
+            <div class="accounts-pane-header">
+                <h6 class="accounts-title">My Accounts</h6>
+                <div class="custom-control custom-checkbox all-accounts-toggle mb-0">
+                    <input
+                        type="checkbox"
+                        class="custom-control-input"
+                        id="all-accounts-toggle"
+                        :checked="areAllAccountsSelected"
+                        @change="toggleAllAccounts"
+                        ref="allAccountsCheckbox"
+                    >
+                    <label class="custom-control-label" for="all-accounts-toggle">All Accounts</label>
                 </div>
             </div>
-        
-            <!-- Main content: Accounts -->
-            <main role="main" class="col-lg-8">
-                <div class="card mb-3" v-for="account in accounts" :key="account.id">
-                    <div class="card-body">
-                        <h5 class="card-title">[[ account.name ]]</h5>
-                        <h6 class="card-subtitle mb-2 text-muted">...[[ account.mask ]]</h6>
-                        <p class="card-text">[[ account.type | capitalize ]] - [[ account.subtype | capitalize ]]</p>
-                        <div class="custom-control custom-switch">
-                            <input type="checkbox" class="custom-control-input" :id="`switch-${account.id}`" v-model="account.is_enabled" @change="toggleAccountEnable(account.id, account.is_enabled)">
-                            <label class="custom-control-label" :for="`switch-${account.id}`">[[ account.is_enabled ? 'Enabled' : 'Disabled' ]]</label>
+            <div class="institution-list">
+                <div class="institution-card" v-for="bank in banks" :key="bank.id">
+                    <div class="institution-header">
+                        <div class="institution-main">
+                            <div class="form-check form-check-inline institution-checkbox mb-0">
+                                <input
+                                    class="form-check-input"
+                                    type="checkbox"
+                                    :id="`bank-${bank.id}`"
+                                    :checked="isBankFullySelected(bank)"
+                                    @change="toggleInstitutionSelection(bank)"
+                                    :ref="'bankCheckbox-' + bank.id"
+                                >
+                                <label class="sr-only" :for="`bank-${bank.id}`">Toggle [[ bank.institution_name ]]</label>
+                            </div>
+                            <span class="institution-name">[[ bank.institution_name ]]</span>
+                            <button
+                                v-if="bank.requires_update"
+                                type="button"
+                                class="badge badge-danger ml-2 badge-button"
+                                @click.stop.prevent="startReconnect(bank.id)"
+                            >
+                                Reconnect
+                            </button>
+                        </div>
+                        <button
+                            class="btn btn-sm collapse-toggle"
+                            type="button"
+                            @click="toggleAccordion(bank.id)"
+                            :aria-expanded="isAccordionOpen(bank.id)"
+                            :aria-controls="`collapse-${bank.id}`"
+                        >
+                            <i class="fas" :class="isAccordionOpen(bank.id) ? 'fa-chevron-up' : 'fa-chevron-down'"></i>
+                        </button>
+                    </div>
+                    <div
+                        :id="`collapse-${bank.id}`"
+                        :class="['collapse', { show: isAccordionOpen(bank.id) }]"
+                        :aria-labelledby="`heading-${bank.id}`"
+                    >
+                        <div class="list-group list-group-flush account-list">
+                            <label class="list-group-item d-flex justify-content-between align-items-center" v-for="account in bank.accounts" :key="account.id">
+                                <div class="custom-control custom-checkbox">
+                                    <input class="custom-control-input" type="checkbox" :id="`account-${account.id}`" :value="account.id" v-model="selectedAccountIds">
+                                    <label class="custom-control-label" :for="`account-${account.id}`">
+                                        [[ account.name ]]
+                                        <span class="text-muted ml-1" v-if="account.mask">••[[ account.mask ]]</span>
+                                    </label>
+                                </div>
+                                <span class="badge badge-light text-uppercase ml-2" v-if="account.subtype">[[ account.subtype ]]</span>
+                            </label>
+                            <div v-if="!bank.accounts.length" class="list-group-item text-muted small">
+                                No active accounts for this institution.
+                            </div>
+                        </div>
+                        <div class="px-3 py-2 border-top">
+                            <button class="btn btn-link btn-sm px-0" v-if="bank.requires_update" @click.prevent="startReconnect(bank.id)">Reconnect</button>
                         </div>
                     </div>
                 </div>
-            </main>
+                <div v-if="!banks.length" class="text-muted small px-3 py-4">
+                    No banks connected yet. Use “Connect Institution” to get started.
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main content: Transactions Table -->
+        <main role="main" class="transactions-pane">
+            <div class="transactions-toolbar">
+                <div>
+                    <h4 class="mb-0">Transactions</h4>
+                    <small class="text-muted">
+                        Showing [[ displayedTransactions.length ]] transactions across [[ selectedAccountIds.length ]] account(s).
+                        <span v-if="transactionsTotal > loadedTransactionsCount"> Loaded [[ loadedTransactionsCount ]] of [[ transactionsTotal ]] total.</span>
+                    </small>
+                </div>
+                <div class="d-flex align-items-center">
+                    <div class="input-group input-group-sm mr-2">
+                        <div class="input-group-prepend">
+                            <span class="input-group-text"><i class="fas fa-search"></i></span>
+                        </div>
+                        <input type="search" class="form-control" placeholder="Search description, merchant, category..." v-model="filters.search" aria-label="Search transactions">
+                    </div>
+                    <button class="btn btn-outline-secondary btn-sm mr-2" @click="resetFilters" :disabled="!filters.search && filters.sortKey === 'date' && filters.sortDesc">
+                        Reset
+                    </button>
+                    <button class="btn btn-primary btn-sm" @click="syncTransactions" :disabled="syncing">
+                        <span v-if="!syncing"><i class="fas fa-sync-alt"></i> Sync</span>
+                        <span v-else><i class="fas fa-sync fa-spin"></i> Syncing...</span>
+                    </button>
+                </div>
+            </div>
+            <div v-if="syncSummary.length" class="alert alert-info alert-sm py-2">
+                <div v-for="item in syncSummary" :key="item.credential_id">
+                    [[ item.institution_name ]]: [[ item.added ]] added, [[ item.modified ]] updated, [[ item.removed ]] removed.
+                </div>
+            </div>
+            <div v-if="syncErrors.length" class="alert alert-warning py-2">
+                <div v-for="error in syncErrors" :key="`${error.credential_id}-${error.error_code || error.error_message}`">
+                    [[ error.institution_name || 'Institution' ]]: [[ error.error_message || 'An unknown error occurred.' ]]
+                </div>
+            </div>
+            <div class="card shadow-sm transactions-card">
+                <div v-if="loading" class="card-body text-center py-5">
+                    <div class="spinner-border text-primary mb-3" role="status">
+                        <span class="sr-only">Loading...</span>
+                    </div>
+                    <div class="text-muted">Loading your transactions...</div>
+                </div>
+                <div v-else class="table-responsive transactions-table">
+                    <table class="table table-hover table-sm mb-0">
+                        <thead class="thead-light">
+                            <tr>
+                                <th scope="col" @click="setSort('date')" role="button">
+                                    Date
+                                    <i :class="['ml-1', sortIcon('date')]"></i>
+                                </th>
+                                <th scope="col" @click="setSort('name')" role="button">
+                                    Description
+                                    <i :class="['ml-1', sortIcon('name')]"></i>
+                                </th>
+                                <th scope="col">Merchant</th>
+                                <th scope="col">Account</th>
+                                <th scope="col">Category</th>
+                                <th scope="col" class="text-right" @click="setSort('amount')" role="button">
+                                    Amount
+                                    <i :class="['ml-1', sortIcon('amount')]"></i>
+                                </th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="transaction in displayedTransactions" :key="transaction.id">
+                                <td>[[ formatDate(transaction.date) ]]<span v-if="transaction.pending" class="badge badge-warning ml-2">Pending</span></td>
+                                <td>[[ transaction.name ]]</td>
+                                <td>[[ transaction.merchant_name || '—' ]]</td>
+                                <td>
+                                    <div>[[ transaction.account_name ]] <span class="text-muted" v-if="transaction.account_mask">••[[ transaction.account_mask ]]</span></div>
+                                    <small class="text-muted">[[ transaction.institution_name ]]</small>
+                                </td>
+                                <td>
+                                    <span v-if="transaction.category && transaction.category.length" class="badge badge-light mr-1" v-for="category in transaction.category" :key="`${transaction.id}-${category}`">[[ category ]]</span>
+                                    <span v-else class="text-muted">—</span>
+                                </td>
+                                <td class="text-right font-weight-bold">[[ formatCurrency(transaction.amount, transaction.iso_currency_code) ]]</td>
+                            </tr>
+                            <tr v-if="!displayedTransactions.length">
+                                <td colspan="6" class="text-center text-muted py-5">
+                                    No transactions match the current filters.
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div v-if="hasMoreTransactions" class="card-footer text-center">
+                    <button class="btn btn-outline-secondary btn-sm" @click="loadMoreTransactions" :disabled="loadingMore">
+                        <span v-if="!loadingMore">Load more</span>
+                        <span v-else><i class="fas fa-spinner fa-spin"></i> Loading...</span>
+                    </button>
+                </div>
+            </div>
+        </main>
+    </div>
 
             <!-- My Connections Modal -->
             <div class="modal fade" id="myConnectionsModal" tabindex="-1" role="dialog" aria-labelledby="myConnectionsModalLabel" aria-hidden="true">
@@ -81,7 +225,7 @@
                                 <li v-for="bank in banks" :key="bank.id" class="list-group-item d-flex justify-content-between align-items-center">
                                     <span class="bank-name">[[ bank.institution_name ]]</span>
                                     <div class="button-group">
-                                        <button class="btn btn-secondary btn-sm me-2" @click="reconnectBank(bank.id)">Reconnect</button>
+                                        <button class="btn btn-secondary btn-sm mr-2" @click="startReconnect(bank.id)">Reconnect</button>
                                         <button class="btn btn-danger btn-sm" @click="removeBank(bank)">Remove</button>
                                     </div>
                                 </li>

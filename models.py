@@ -20,6 +20,7 @@ class User(UserMixin, db.Model):
 
     # Relationship with Subscription
     subscriptions = db.relationship('Subscription', backref='owner', lazy=True)
+    transactions = db.relationship('Transaction', backref='user', lazy=True)
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -35,6 +36,7 @@ class Credential(db.Model):
     institution_name = db.Column(db.String(100))
     access_token = db.Column(EncryptedType(db.String, key))
     requires_update = db.Column(db.Boolean, default=False, nullable=False)
+    transactions_cursor = db.Column(db.String(512), nullable=True)
 
 class Account(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -49,6 +51,7 @@ class Account(db.Model):
 
     # Relation to Credential
     credential = db.relationship('Credential', backref=db.backref('accounts', lazy=True))
+    transactions = db.relationship('Transaction', backref='account', lazy=True)
 
 class PlaidTransaction(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -68,6 +71,32 @@ class PlaidTransaction(db.Model):
 
     def __repr__(self):
         return '<PlaidTransaction %r>' % self.id
+
+class Transaction(db.Model):
+    __tablename__ = 'transactions'
+
+    id = db.Column(db.Integer, primary_key=True)
+    plaid_transaction_id = db.Column(db.String(100), unique=True, nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    credential_id = db.Column(db.Integer, db.ForeignKey('credential.id'), nullable=False)
+    account_id = db.Column(db.Integer, db.ForeignKey('account.id'), nullable=False)
+    name = db.Column(db.String(255), nullable=False)
+    amount = db.Column(db.Numeric(14, 2), nullable=False)
+    iso_currency_code = db.Column(db.String(10))
+    category = db.Column(db.Text)
+    merchant_name = db.Column(db.String(255))
+    payment_channel = db.Column(db.String(50))
+    date = db.Column(db.Date, nullable=False)
+    pending = db.Column(db.Boolean, nullable=False, default=False)
+    is_removed = db.Column(db.Boolean, nullable=False, default=False)
+    last_action = db.Column(db.String(20), nullable=False, default='added')
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    credential = db.relationship('Credential', backref=db.backref('transactions', lazy=True))
+
+    def __repr__(self):
+        return f'<Transaction {self.plaid_transaction_id}>'
 
 class Subscription(db.Model):
     __tablename__ = 'subscription'

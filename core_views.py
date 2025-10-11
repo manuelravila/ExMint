@@ -1,20 +1,22 @@
 # core_views.py
 from flask import Blueprint, jsonify, request, session, current_app
 from flask_login import login_required, current_user
-from models import db, Credential, Account, PlaidTransaction
+from models import db, Credential, Account, PlaidTransaction, Transaction
 from plaid.model.item_remove_request import ItemRemoveRequest
 from plaid.model.accounts_get_request import AccountsGetRequest
 from plaid.model.item_webhook_update_request import ItemWebhookUpdateRequest
 #from plaid.model.accounts_balance_get_request import AccountsBalanceGetRequest
 from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
 from sqlalchemy import and_
+from sqlalchemy.orm import joinedload
 import plaid
 import json
-from datetime import datetime
+from datetime import datetime, date
 from io import StringIO
 import csv
 from config import Config
 from version import __version__ as VERSION
+from decimal import Decimal
 
 core = Blueprint('core', __name__)
 
@@ -174,167 +176,224 @@ def handle_token_and_accounts():
         db.session.rollback()
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
-@core.route('/sync', methods=['GET'])
+def _persist_transactions_from_payload(user, credential, data):
+    counts = {'added': 0, 'modified': 0, 'removed': 0}
+
+    for action in ['added', 'modified', 'removed']:
+        for payload in data.get(action, []):
+            plaid_transaction_id = payload.get('transaction_id')
+            if not plaid_transaction_id:
+                continue
+
+            transaction = Transaction.query.filter_by(plaid_transaction_id=plaid_transaction_id).first()
+
+            if action == 'removed':
+                if transaction and not transaction.is_removed:
+                    transaction.is_removed = True
+                    transaction.last_action = 'removed'
+                    transaction.updated_at = datetime.utcnow()
+                    counts['removed'] += 1
+                elif transaction:
+                    transaction.last_action = 'removed'
+                continue
+
+            account = Account.query.filter_by(plaid_account_id=payload.get('account_id')).first()
+            if not account:
+                current_app.logger.warning(
+                    "Skipping transaction %s because account %s was not found",
+                    plaid_transaction_id,
+                    payload.get('account_id')
+                )
+                continue
+
+            amount_value = payload.get('amount')
+            if amount_value is None:
+                amount_value = 0
+
+            if transaction is None:
+                transaction = Transaction(
+                    plaid_transaction_id=plaid_transaction_id,
+                    user_id=user.id,
+                    credential_id=credential.id,
+                    account_id=account.id,
+                    created_at=datetime.utcnow()
+                )
+                db.session.add(transaction)
+            else:
+                transaction.credential_id = credential.id
+                transaction.account_id = account.id
+
+            transaction.name = payload.get('name') or ''
+            transaction.amount = Decimal(str(amount_value))
+            transaction.iso_currency_code = payload.get('iso_currency_code')
+            transaction.category = json.dumps(payload.get('category', []))
+            transaction.merchant_name = payload.get('merchant_name')
+            transaction.payment_channel = payload.get('payment_channel')
+
+            date_value = payload.get('date')
+            if isinstance(date_value, datetime):
+                transaction.date = date_value.date()
+            elif isinstance(date_value, date):
+                transaction.date = date_value
+            elif isinstance(date_value, str) and date_value:
+                try:
+                    transaction.date = datetime.strptime(date_value, '%Y-%m-%d').date()
+                except ValueError:
+                    current_app.logger.warning(
+                        "Invalid transaction date %s for %s",
+                        date_value,
+                        plaid_transaction_id
+                    )
+            elif date_value:
+                current_app.logger.warning(
+                    "Unexpected transaction date type %s for %s",
+                    type(date_value),
+                    plaid_transaction_id
+                )
+            if transaction.date is None:
+                transaction.date = datetime.utcnow().date()
+
+            transaction.pending = bool(payload.get('pending', False))
+            transaction.is_removed = False
+            transaction.last_action = action
+            transaction.updated_at = datetime.utcnow()
+
+            if action in counts:
+                counts[action] += 1
+
+    return counts
+
+
+def _sync_credential_transactions(user, credential):
+    counts = {'added': 0, 'modified': 0, 'removed': 0}
+    cursor = credential.transactions_cursor
+    has_more = True
+    latest_cursor = cursor
+    credential_error = None
+
+    while has_more:
+        payload = {
+            'access_token': credential.access_token,
+            'count': 500
+        }
+
+        if cursor:
+            payload['cursor'] = cursor
+
+        try:
+            response = current_app.plaid_client.transactions_sync(payload)
+        except plaid.ApiException as e:
+            error_response = json.loads(e.body)
+            log_method = current_app.logger.error
+            if error_response.get('error_code') == 'ITEM_LOGIN_REQUIRED':
+                log_method = current_app.logger.warning
+
+            log_method(
+                "Error fetching transactions for credential %s: %s -> %s",
+                credential.id,
+                error_response.get('error_code'),
+                error_response.get('error_message')
+            )
+
+            if error_response.get('error_code') == 'DEVELOPMENT_ENVIRONMENT_BROWNOUT':
+                raise
+
+            if error_response.get('error_code') == 'ITEM_LOGIN_REQUIRED':
+                credential.requires_update = True
+                credential_error = {
+                    'error_code': error_response['error_code'],
+                    'error_message': error_response['error_message']
+                }
+            else:
+                credential_error = {
+                    'error_code': error_response.get('error_code'),
+                    'error_message': error_response.get('error_message', str(e))
+                }
+            break
+        except Exception as exc:
+            current_app.logger.exception("Unexpected error fetching transactions: %s", exc)
+            credential_error = {'error_message': str(exc)}
+            break
+
+        data = response.to_dict()
+        cursor = data.get('next_cursor')
+        has_more = data.get('has_more', False)
+        latest_cursor = cursor or latest_cursor
+
+        payload_counts = _persist_transactions_from_payload(user, credential, data)
+        for key in counts:
+            counts[key] += payload_counts.get(key, 0)
+
+    if credential_error is None:
+        credential.transactions_cursor = cursor or latest_cursor or credential.transactions_cursor
+
+    return counts, credential_error
+
+
+@core.route('/api/transactions/sync', methods=['POST'])
 @login_required
 def sync_transactions():
     user = current_user
-    banks = []
-    cursors_data = request.headers.get('cursors', '')
-    cursor_dict = {}
-
-    for pair in cursors_data.split(','):
-        try:
-            credential_id, cursor = pair.split(':')
-            if credential_id.isdigit() and len(cursor) >= 10:
-                cursor_dict[int(credential_id)] = cursor
-        except ValueError:
-            pass
-
     active_credentials = Credential.query.filter_by(user_id=user.id, status='Active').all()
 
+    summary = []
+    errors = []
+
     for credential in active_credentials:
-        accounts = []
-        next_cursor = None
-        credential_error = None
-        cursor = cursor_dict.get(credential.id, None)
-        transactions_by_account = {}
-        has_more = True
+        try:
+            counts, credential_error = _sync_credential_transactions(user, credential)
+            db.session.commit()
 
-        while has_more:
-            try:
-                sync_request_payload = {
-                    'access_token': credential.access_token, 
-                    "count": 500
-                }
-                if cursor:
-                    sync_request_payload['cursor'] = cursor
-                    cursor = None
-
-                response = current_app.plaid_client.transactions_sync(sync_request_payload)
-                data = response.to_dict()
-
-                for action in ['added', 'modified', 'removed']:
-                    for transaction in data.get(action, []):
-                        account_id = transaction.get('account_id')
-                        if account_id not in transactions_by_account:
-                            transactions_by_account[account_id] = []
-
-                        transactions_by_account[account_id].append({
-                            'date': transaction.get('date'),
-                            'name': transaction.get('name'),
-                            'amount': transaction.get('amount'),
-                            'iso_currency_code': transaction.get('iso_currency_code'),
-                            'category': transaction.get('category', []),
-                            'merchant_name': transaction.get('merchant_name'),
-                            'account_id': account_id,
-                            'transaction_id': transaction.get('transaction_id'),
-                            'payment_channel': transaction.get('payment_channel'),
-                            'action': action,
-                            'pending': transaction.get('pending')
-                        })
-
-                cursor = data.get('next_cursor')
-                has_more = data.get('has_more', False)
-                next_cursor = cursor
-
-            except plaid.ApiException as e:
-                error_response = json.loads(e.body)
-                print(f"Error fetching transactions: {error_response.get('error_code')}-> {error_response['error_message']}")
-                if error_response.get('error_code') == 'DEVELOPMENT_ENVIRONMENT_BROWNOUT':
-                    return jsonify({'error': 'Plaid Development environment is undergoing a scheduled brownout. Please try again later.'}), 503
-                elif error_response.get('error_code') == 'ITEM_LOGIN_REQUIRED':
-                    credential.requires_update = True
-                    print ('Credential ', credential, ' requires update. Should get flagged')
-                    db.session.commit()
-                    credential_error = {
-                        'error_code': error_response['error_code'],
-                        'error_message': error_response['error_message']
-                    }
-                    break
-                else:
-                    print("Error fetching transactions:", str(e))
-            except Exception as e:
-                print("General error during transaction fetching:", str(e))
-                break
-
-        active_accounts = Account.query.filter(
-            and_(Account.credential_id == credential.id, Account.status == 'Active', Account.is_enabled == True)
-        ).all()
-
-        for account in active_accounts:
-            # Replace balance_request with accounts_request
-            accounts_request = AccountsGetRequest(
-                access_token=credential.access_token,
-                options={"account_ids": [account.plaid_account_id]}
-            )
-
-            try:
-                accounts_response = current_app.plaid_client.accounts_get(accounts_request)
-                balance = accounts_response.to_dict()['accounts'][0]['balances']['current']
-            except plaid.ApiException as e:
-                balance = None
-
-            account_transactions = transactions_by_account.get(account.plaid_account_id, [])
-
-            accounts.append({
-                'plaid_account_id': account.plaid_account_id,
-                'name': account.name,
-                'type': account.type,
-                'subtype': account.subtype,
-                'mask': account.mask,
-                'balance': balance,
-                'transaction_count': len(account_transactions),
-                'transactions': account_transactions
+            summary.append({
+                'credential_id': credential.id,
+                'institution_name': credential.institution_name,
+                'added': counts['added'],
+                'modified': counts['modified'],
+                'removed': counts['removed'],
+                'requires_update': credential.requires_update
             })
 
-        if not credential_error:
-            credential_data = {
-                'credential_id': credential.id,
-                'institution_name': credential.institution_name,
-                'operation': 'Update sync' if cursors_data else 'Full sync',
-                'next_cursor': next_cursor,
-                'accounts': accounts
+            audit_payload = {
+                'counts': counts,
+                'cursor': credential.transactions_cursor,
+                'requires_update': credential.requires_update
             }
-        else:
-            credential_data = {
-                'credential_id': credential.id,
-                'institution_name': credential.institution_name,
-                'operation': 'Update sync' if cursors_data else 'Full sync',
-                'error': credential_error
-            }
-        banks.append(credential_data)
+            plaid_transaction = PlaidTransaction(
+                user_id=user.id,
+                user_ip=request.remote_addr,
+                credential_id=credential.id,
+                operation='Transactions sync',
+                response=json.dumps(audit_payload)
+            )
+            db.session.add(plaid_transaction)
 
-    transaction = PlaidTransaction(
-        user_id=user.id,
-        user_ip=request.remote_addr,
-        credential_id=credential.id,
-        operation='Update sync' if cursors_data else 'Full sync',
-        response=json.dumps({'banks': [
-            {
-                'credential_id': bank['credential_id'],
-                'institution_name': bank['institution_name'],
-                'operation': bank['operation'],
-                'next_cursor': bank.get('next_cursor'),
-                'error': bank.get('error'),
-                'accounts': [
-                    {
-                        'plaid_account_id': account['plaid_account_id'],
-                        'name': account['name'],
-                        'type': account['type'],
-                        'subtype': account['subtype'],
-                        'mask': account['mask'],
-                        'transaction_count': account['transaction_count']
-                    }
-                    for account in bank.get('accounts', [])
-                ]
-            }
-            for bank in banks
-        ]})
-    )
-    db.session.add(transaction)
+            if credential_error:
+                errors.append({
+                    'credential_id': credential.id,
+                    'institution_name': credential.institution_name,
+                    **credential_error
+                })
+        except plaid.ApiException as e:
+            errors.append({
+                'credential_id': credential.id,
+                'institution_name': credential.institution_name,
+                'error_code': 'DEVELOPMENT_ENVIRONMENT_BROWNOUT',
+                'error_message': 'Plaid Development environment is undergoing a scheduled brownout. Please try again later.'
+            })
+            db.session.rollback()
+        except Exception as exc:
+            current_app.logger.exception("Failed to sync transactions for credential %s", credential.id)
+            errors.append({
+                'credential_id': credential.id,
+                'institution_name': credential.institution_name,
+                'error_message': str(exc)
+            })
+            db.session.rollback()
+
     db.session.commit()
 
-    return jsonify({'banks': banks, 'version': VERSION})
+    status_code = 200 if not errors else 207
+    return jsonify({'summary': summary, 'errors': errors, 'version': VERSION}), status_code
 
 @core.route('/api/accounts', methods=['GET'])
 @login_required
@@ -358,14 +417,111 @@ def get_accounts():
 @login_required
 def get_banks():
     banks = Credential.query.filter_by(user_id=current_user.id, status='Active').all()
-    banks_data = [
-        {
+    banks_data = []
+
+    for bank in banks:
+        accounts_data = []
+        for account in bank.accounts:
+            if account.status != 'Active':
+                continue
+
+            accounts_data.append({
+                'id': account.id,
+                'name': account.name,
+                'mask': account.mask,
+                'type': account.type,
+                'subtype': account.subtype,
+                'plaid_account_id': account.plaid_account_id,
+                'is_enabled': account.is_enabled
+            })
+
+        banks_data.append({
             'id': bank.id,
             'institution_name': bank.institution_name,
-            'requires_update': bank.requires_update
-        } for bank in banks
-    ]
+            'requires_update': bank.requires_update,
+            'accounts': accounts_data
+        })
+
     return jsonify(banks=banks_data)
+
+@core.route('/api/transactions', methods=['GET'])
+@login_required
+def get_transactions():
+    account_ids_param = request.args.get('account_ids', '')
+    account_ids = []
+
+    for part in account_ids_param.split(','):
+        value = part.strip()
+        if value.isdigit():
+            account_ids.append(int(value))
+
+    try:
+        page = int(request.args.get('page', 1))
+    except (TypeError, ValueError):
+        page = 1
+    page = max(page, 1)
+
+    try:
+        page_size = int(request.args.get('page_size', 200))
+    except (TypeError, ValueError):
+        page_size = 200
+    page_size = max(1, min(page_size, 500))
+
+    query = Transaction.query.options(
+        joinedload(Transaction.account),
+        joinedload(Transaction.credential)
+    ).filter(
+        Transaction.user_id == current_user.id,
+        Transaction.is_removed.is_(False)
+    )
+
+    if account_ids:
+        query = query.filter(Transaction.account_id.in_(account_ids))
+
+    total_count = query.count()
+    ordered_query = query.order_by(Transaction.date.desc(), Transaction.id.desc())
+    offset = (page - 1) * page_size
+    transactions = ordered_query.offset(offset).limit(page_size).all()
+
+    response = []
+    for txn in transactions:
+        account = txn.account
+        credential = txn.credential
+        try:
+            category = json.loads(txn.category) if txn.category else []
+        except (TypeError, ValueError):
+            category = [txn.category] if txn.category else []
+
+        amount_value = float(txn.amount) if txn.amount is not None else 0.0
+
+        response.append({
+            'id': txn.id,
+            'plaid_transaction_id': txn.plaid_transaction_id,
+            'date': txn.date.isoformat() if txn.date else None,
+            'name': txn.name,
+            'amount': amount_value,
+            'iso_currency_code': txn.iso_currency_code,
+            'category': category,
+            'merchant_name': txn.merchant_name,
+            'payment_channel': txn.payment_channel,
+            'pending': bool(txn.pending),
+            'account_id': txn.account_id,
+            'account_name': account.name if account else None,
+            'account_mask': account.mask if account else None,
+            'account_type': account.type if account else None,
+            'account_subtype': account.subtype if account else None,
+            'institution_name': credential.institution_name if credential else None
+        })
+
+    has_more = (page * page_size) < total_count
+
+    return jsonify(
+        transactions=response,
+        page=page,
+        page_size=page_size,
+        total_count=total_count,
+        has_more=has_more
+    )
 
 @core.route('/api/balance', methods=['POST'])
 @login_required
