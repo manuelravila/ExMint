@@ -1,3 +1,26 @@
+## [0.6.6] - 2025-10-11
+
+### Changed
+- Accounts pane now scrolls independently, gains a calm green theme, and can be resized so account selection stays visible alongside transactions.
+- Added a global “All Accounts” toggle with indeterminate feedback plus streamlined institution rows that keep reconnect within reach.
+- Transactions table page-loads results with a “Load more” control and reports how many rows are loaded versus the Plaid totals.
+
+## [0.6.5] - 2025-02-23
+
+### Added
+- Persist Plaid activity in a dedicated `transactions` table with a new Alembic migration, capturing per-account details alongside cursor tracking on credentials.
+- `/api/transactions` endpoint exposing the user’s stored transactions for the new dashboard view.
+
+### Changed
+- Dashboard sidebar now presents connected institutions as an accordion with account-level checkboxes, keeping selections in sync with the main table.
+- Institution rows now include a master checkbox to toggle all related accounts and an inline “Reconnect” action.
+- Main dashboard pane replaced with a sortable, filterable transactions grid plus one-click Plaid sync that refreshes data without leaving the page.
+- Transactions sync pipeline writes directly to the database via `/api/transactions/sync`, returning per-institution summaries and surfacing Plaid login requirements.
+- Vue/Plaid front-end logic refreshed to hydrate data after new connections or refreshes instead of forcing a full page reload.
+
+### Removed
+- Account enable/disable switches from the dashboard; table visibility is now controlled exclusively through the accordion selection.
+
 ## [0.6.4] - 2025-10-10
 
 ### Changed
