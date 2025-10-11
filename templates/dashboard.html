@@ -6,14 +6,39 @@
 {% endblock %}
 
 {% block content %}
+    <div id="vue-app">
     <header class="sticky-top">
         <nav class="navbar navbar-expand-lg navbar-light bg-light">
             <a class="navbar-brand" href="/dashboard">
                 <img src="{{ url_for('static', filename='images/logo.png') }}" alt="Logo" style="height: 30px;">
             </a>
-            <div class="ml-auto">
+            <div class="ml-auto d-flex align-items-center header-action-bar">
+                <div class="header-search mr-3">
+                    <div class="input-group input-group-sm">
+                        <div class="input-group-prepend">
+                            <span class="input-group-text"><i class="fas fa-search"></i></span>
+                        </div>
+                        <input
+                            type="search"
+                            class="form-control"
+                            placeholder="Search description, merchant..."
+                            v-model="filters.search"
+                            @input="handleSearchInput"
+                            aria-label="Search transactions"
+                        >
+                        <div class="input-group-append">
+                            <button class="btn btn-outline-secondary" type="button" @click="resetFilters" :disabled="!filters.search && filters.sortKey === 'date' && filters.sortDesc">
+                                Reset
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <button class="btn btn-primary btn-sm mr-2" @click="syncTransactions" :disabled="syncing">
+                    <span v-if="!syncing"><i class="fas fa-sync-alt"></i> Sync</span>
+                    <span v-else><i class="fas fa-sync fa-spin"></i> Syncing...</span>
+                </button>
                 <button id="link-button" class="btn btn-outline-secondary mr-2">
-                    <i class="fas fa-university"></i> Connect Institution
+                    <i class="fas fa-university"></i> Connect
                 </button>
 
                 <div class="dropdown d-inline-block">
@@ -30,7 +55,7 @@
         </nav>
     </header>
 
-    <div class="dashboard-shell" id="vue-app">
+    <div class="dashboard-shell">
         <!-- Left Sidebar: Connected Banks and Accounts -->
         <aside class="accounts-pane">
             <div class="accounts-pane-header">
@@ -90,7 +115,7 @@
                         <div class="list-group list-group-flush account-list">
                             <label class="list-group-item d-flex justify-content-between align-items-center" v-for="account in bank.accounts" :key="account.id">
                                 <div class="custom-control custom-checkbox">
-                                    <input class="custom-control-input" type="checkbox" :id="`account-${account.id}`" :value="account.id" v-model="selectedAccountIds">
+                                    <input class="custom-control-input" type="checkbox" :id="`account-${account.id}`" :value="account.id" v-model="selectedAccountIds" @change="handleAccountSelectionChange">
                                     <label class="custom-control-label" :for="`account-${account.id}`">
                                         [[ account.name ]]
                                         <span class="text-muted ml-1" v-if="account.mask">••[[ account.mask ]]</span>
@@ -115,29 +140,19 @@
 
         <!-- Main content: Transactions Table -->
         <main role="main" class="transactions-pane">
-            <div class="transactions-toolbar">
-                <div>
-                    <h4 class="mb-0">Transactions</h4>
-                    <small class="text-muted">
-                        Showing [[ displayedTransactions.length ]] transactions across [[ selectedAccountIds.length ]] account(s).
-                        <span v-if="transactionsTotal > loadedTransactionsCount"> Loaded [[ loadedTransactionsCount ]] of [[ transactionsTotal ]] total.</span>
-                    </small>
-                </div>
-                <div class="d-flex align-items-center">
-                    <div class="input-group input-group-sm mr-2">
-                        <div class="input-group-prepend">
-                            <span class="input-group-text"><i class="fas fa-search"></i></span>
-                        </div>
-                        <input type="search" class="form-control" placeholder="Search description, merchant, category..." v-model="filters.search" aria-label="Search transactions">
-                    </div>
-                    <button class="btn btn-outline-secondary btn-sm mr-2" @click="resetFilters" :disabled="!filters.search && filters.sortKey === 'date' && filters.sortDesc">
-                        Reset
-                    </button>
-                    <button class="btn btn-primary btn-sm" @click="syncTransactions" :disabled="syncing">
-                        <span v-if="!syncing"><i class="fas fa-sync-alt"></i> Sync</span>
-                        <span v-else><i class="fas fa-sync fa-spin"></i> Syncing...</span>
-                    </button>
-                </div>
+            <div class="transactions-summary">
+                <h4 class="mb-0">Transactions</h4>
+                <small class="text-muted">
+                    <span v-if="transactionsTotal && selectedAccountIds.length">
+                        Showing [[ showingRange.start ]]–[[ showingRange.end ]] of [[ transactionsTotal ]] transactions across [[ selectedAccountIds.length ]] account(s).
+                    </span>
+                    <span v-else-if="!selectedAccountIds.length">
+                        Select at least one account to display transactions.
+                    </span>
+                    <span v-else>
+                        No transactions available for the current filters.
+                    </span>
+                </small>
             </div>
             <div v-if="syncSummary.length" class="alert alert-info alert-sm py-2">
                 <div v-for="item in syncSummary" :key="item.credential_id">
@@ -192,7 +207,12 @@
                                 </td>
                                 <td class="text-right font-weight-bold">[[ formatCurrency(transaction.amount, transaction.iso_currency_code) ]]</td>
                             </tr>
-                            <tr v-if="!displayedTransactions.length">
+                            <tr v-if="!selectedAccountIds.length">
+                                <td colspan="6" class="text-center text-muted py-5">
+                                    Select at least one account to view transactions.
+                                </td>
+                            </tr>
+                            <tr v-else-if="!displayedTransactions.length">
                                 <td colspan="6" class="text-center text-muted py-5">
                                     No transactions match the current filters.
                                 </td>
@@ -200,16 +220,20 @@
                         </tbody>
                     </table>
                 </div>
-                <div v-if="hasMoreTransactions" class="card-footer text-center">
-                    <button class="btn btn-outline-secondary btn-sm" @click="loadMoreTransactions" :disabled="loadingMore">
-                        <span v-if="!loadingMore">Load more</span>
-                        <span v-else><i class="fas fa-spinner fa-spin"></i> Loading...</span>
+                <div v-if="showPagination" class="card-footer d-flex justify-content-between align-items-center">
+                    <button class="btn btn-outline-secondary btn-sm" @click="goToPreviousPage" :disabled="transactionsPage === 1 || loading">
+                        Previous
+                    </button>
+                    <div class="text-muted small">
+                        Page [[ transactionsPage ]] of [[ totalPages ]] · [[ transactionsTotal ]] total
+                    </div>
+                    <button class="btn btn-outline-secondary btn-sm" @click="goToNextPage" :disabled="!hasMoreTransactions || loading">
+                        Next
                     </button>
                 </div>
             </div>
         </main>
     </div>
-
             <!-- My Connections Modal -->
             <div class="modal fade" id="myConnectionsModal" tabindex="-1" role="dialog" aria-labelledby="myConnectionsModalLabel" aria-hidden="true">
                 <div class="modal-dialog" role="document">
@@ -238,7 +262,6 @@
                 </div>
             </div>
         </div>
-    </div>
 
     <!-- Profile Modal -->
     <div class="modal fade" id="profileModal" tabindex="-1" role="dialog" aria-labelledby="profileModalLabel" aria-hidden="true">
@@ -273,6 +296,8 @@
                 </form>
             </div>
         </div>
+    </div>
+
     </div>
 
 {% endblock %}
