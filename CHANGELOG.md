@@ -1,3 +1,13 @@
+## [0.6.7] - 2025-10-11
+
+### Changed
+- Moved the transactions search, reset, sync, and connect controls into the top navbar so they stay visible while scrolling.
+- Simplified the transactions pane layout to keep the summary inline and restore the table header’s default positioning (no sticky offset).
+- Darkened institution cards to match the sidebar header and ensured the table header reflects the latest viewport height without gaps.
+
+### Fixed
+- Removed gaps introduced by previous sticky header attempts so the transactions table renders flush beneath the summary.
+
 ## [0.6.6] - 2025-10-11
 
 ### Changed

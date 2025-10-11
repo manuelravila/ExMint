@@ -156,11 +156,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
 const app = new Vue({
     el: '#vue-app',
-    delimiters: ['[[', ']]'],  
+    delimiters: ['[[', ']]'],
     data: {
         banks: [],
         selectedAccountIds: [],
-        allTransactions: [],
+        transactions: [],
         filters: {
             search: '',
             sortKey: 'date',
@@ -176,7 +176,8 @@ const app = new Vue({
         transactionsPageSize: 200,
         transactionsTotal: 0,
         hasMoreTransactions: false,
-        loadingMore: false
+        searchDebounce: null,
+        transactionsRequestToken: 0
     },
     computed: {
         totalAccountCount: function() {
@@ -185,69 +186,40 @@ const app = new Vue({
         areAllAccountsSelected: function() {
             return this.totalAccountCount > 0 && this.selectedAccountIds.length === this.totalAccountCount;
         },
-        loadedTransactionsCount: function() {
-            return this.allTransactions.length;
-        },
         displayedTransactions: function() {
             if (!this.selectedAccountIds.length) {
                 return [];
             }
-
-            const activeIds = new Set(this.selectedAccountIds);
-            let filtered = this.allTransactions.filter(txn => activeIds.has(txn.account_id));
-
-            if (this.filters.search) {
-                const term = this.filters.search.trim().toLowerCase();
-                filtered = filtered.filter(txn => {
-                    const components = [
-                        txn.name,
-                        txn.merchant_name,
-                        (txn.category || []).join(' '),
-                        txn.account_name,
-                        txn.institution_name
-                    ].join(' ');
-                    return components.toLowerCase().includes(term);
-                });
+            return this.transactions;
+        },
+        showingRange: function() {
+            if (!this.transactions.length || !this.transactionsTotal) {
+                return { start: 0, end: 0 };
             }
-
-            const sortKey = this.filters.sortKey;
-            const sorted = filtered.slice().sort((a, b) => {
-                const key = sortKey;
-                let result = 0;
-
-                if (key === 'date') {
-                    const aTime = a.date ? new Date(a.date).getTime() : 0;
-                    const bTime = b.date ? new Date(b.date).getTime() : 0;
-                    result = aTime - bTime;
-                } else if (key === 'amount') {
-                    const aAmount = Number(a.amount) || 0;
-                    const bAmount = Number(b.amount) || 0;
-                    result = aAmount - bAmount;
-                } else {
-                    const aValue = (a[key] || '').toString().toLowerCase();
-                    const bValue = (b[key] || '').toString().toLowerCase();
-                    result = aValue.localeCompare(bValue);
-                }
-
-                if (result === 0 && key !== 'date') {
-                    const aTime = a.date ? new Date(a.date).getTime() : 0;
-                    const bTime = b.date ? new Date(b.date).getTime() : 0;
-                    result = aTime - bTime;
-                }
-
-                return this.filters.sortDesc ? result * -1 : result;
-            });
-
-            return sorted;
+            const start = (this.transactionsPage - 1) * this.transactionsPageSize + 1;
+            const end = start + this.transactions.length - 1;
+            return { start, end };
+        },
+        totalPages: function() {
+            if (!this.transactionsTotal) {
+                return 1;
+            }
+            return Math.max(1, Math.ceil(this.transactionsTotal / this.transactionsPageSize));
+        },
+        showPagination: function() {
+            return this.transactionsTotal > this.transactionsPageSize;
         }
     },
     methods: {
         refreshData: async function() {
             this.loading = true;
             await this.fetchBanks();
-            await this.fetchTransactions({ reset: true });
+            await this.fetchTransactions({ reset: true, skipLoadingState: true });
             this.loading = false;
-            this.$nextTick(this.updateInstitutionCheckboxStates);
+            this.$nextTick(() => {
+                this.updateInstitutionCheckboxStates();
+                this.updateStickyPositions();
+            });
         },
         fetchBanks: async function() {
             try {
@@ -291,45 +263,65 @@ const app = new Vue({
             }
         },
         fetchTransactions: async function(options = {}) {
-            const { reset = false } = options;
-            try {
-                if (reset) {
-                    this.transactionsPage = 1;
-                    this.hasMoreTransactions = false;
-                    this.loadingMore = false;
-                    this.allTransactions = [];
-                }
+            const { reset = false, skipLoadingState = false } = options;
+            if (reset) {
+                this.transactionsPage = 1;
+            }
 
+            const requestToken = ++this.transactionsRequestToken;
+
+            if (!skipLoadingState) {
+                this.loading = true;
+            }
+
+            if (!this.selectedAccountIds.length) {
+                this.transactions = [];
+                this.transactionsTotal = 0;
+                this.hasMoreTransactions = false;
+                if (!skipLoadingState && requestToken === this.transactionsRequestToken) {
+                    this.loading = false;
+                }
+                return true;
+            }
+
+            try {
                 const params = new URLSearchParams();
                 params.append('page', this.transactionsPage);
                 params.append('page_size', this.transactionsPageSize);
+                params.append('sort_key', this.filters.sortKey);
+                params.append('sort_desc', this.filters.sortDesc ? 'true' : 'false');
+
+                const trimmedSearch = (this.filters.search || '').trim();
+                if (trimmedSearch) {
+                    params.append('search', trimmedSearch);
+                }
+
+                if (this.selectedAccountIds.length) {
+                    params.append('account_ids', this.selectedAccountIds.join(','));
+                }
 
                 const response = await fetch(`/api/transactions?${params.toString()}`);
                 if (!response.ok) {
                     throw new Error('Failed to load transactions.');
                 }
                 const data = await response.json();
-                const transactions = data.transactions || [];
-
-                if (reset) {
-                    this.allTransactions = transactions;
-                } else {
-                    const existingIds = new Set(this.allTransactions.map(txn => txn.id));
-                    const merged = [...this.allTransactions];
-                    transactions.forEach(txn => {
-                        if (!existingIds.has(txn.id)) {
-                            merged.push(txn);
-                        }
-                    });
-                    this.allTransactions = merged;
+                if (requestToken !== this.transactionsRequestToken) {
+                    return true;
                 }
-
-                this.transactionsTotal = data.total_count || this.allTransactions.length;
+                this.transactions = data.transactions || [];
+                this.transactionsTotal = data.total_count || 0;
                 this.hasMoreTransactions = Boolean(data.has_more);
                 return true;
             } catch (error) {
                 console.error('Error fetching transactions:', error);
                 return false;
+            } finally {
+                if (!skipLoadingState && requestToken === this.transactionsRequestToken) {
+                    this.loading = false;
+                }
+                if (requestToken === this.transactionsRequestToken) {
+                    this.updateStickyPositions();
+                }
             }
         },
         toggleAllAccounts: function() {
@@ -342,7 +334,10 @@ const app = new Vue({
                 });
                 this.selectedAccountIds = Array.from(ids);
             }
-            this.$nextTick(this.updateInstitutionCheckboxStates);
+            this.$nextTick(() => {
+                this.updateInstitutionCheckboxStates();
+                this.handleAccountSelectionChange();
+            });
         },
         toggleInstitutionSelection: function(bank) {
             const accountIds = bank.accounts.map(account => account.id);
@@ -356,7 +351,14 @@ const app = new Vue({
             }
 
             this.selectedAccountIds = Array.from(selectedSet);
-            this.$nextTick(this.updateInstitutionCheckboxStates);
+            this.$nextTick(() => {
+                this.updateInstitutionCheckboxStates();
+                this.handleAccountSelectionChange();
+            });
+        },
+        handleAccountSelectionChange: function() {
+            this.transactionsPage = 1;
+            this.fetchTransactions({ reset: true });
         },
         isBankFullySelected: function(bank) {
             if (!bank.accounts.length) {
@@ -371,14 +373,25 @@ const app = new Vue({
                 this.filters.sortDesc = !this.filters.sortDesc;
             } else {
                 this.filters.sortKey = key;
-                this.filters.sortDesc = key !== 'name'; // Default to ascending for name
+                this.filters.sortDesc = key !== 'name';
             }
+            this.transactionsPage = 1;
+            this.fetchTransactions({ reset: true });
         },
         sortIcon: function(key) {
             if (this.filters.sortKey !== key) {
                 return 'fas fa-sort text-muted';
             }
             return this.filters.sortDesc ? 'fas fa-sort-down' : 'fas fa-sort-up';
+        },
+        handleSearchInput: function() {
+            if (this.searchDebounce) {
+                window.clearTimeout(this.searchDebounce);
+            }
+            this.searchDebounce = window.setTimeout(() => {
+                this.transactionsPage = 1;
+                this.fetchTransactions({ reset: true });
+            }, 300);
         },
         formatCurrency: function(amount, currency) {
             const value = Number(amount) || 0;
@@ -404,9 +417,20 @@ const app = new Vue({
             return parsed.toLocaleDateString();
         },
         resetFilters: function() {
+            if (!this.filters.search && this.filters.sortKey === 'date' && this.filters.sortDesc) {
+                return;
+            }
+
+            if (this.searchDebounce) {
+                window.clearTimeout(this.searchDebounce);
+                this.searchDebounce = null;
+            }
+
             this.filters.search = '';
             this.filters.sortKey = 'date';
             this.filters.sortDesc = true;
+            this.transactionsPage = 1;
+            this.fetchTransactions({ reset: true });
         },
         syncTransactions: async function() {
             if (this.syncing) {
@@ -438,21 +462,26 @@ const app = new Vue({
         startReconnect: function(bankId) {
             reconnectBank(bankId);
         },
-        loadMoreTransactions: async function() {
-            if (!this.hasMoreTransactions || this.loadingMore) {
+        goToNextPage: async function() {
+            if (!this.hasMoreTransactions || this.loading) {
                 return;
             }
-
-            this.loadingMore = true;
-            const nextPage = this.transactionsPage + 1;
-            try {
-                this.transactionsPage = nextPage;
-                const success = await this.fetchTransactions({ reset: false });
-                if (!success) {
-                    this.transactionsPage = nextPage - 1;
-                }
-            } finally {
-                this.loadingMore = false;
+            const targetPage = this.transactionsPage + 1;
+            this.transactionsPage = targetPage;
+            const success = await this.fetchTransactions();
+            if (!success) {
+                this.transactionsPage = targetPage - 1;
+            }
+        },
+        goToPreviousPage: async function() {
+            if (this.transactionsPage <= 1 || this.loading) {
+                return;
+            }
+            const targetPage = this.transactionsPage - 1;
+            this.transactionsPage = targetPage;
+            const success = await this.fetchTransactions();
+            if (!success) {
+                this.transactionsPage = targetPage + 1;
             }
         },
         isAccordionOpen: function(bankId) {
@@ -489,6 +518,19 @@ const app = new Vue({
                 allCheckbox.indeterminate = someSelected && !this.areAllAccountsSelected;
             }
         },
+        updateStickyPositions: function() {
+            const header = document.querySelector('header.sticky-top');
+            const root = document.documentElement;
+            if (header && root) {
+                const computed = window.getComputedStyle(header);
+                const marginBottom = parseFloat(computed.marginBottom || '0');
+                const headerHeight = (header.offsetHeight || 0) + marginBottom;
+                root.style.setProperty('--dashboard-header-height', `${headerHeight}px`);
+            }
+        },
+        handleResize: function() {
+            this.updateStickyPositions();
+        },
         removeBank: async function(bank) {
             if (!confirm(`Are you sure you want to remove your connection with ${bank.institution_name}?`)) {
                 return;
@@ -513,8 +555,17 @@ const app = new Vue({
     },
     mounted: async function() {
         await this.refreshData();
+        this.updateStickyPositions();
+        window.addEventListener('resize', this.handleResize);
     },
     updated: function() {
         this.updateInstitutionCheckboxStates();
+        this.updateStickyPositions();
+    },
+    beforeDestroy: function() {
+        if (this.searchDebounce) {
+            window.clearTimeout(this.searchDebounce);
+        }
+        window.removeEventListener('resize', this.handleResize);
     }
 });

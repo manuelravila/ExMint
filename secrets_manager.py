@@ -4,10 +4,34 @@ import subprocess
 import json
 import time
 from filelock import FileLock
+from pathlib import Path
+
+
+def _load_env_from_file():
+    """Attempt to load environment variables from standard .env files."""
+    candidates = ['.env', '.env.dev', '.env.local']
+    for filename in candidates:
+        path = Path(filename)
+        if not path.exists():
+            continue
+
+        for line in path.read_text().splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith('#') or '=' not in stripped:
+                continue
+            key, value = stripped.split('=', 1)
+            key = key.strip()
+            value = value.strip().strip('\'"')
+            os.environ.setdefault(key, value)
+
+    return os.getenv('BWS_ACCESS_TOKEN')
 
 branch = os.getenv('FLASK_ENV', 'dev') 
 
 bws_session = os.getenv('BWS_ACCESS_TOKEN')
+if not bws_session:
+    bws_session = _load_env_from_file()
+
 if not bws_session:
     raise EnvironmentError("BWS_ACCESS_TOKEN environment variable not set.")
 

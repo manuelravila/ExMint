@@ -7,7 +7,7 @@ from plaid.model.accounts_get_request import AccountsGetRequest
 from plaid.model.item_webhook_update_request import ItemWebhookUpdateRequest
 #from plaid.model.accounts_balance_get_request import AccountsBalanceGetRequest
 from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
-from sqlalchemy import and_
+from sqlalchemy import and_, or_, func, asc, desc
 from sqlalchemy.orm import joinedload
 import plaid
 import json
@@ -178,26 +178,65 @@ def handle_token_and_accounts():
 
 def _persist_transactions_from_payload(user, credential, data):
     counts = {'added': 0, 'modified': 0, 'removed': 0}
+    payload_by_action = {
+        action: list(data.get(action, []) or [])
+        for action in ['added', 'modified', 'removed']
+    }
 
-    for action in ['added', 'modified', 'removed']:
-        for payload in data.get(action, []):
+    transaction_ids = {
+        payload.get('transaction_id')
+        for payload_list in payload_by_action.values()
+        for payload in payload_list
+        if payload.get('transaction_id')
+    }
+    transaction_ids.discard(None)
+
+    existing_transactions = {}
+    if transaction_ids:
+        existing_transactions = {
+            txn.plaid_transaction_id: txn
+            for txn in Transaction.query.filter(
+                Transaction.plaid_transaction_id.in_(transaction_ids)
+            ).all()
+        }
+
+    account_map = {account.plaid_account_id: account for account in credential.accounts}
+    incoming_account_ids = {
+        payload.get('account_id')
+        for payload_list in (payload_by_action['added'], payload_by_action['modified'])
+        for payload in payload_list
+        if payload.get('account_id')
+    }
+    incoming_account_ids.discard(None)
+
+    missing_account_ids = incoming_account_ids.difference(account_map.keys())
+    if missing_account_ids:
+        fetched_accounts = Account.query.filter(
+            Account.plaid_account_id.in_(missing_account_ids)
+        ).all()
+        account_map.update({account.plaid_account_id: account for account in fetched_accounts})
+
+    for payload in payload_by_action['removed']:
+        plaid_transaction_id = payload.get('transaction_id')
+        if not plaid_transaction_id:
+            continue
+
+        transaction = existing_transactions.get(plaid_transaction_id)
+        if transaction and not transaction.is_removed:
+            transaction.is_removed = True
+            transaction.last_action = 'removed'
+            transaction.updated_at = datetime.utcnow()
+            counts['removed'] += 1
+        elif transaction:
+            transaction.last_action = 'removed'
+
+    for action in ['added', 'modified']:
+        for payload in payload_by_action[action]:
             plaid_transaction_id = payload.get('transaction_id')
             if not plaid_transaction_id:
                 continue
 
-            transaction = Transaction.query.filter_by(plaid_transaction_id=plaid_transaction_id).first()
-
-            if action == 'removed':
-                if transaction and not transaction.is_removed:
-                    transaction.is_removed = True
-                    transaction.last_action = 'removed'
-                    transaction.updated_at = datetime.utcnow()
-                    counts['removed'] += 1
-                elif transaction:
-                    transaction.last_action = 'removed'
-                continue
-
-            account = Account.query.filter_by(plaid_account_id=payload.get('account_id')).first()
+            account = account_map.get(payload.get('account_id'))
             if not account:
                 current_app.logger.warning(
                     "Skipping transaction %s because account %s was not found",
@@ -206,10 +245,7 @@ def _persist_transactions_from_payload(user, credential, data):
                 )
                 continue
 
-            amount_value = payload.get('amount')
-            if amount_value is None:
-                amount_value = 0
-
+            transaction = existing_transactions.get(plaid_transaction_id)
             if transaction is None:
                 transaction = Transaction(
                     plaid_transaction_id=plaid_transaction_id,
@@ -219,9 +255,14 @@ def _persist_transactions_from_payload(user, credential, data):
                     created_at=datetime.utcnow()
                 )
                 db.session.add(transaction)
+                existing_transactions[plaid_transaction_id] = transaction
             else:
                 transaction.credential_id = credential.id
                 transaction.account_id = account.id
+
+            amount_value = payload.get('amount', 0)
+            if amount_value is None:
+                amount_value = 0
 
             transaction.name = payload.get('name') or ''
             transaction.amount = Decimal(str(amount_value))
@@ -467,10 +508,15 @@ def get_transactions():
         page_size = 200
     page_size = max(1, min(page_size, 500))
 
+    sort_key = request.args.get('sort_key', 'date')
+    sort_desc_value = request.args.get('sort_desc', 'true')
+    sort_desc = str(sort_desc_value).lower() in ('true', '1', 'yes', 'y', 'desc')
+    search_term = (request.args.get('search') or '').strip()
+
     query = Transaction.query.options(
         joinedload(Transaction.account),
         joinedload(Transaction.credential)
-    ).filter(
+    ).join(Account).join(Credential).filter(
         Transaction.user_id == current_user.id,
         Transaction.is_removed.is_(False)
     )
@@ -478,8 +524,33 @@ def get_transactions():
     if account_ids:
         query = query.filter(Transaction.account_id.in_(account_ids))
 
+    if search_term:
+        token = f"%{search_term}%"
+        query = query.filter(or_(
+            Transaction.name.ilike(token),
+            Transaction.merchant_name.ilike(token),
+            Transaction.category.ilike(token),
+            func.coalesce(Transaction.payment_channel, '').ilike(token),
+            Account.name.ilike(token),
+            func.coalesce(Account.mask, '').ilike(token),
+            Credential.institution_name.ilike(token)
+        ))
+
     total_count = query.count()
-    ordered_query = query.order_by(Transaction.date.desc(), Transaction.id.desc())
+
+    sort_mapping = {
+        'date': Transaction.date,
+        'name': Transaction.name,
+        'amount': Transaction.amount
+    }
+    sort_column = sort_mapping.get(sort_key, Transaction.date)
+    primary_order = desc(sort_column) if sort_desc else asc(sort_column)
+
+    secondary_order = desc(Transaction.id)
+    if sort_column is Transaction.date and not sort_desc:
+        secondary_order = asc(Transaction.id)
+
+    ordered_query = query.order_by(primary_order, secondary_order)
     offset = (page - 1) * page_size
     transactions = ordered_query.offset(offset).limit(page_size).all()
 
@@ -520,7 +591,10 @@ def get_transactions():
         page=page,
         page_size=page_size,
         total_count=total_count,
-        has_more=has_more
+        has_more=has_more,
+        sort_key=sort_key,
+        sort_desc=sort_desc,
+        search=search_term
     )
 
 @core.route('/api/balance', methods=['POST'])
