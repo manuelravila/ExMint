@@ -9,6 +9,28 @@ from config import Config
 db = SQLAlchemy()
 key = Config.ENCRYPTION_KEY
 
+class Category(db.Model):
+    __tablename__ = 'categories'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    label = db.Column(db.String(255), nullable=False)
+    text_to_match = db.Column(db.String(512), nullable=False)
+    field_to_match = db.Column(db.String(50), nullable=False, default='description')
+    transaction_type = db.Column(db.String(20), nullable=True)
+    amount_min = db.Column(db.Numeric(14, 2), nullable=True)
+    amount_max = db.Column(db.Numeric(14, 2), nullable=True)
+    color = db.Column(db.String(7), nullable=False, default='#2C6B4F')
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    # Relationship to user and transactions
+    user = db.relationship('User', backref=db.backref('categories', lazy=True))
+    transactions = db.relationship('Transaction', back_populates='custom_category', lazy=True)
+
+    def __repr__(self):
+        return f'<Category {self.label}>'
+
 class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
     # Removed: username = db.Column(db.String(80), unique=True, nullable=False)
@@ -92,11 +114,24 @@ class Transaction(db.Model):
     last_action = db.Column(db.String(20), nullable=False, default='added')
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    custom_category_id = db.Column(db.Integer, db.ForeignKey('categories.id'), nullable=True)
 
     credential = db.relationship('Credential', backref=db.backref('transactions', lazy=True))
+    custom_category = db.relationship('Category', back_populates='transactions', lazy=True)
 
     def __repr__(self):
         return f'<Transaction {self.plaid_transaction_id}>'
+
+
+class TransactionCategoryOverride(db.Model):
+    __tablename__ = 'transaction_category_override'
+
+    transaction_id = db.Column(db.Integer, db.ForeignKey('transactions.id'), primary_key=True)
+    label = db.Column(db.String(255), nullable=False)
+    color = db.Column(db.String(7), nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
+
+    transaction = db.relationship('Transaction', backref=db.backref('manual_override_record', uselist=False, cascade='all, delete-orphan'))
 
 class Subscription(db.Model):
     __tablename__ = 'subscription'

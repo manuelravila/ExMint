@@ -1,3 +1,15 @@
+## [0.6.8] - 2025-10-11
+
+### Added
+- Inline category edits now persist through a dedicated `transaction_category_override` table so one-off manual tags stay put while rules continue to run. A dropdown of existing tags appears as you type for quick selection.
+
+### Changed
+- Transactions always display a category badge: rule matches show in color, manual overrides stay green, and default rows fall back to Plaid’s category string.
+- Removed redundant custom category columns from the model and simplified rule application to rely solely on `custom_category_id` plus optional overrides.
+
+### Fixed
+- `ensure_category_schema` now creates the override table on the fly, preventing 1146 errors when older databases are upgraded lazily.
+
 ## [0.6.7] - 2025-10-11
 
 ### Changed
