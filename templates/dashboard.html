@@ -58,21 +58,54 @@
     <div class="dashboard-shell">
         <!-- Left Sidebar: Connected Banks and Accounts -->
         <aside class="accounts-pane">
-            <div class="accounts-pane-header">
-                <h6 class="accounts-title">My Accounts</h6>
-                <div class="custom-control custom-checkbox all-accounts-toggle mb-0">
-                    <input
-                        type="checkbox"
-                        class="custom-control-input"
-                        id="all-accounts-toggle"
-                        :checked="areAllAccountsSelected"
-                        @change="toggleAllAccounts"
-                        ref="allAccountsCheckbox"
+            <div class="accounts-top-level">
+                <button
+                    type="button"
+                    class="accounts-nav-btn"
+                    :class="{ active: activePane === 'categories' }"
+                    @click="setActivePane('categories')"
+                >
+                    <i class="fas fa-tags mr-2"></i>
+                    <span>Categories</span>
+                </button>
+                <div
+                    class="transactions-nav"
+                    :class="{ active: activePane === 'transactions' }"
+                    @click="setActivePane('transactions')"
+                >
+                    <div class="transactions-nav-main">
+                        <div class="custom-control custom-checkbox all-accounts-toggle mb-0">
+                            <input
+                                type="checkbox"
+                                class="custom-control-input"
+                                id="all-accounts-toggle"
+                                :checked="areAllAccountsSelected"
+                                @change="toggleAllAccounts"
+                                @click.stop
+                                ref="allAccountsCheckbox"
+                                aria-label="Toggle all accounts"
+                            >
+                            <label class="custom-control-label" for="all-accounts-toggle">
+                                Transactions
+                            </label>
+                        </div>
+                    </div>
+                    <button
+                        type="button"
+                        class="collapse-toggle"
+                        @click.stop="toggleTransactionsCollapse"
+                        :aria-expanded="!transactionsCollapsed"
+                        aria-controls="transactions-accordion"
                     >
-                    <label class="custom-control-label" for="all-accounts-toggle">All Accounts</label>
+                        <i :class="[transactionsCollapsed ? 'fas fa-chevron-right' : 'fas fa-chevron-down']"></i>
+                    </button>
                 </div>
             </div>
-            <div class="institution-list">
+            <div
+                class="institution-list"
+                id="transactions-accordion"
+                v-show="!transactionsCollapsed"
+            >
                 <div class="institution-card" v-for="bank in banks" :key="bank.id">
                     <div class="institution-header">
                         <div class="institution-main">
@@ -139,7 +172,14 @@
         </aside>
 
         <!-- Main content: Transactions Table -->
-        <main role="main" class="transactions-pane">
+        <main
+            role="main"
+            :class="[
+                activePane === 'transactions' ? 'transactions-pane' : 'categories-pane',
+                'pane-content'
+            ]"
+        >
+            <section v-if="activePane === 'transactions'" class="transactions-section">
             <div class="transactions-summary">
                 <h4 class="mb-0">Transactions</h4>
                 <small class="text-muted">
@@ -201,9 +241,43 @@
                                     <div>[[ transaction.account_name ]] <span class="text-muted" v-if="transaction.account_mask">••[[ transaction.account_mask ]]</span></div>
                                     <small class="text-muted">[[ transaction.institution_name ]]</small>
                                 </td>
-                                <td>
-                                    <span v-if="transaction.category && transaction.category.length" class="badge badge-light mr-1" v-for="category in transaction.category" :key="`${transaction.id}-${category}`">[[ category ]]</span>
-                                    <span v-else class="text-muted">—</span>
+                                <td class="transaction-category-cell">
+                                    <div v-if="editingTransactionCategoryId === transaction.id" class="category-edit-wrapper">
+                                        <input
+                                            type="text"
+                                            class="form-control form-control-sm category-edit-input"
+                                            :ref="`transactionCategoryInput-${transaction.id}`"
+                                            v-model="editingTransactionCategoryValue"
+                                            placeholder="Enter category"
+                                            @keydown="handleTransactionCategoryKeydown($event, transaction)"
+                                            @input="handleTransactionCategoryInput()"
+                                            @blur="onTransactionCategoryBlur(transaction)"
+                                        >
+                                        <div
+                                            v-if="filteredTransactionSuggestions.length"
+                                            class="category-edit-dropdown"
+                                        >
+                                            <button
+                                                v-for="option in filteredTransactionSuggestions"
+                                                :key="`option-${transaction.id}-${option}`"
+                                                type="button"
+                                                class="dropdown-item suggestion-item"
+                                                @mousedown.prevent="applyTransactionCategorySuggestion(option, transaction)"
+                                            >
+                                                [[ option ]]
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <span
+                                        v-else
+                                        class="badge category-tag"
+                                        :class="{ 'category-tag-fallback': transaction.custom_category_is_fallback }"
+                                        :style="transaction.custom_category_is_fallback ? null : categoryTagStyle(transaction)"
+                                        @click.stop="startTransactionCategoryEdit(transaction)"
+                                        title="Click to edit category"
+                                    >
+                                        [[ transaction.custom_category ]]
+                                    </span>
                                 </td>
                                 <td class="text-right font-weight-bold">[[ formatCurrency(transaction.amount, transaction.iso_currency_code) ]]</td>
                             </tr>
@@ -232,6 +306,164 @@
                     </button>
                 </div>
             </div>
+            </section>
+            <section v-else class="categories-section">
+                <div class="categories-header">
+                    <div>
+                        <h4 class="mb-0">Categories</h4>
+                        <small class="text-muted">Create rules to automatically categorize your transactions.</small>
+                    </div>
+                    <div class="d-flex align-items-center">
+                        <button class="btn btn-primary btn-sm" @click="addCategoryRule">
+                            <i class="fas fa-plus mr-1"></i> Add Rule
+                        </button>
+                    </div>
+                </div>
+                <div v-if="categoriesError" class="alert alert-warning py-2 px-3 mb-3">
+                    [[ categoriesError ]]
+                </div>
+                <div v-if="categoriesLoading" class="card shadow-sm categories-card">
+                    <div class="card-body text-center py-5">
+                        <div class="spinner-border text-primary mb-3" role="status">
+                            <span class="sr-only">Loading categories...</span>
+                        </div>
+                        <div class="text-muted">Loading your category rules...</div>
+                    </div>
+                </div>
+                <div v-else class="card shadow-sm categories-card">
+                    <div v-if="!categoryRules.length" class="card-body text-center text-muted py-5">
+                        No category rules yet. Add one to get started.
+                    </div>
+                    <div v-else class="table-responsive categories-table">
+                        <table class="table table-sm mb-0">
+                            <thead class="thead-light">
+                                <tr>
+                                    <th scope="col">Text to match</th>
+                                <th scope="col">Field to match</th>
+                                <th scope="col">Type</th>
+                                <th scope="col">Color</th>
+                                <th scope="col">Amount &gt;=</th>
+                                <th scope="col">Amount &lt;=</th>
+                                <th scope="col">Custom Category</th>
+                                <th scope="col" class="text-right">Actions</th>
+                            </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="rule in categoryRules" :key="rule.localId">
+                                    <td>
+                                        <input
+                                            type="text"
+                                            class="form-control form-control-sm"
+                                            v-model="rule.text_to_match"
+                                            @input="markRuleDirty(rule)"
+                                            placeholder="Enter pattern (* ? # supported)"
+                                        >
+                                    </td>
+                                    <td>
+                                        <select class="form-control form-control-sm" v-model="rule.field_to_match" @change="markRuleDirty(rule)">
+                                            <option value="description">Description</option>
+                                            <option value="merchant">Merchant</option>
+                                            <option value="category">Category</option>
+                                        </select>
+                                    </td>
+                                    <td>
+                                        <select class="form-control form-control-sm" v-model="rule.transaction_type" @change="markRuleDirty(rule)">
+                                            <option value="">Any</option>
+                                            <option value="debit">Debit</option>
+                                            <option value="credit">Credit</option>
+                                        </select>
+                                    </td>
+                                    <td class="category-color-cell">
+                                        <button
+                                            type="button"
+                                            class="color-trigger"
+                                            :style="{ backgroundColor: normalizeColor(rule.color) }"
+                                            @click.stop="toggleRulePalette(rule)"
+                                            :aria-expanded="openColorRuleId === rule.localId ? 'true' : 'false'"
+                                            :aria-controls="`color-popover-${rule.localId}`"
+                                            :title="`Selected color ${normalizeColor(rule.color)}`"
+                                        ></button>
+                                        <div
+                                            v-if="openColorRuleId === rule.localId"
+                                            :id="`color-popover-${rule.localId}`"
+                                            class="color-swatch-popover"
+                                            role="menu"
+                                            @click.stop
+                                        >
+                                            <div class="color-swatch-grid">
+                                                <button
+                                                    v-for="colorOption in categoryPalette"
+                                                    :key="`${rule.localId}-${colorOption}`"
+                                                    type="button"
+                                                    class="color-swatch"
+                                                    :class="{ selected: normalizeColor(rule.color) === colorOption }"
+                                                    :style="{ backgroundColor: colorOption }"
+                                                    @click.stop="selectRuleColor(rule, colorOption)"
+                                                    :aria-label="`Select color ${colorOption}`"
+                                                    role="menuitemradio"
+                                                    :aria-checked="normalizeColor(rule.color) === colorOption ? 'true' : 'false'"
+                                                ></button>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <input
+                                            type="number"
+                                            class="form-control form-control-sm"
+                                            v-model="rule.amount_min"
+                                            @input="markRuleDirty(rule)"
+                                            step="0.01"
+                                            placeholder="Min"
+                                        >
+                                    </td>
+                                    <td>
+                                        <input
+                                            type="number"
+                                            class="form-control form-control-sm"
+                                            v-model="rule.amount_max"
+                                            @input="markRuleDirty(rule)"
+                                            step="0.01"
+                                            placeholder="Max"
+                                        >
+                                    </td>
+                                    <td>
+                                        <input
+                                            type="text"
+                                            class="form-control form-control-sm"
+                                            v-model="rule.label"
+                                            @input="markRuleDirty(rule)"
+                                            list="custom-category-options"
+                                            placeholder="Category name"
+                                        >
+                                    </td>
+                                    <td class="text-right">
+                                        <div class="btn-group btn-group-sm" role="group">
+                                            <button
+                                                class="btn btn-outline-success"
+                                                :disabled="rule.saving || !rule.isDirty || !rule.text_to_match || !rule.label"
+                                                @click="saveCategoryRule(rule)"
+                                            >
+                                                <span v-if="!rule.saving"><i class="fas fa-save"></i></span>
+                                                <span v-else><i class="fas fa-spinner fa-spin"></i></span>
+                                            </button>
+                                            <button
+                                                class="btn btn-outline-danger"
+                                                :disabled="rule.saving"
+                                                @click="deleteCategoryRule(rule)"
+                                            >
+                                                <i class="fas fa-trash-alt"></i>
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                <datalist id="custom-category-options">
+                    <option v-for="label in categoryLabels" :key="`rule-${label}`" :value="label"></option>
+                </datalist>
+            </section>
         </main>
     </div>
             <!-- My Connections Modal -->

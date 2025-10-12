@@ -161,6 +161,9 @@ const app = new Vue({
         banks: [],
         selectedAccountIds: [],
         transactions: [],
+        categoryRules: [],
+        categoryLabels: [],
+        categoriesError: null,
         filters: {
             search: '',
             sortKey: 'date',
@@ -177,7 +180,24 @@ const app = new Vue({
         transactionsTotal: 0,
         hasMoreTransactions: false,
         searchDebounce: null,
-        transactionsRequestToken: 0
+        transactionsRequestToken: 0,
+        activePane: 'transactions',
+        transactionsCollapsed: false,
+        categoriesLoading: false,
+        categoriesLoaded: false,
+        nextCategoryTempId: 0,
+        openColorRuleId: null,
+        categoryPalette: [
+            '#2C6B4F', '#F94144', '#F3722C', '#F8961E',
+            '#F9844A', '#F9C74F', '#90BE6D', '#43AA8B',
+            '#4D908E', '#577590', '#277DA1', '#6D597A',
+            '#B56576', '#E56B6F', '#EAAC8B', '#9A031E',
+            '#5F0F40', '#FB8B24', '#4361EE', '#3A86FF',
+            '#8338EC', '#FF006E', '#FFBF69', '#8AC926'
+        ],
+        editingTransactionCategoryId: null,
+        editingTransactionCategoryValue: '',
+        transactionCategoryBlurTimeout: null
     },
     computed: {
         totalAccountCount: function() {
@@ -208,18 +228,452 @@ const app = new Vue({
         },
         showPagination: function() {
             return this.transactionsTotal > this.transactionsPageSize;
+        },
+        transactionCategoryOptions: function() {
+            const values = new Set();
+            this.categoryRules.forEach(rule => {
+                if (rule.label) {
+                    values.add(rule.label);
+                }
+            });
+            this.transactions.forEach(txn => {
+                if (txn.custom_category) {
+                    values.add(txn.custom_category);
+                }
+                if (Array.isArray(txn.category)) {
+                    txn.category.forEach(cat => {
+                        if (cat) {
+                            values.add(cat);
+                        }
+                    });
+                }
+            });
+            return Array.from(values).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+        },
+        filteredTransactionSuggestions: function() {
+            if (this.editingTransactionCategoryId === null) {
+                return [];
+            }
+            const query = (this.editingTransactionCategoryValue || '').trim().toLowerCase();
+            const options = this.transactionCategoryOptions;
+            if (!query) {
+                return options.slice(0, 8);
+            }
+            return options.filter(option => option.toLowerCase().includes(query)).slice(0, 8);
         }
     },
     methods: {
         refreshData: async function() {
             this.loading = true;
-            await this.fetchBanks();
-            await this.fetchTransactions({ reset: true, skipLoadingState: true });
-            this.loading = false;
+            try {
+                await this.fetchBanks();
+                await this.fetchTransactions({ reset: true, skipLoadingState: true });
+                if (this.activePane === 'categories') {
+                    await this.fetchCategories({ refresh: true, suppressLoader: true });
+                }
+            } finally {
+                this.loading = false;
+                this.$nextTick(() => {
+                    this.updateInstitutionCheckboxStates();
+                    this.updateStickyPositions();
+                });
+            }
+        },
+        setActivePane: async function(pane) {
+            if (this.activePane === pane) {
+                return;
+            }
+            this.activePane = pane;
+            if (pane !== 'transactions') {
+                this.cancelTransactionCategoryEdit();
+            }
+            if (pane === 'categories') {
+                if (!this.categoriesLoaded || (!this.categoryRules.length && !this.categoriesLoading)) {
+                    await this.fetchCategories();
+                }
+            } else if (pane === 'transactions' && this.selectedAccountIds.length) {
+                if (!this.transactions.length) {
+                    await this.fetchTransactions({ reset: true });
+                }
+            }
             this.$nextTick(() => {
-                this.updateInstitutionCheckboxStates();
                 this.updateStickyPositions();
             });
+        },
+        toggleTransactionsCollapse: function() {
+            this.transactionsCollapsed = !this.transactionsCollapsed;
+            this.$nextTick(() => {
+                this.updateStickyPositions();
+            });
+        },
+        startTransactionCategoryEdit: function(transaction) {
+            if (!transaction || transaction.savingCategory) {
+                return;
+            }
+            this.editingTransactionCategoryId = transaction.id;
+            this.editingTransactionCategoryValue = transaction.custom_category || '';
+            this.$nextTick(() => {
+                const refName = `transactionCategoryInput-${transaction.id}`;
+                const refs = this.$refs[refName];
+                const input = Array.isArray(refs) ? refs[0] : refs;
+                if (input && typeof input.focus === 'function') {
+                    input.focus();
+                    input.select();
+                }
+            });
+        },
+        cancelTransactionCategoryEdit: function() {
+            this.editingTransactionCategoryId = null;
+            this.editingTransactionCategoryValue = '';
+            if (this.transactionCategoryBlurTimeout) {
+                clearTimeout(this.transactionCategoryBlurTimeout);
+                this.transactionCategoryBlurTimeout = null;
+            }
+        },
+        saveTransactionCategoryEdit: async function(transaction) {
+            if (!transaction || transaction.savingCategory) {
+                return;
+            }
+            if (this.editingTransactionCategoryId !== transaction.id) {
+                return;
+            }
+
+            if (this.transactionCategoryBlurTimeout) {
+                clearTimeout(this.transactionCategoryBlurTimeout);
+                this.transactionCategoryBlurTimeout = null;
+            }
+
+            const trimmed = (this.editingTransactionCategoryValue || '').trim();
+            const currentLabel = transaction.custom_category || '';
+            const isManual = transaction.custom_category_source === 'manual';
+            const isFallback = transaction.custom_category_is_fallback;
+
+            if (!trimmed && !isManual) {
+                if (isFallback) {
+                    this.cancelTransactionCategoryEdit();
+                    return;
+                }
+            }
+
+            if (trimmed && trimmed === currentLabel && isManual) {
+                this.cancelTransactionCategoryEdit();
+                return;
+            }
+
+            if (trimmed === currentLabel && !isManual && !isFallback) {
+                this.cancelTransactionCategoryEdit();
+                return;
+            }
+
+            const payload = { label: trimmed };
+            if (trimmed) {
+                const matchingRule = this.categoryRules.find(rule => rule.label === trimmed);
+                if (matchingRule && matchingRule.color) {
+                    payload.color = matchingRule.color;
+                }
+            }
+
+            transaction.savingCategory = true;
+            try {
+                const response = await fetch(`/api/transactions/${transaction.id}/category`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to update category.');
+                }
+                if (data.transaction) {
+                    Object.assign(transaction, data.transaction);
+                }
+                this.cancelTransactionCategoryEdit();
+            } catch (error) {
+                console.error('Error updating transaction category:', error);
+                alert(error.message || 'Failed to update category.');
+            } finally {
+                delete transaction.savingCategory;
+            }
+        },
+        handleTransactionCategoryKeydown: function(event, transaction) {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                this.cancelTransactionCategoryEdit();
+            } else if (event.key === 'Enter') {
+                event.preventDefault();
+                this.saveTransactionCategoryEdit(transaction);
+            }
+        },
+        handleTransactionCategoryInput: function() {
+            if (this.transactionCategoryBlurTimeout) {
+                clearTimeout(this.transactionCategoryBlurTimeout);
+                this.transactionCategoryBlurTimeout = null;
+            }
+        },
+        onTransactionCategoryBlur: function(transaction) {
+            if (this.transactionCategoryBlurTimeout) {
+                clearTimeout(this.transactionCategoryBlurTimeout);
+            }
+            this.transactionCategoryBlurTimeout = window.setTimeout(() => {
+                this.transactionCategoryBlurTimeout = null;
+                this.saveTransactionCategoryEdit(transaction);
+            }, 120);
+        },
+        applyTransactionCategorySuggestion: function(option, transaction) {
+            if (!option) {
+                return;
+            }
+            this.editingTransactionCategoryValue = option;
+            if (this.transactionCategoryBlurTimeout) {
+                clearTimeout(this.transactionCategoryBlurTimeout);
+                this.transactionCategoryBlurTimeout = null;
+            }
+            this.saveTransactionCategoryEdit(transaction);
+        },
+        fetchCategories: async function(options = {}) {
+            const { force = false, suppressLoader = false } = options;
+            if (!force && this.categoriesLoaded) {
+                const hasDirty = this.categoryRules.some(rule => rule.isDirty && !rule.saving);
+                if (hasDirty) {
+                    return;
+                }
+                if (!options.refresh) {
+                    return;
+                }
+            }
+
+            if (!suppressLoader) {
+                this.categoriesLoading = true;
+            }
+            this.categoriesError = null;
+
+            try {
+                const response = await fetch('/api/categories');
+                if (!response.ok) {
+                    throw new Error('Failed to load categories.');
+                }
+                const data = await response.json();
+                this.categoryRules = (data.categories || []).map(rule => this.prepareCategoryRule(rule));
+                this.categoriesLoaded = true;
+                this.updateCategoryLabels(data.labels);
+            } catch (error) {
+                console.error('Error fetching categories:', error);
+                this.categoriesError = error.message || 'Failed to load categories.';
+            } finally {
+                this.categoriesLoading = false;
+            }
+        },
+        prepareCategoryRule: function(raw) {
+            const ruleId = raw.id || null;
+            const normalizedColor = this.normalizeColor(raw.color);
+            return {
+                id: ruleId,
+                localId: ruleId ? `rule-${ruleId}` : `local-${Date.now()}-${++this.nextCategoryTempId}`,
+                text_to_match: raw.text_to_match || '',
+                field_to_match: raw.field_to_match || 'description',
+                transaction_type: raw.transaction_type || '',
+                amount_min: raw.amount_min !== null && raw.amount_min !== undefined ? String(raw.amount_min) : '',
+                amount_max: raw.amount_max !== null && raw.amount_max !== undefined ? String(raw.amount_max) : '',
+                color: normalizedColor,
+                label: raw.label || '',
+                isDirty: false,
+                isNew: false,
+                saving: false
+            };
+        },
+        addCategoryRule: function() {
+            const tempId = `new-${Date.now()}-${++this.nextCategoryTempId}`;
+            this.categoryRules.unshift({
+                id: null,
+                localId: tempId,
+                text_to_match: '',
+                field_to_match: 'description',
+                transaction_type: '',
+                amount_min: '',
+                amount_max: '',
+                color: this.categoryPalette[0],
+                label: '',
+                isDirty: true,
+                isNew: true,
+                saving: false
+            });
+            this.categoriesLoaded = true;
+            this.categoriesError = null;
+            this.updateCategoryLabels();
+        },
+        markRuleDirty: function(rule) {
+            if (!rule) {
+                return;
+            }
+            rule.isDirty = true;
+            this.categoriesError = null;
+        },
+        saveCategoryRule: async function(rule) {
+            if (!rule || rule.saving) {
+                return;
+            }
+            const text = (rule.text_to_match || '').trim();
+            const label = (rule.label || '').trim();
+            if (!text || !label) {
+                this.categoriesError = 'Both "Text to match" and "Custom Category" are required.';
+                return;
+            }
+
+            const payload = {
+                text_to_match: text,
+                field_to_match: rule.field_to_match || 'description',
+                transaction_type: rule.transaction_type || null,
+                amount_min: rule.amount_min === '' || rule.amount_min === null ? null : rule.amount_min,
+                amount_max: rule.amount_max === '' || rule.amount_max === null ? null : rule.amount_max,
+                label: label,
+                color: this.normalizeColor(rule.color)
+            };
+
+            const url = rule.id ? `/api/categories/${rule.id}` : '/api/categories';
+            const method = rule.id ? 'PUT' : 'POST';
+
+            rule.saving = true;
+            try {
+                const response = await fetch(url, {
+                    method,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to save category rule.');
+                }
+                const updated = data.category || {};
+                rule.id = updated.id;
+                rule.localId = updated.id ? `rule-${updated.id}` : rule.localId;
+                rule.text_to_match = updated.text_to_match || '';
+                rule.field_to_match = updated.field_to_match || 'description';
+                rule.transaction_type = updated.transaction_type || '';
+                rule.amount_min = updated.amount_min !== null && updated.amount_min !== undefined ? String(updated.amount_min) : '';
+                rule.amount_max = updated.amount_max !== null && updated.amount_max !== undefined ? String(updated.amount_max) : '';
+                rule.color = this.normalizeColor(updated.color);
+                rule.label = updated.label || '';
+                rule.isDirty = false;
+                rule.isNew = false;
+                this.categoriesError = null;
+                this.updateCategoryLabels(data.labels);
+                this.openColorRuleId = null;
+                await this.fetchTransactions({ reset: true, skipLoadingState: true });
+            } catch (error) {
+                console.error('Error saving category rule:', error);
+                this.categoriesError = error.message || 'Failed to save category rule.';
+            } finally {
+                rule.saving = false;
+            }
+        },
+        deleteCategoryRule: async function(rule) {
+            if (!rule || rule.saving) {
+                return;
+            }
+
+            if (!rule.id) {
+                this.categoryRules = this.categoryRules.filter(item => item.localId !== rule.localId);
+                this.updateCategoryLabels();
+                this.categoriesError = null;
+                return;
+            }
+
+            if (!window.confirm('Delete this category rule?')) {
+                return;
+            }
+
+            rule.saving = true;
+            try {
+                const response = await fetch(`/api/categories/${rule.id}`, { method: 'DELETE' });
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to delete category rule.');
+                }
+                this.categoryRules = this.categoryRules.filter(item => item.localId !== rule.localId);
+                this.categoriesError = null;
+                this.updateCategoryLabels(data.labels);
+                await this.fetchTransactions({ reset: true, skipLoadingState: true });
+            } catch (error) {
+                console.error('Error deleting category rule:', error);
+                this.categoriesError = error.message || 'Failed to delete category rule.';
+            } finally {
+                rule.saving = false;
+            }
+        },
+        updateCategoryLabels: function(labels) {
+            let values = Array.isArray(labels) ? labels.slice() : null;
+            if (!values || !values.length) {
+                const unique = new Set();
+                this.categoryRules.forEach(rule => {
+                    if (rule.label) {
+                        unique.add(rule.label);
+                    }
+                });
+                values = Array.from(unique);
+            }
+            values.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+            this.categoryLabels = values;
+        },
+        normalizeColor: function(color) {
+            const fallback = '#2C6B4F';
+            if (typeof color !== 'string' || !color.trim()) {
+                return fallback;
+            }
+            let value = color.trim();
+            if (!value.startsWith('#')) {
+                value = `#${value}`;
+            }
+            value = value.toUpperCase();
+            if (!/^#([0-9A-F]{6})$/.test(value)) {
+                return fallback;
+            }
+            return value;
+        },
+        toggleRulePalette: function(rule) {
+            if (!rule) {
+                return;
+            }
+            const targetId = rule.localId;
+            if (this.openColorRuleId === targetId) {
+                this.openColorRuleId = null;
+            } else {
+                this.openColorRuleId = targetId;
+            }
+        },
+        selectRuleColor: function(rule, color) {
+            const normalized = this.normalizeColor(color);
+            if (rule.color === normalized) {
+                this.openColorRuleId = null;
+                return;
+            }
+            rule.color = normalized;
+            this.markRuleDirty(rule);
+            this.openColorRuleId = null;
+        },
+        categoryTagStyle: function(transaction) {
+            if (!transaction) {
+                return {};
+            }
+            const hex = this.normalizeColor(transaction.custom_category_color);
+            const r = parseInt(hex.substr(1, 2), 16);
+            const g = parseInt(hex.substr(3, 2), 16);
+            const b = parseInt(hex.substr(5, 2), 16);
+            const brightness = (r * 299 + g * 587 + b * 114) / 1000;
+            const textColor = brightness > 150 ? '#21313c' : '#ffffff';
+            return {
+                backgroundColor: hex,
+                color: textColor,
+                borderColor: brightness > 150 ? '#d0d7de' : hex
+            };
+        },
+        handleDocumentClick: function(event) {
+            if (!this.openColorRuleId) {
+                return;
+            }
+            const cell = event.target.closest('.category-color-cell');
+            if (!cell) {
+                this.openColorRuleId = null;
+            }
         },
         fetchBanks: async function() {
             try {
@@ -311,6 +765,12 @@ const app = new Vue({
                 this.transactions = data.transactions || [];
                 this.transactionsTotal = data.total_count || 0;
                 this.hasMoreTransactions = Boolean(data.has_more);
+                if (this.editingTransactionCategoryId !== null) {
+                    const stillExists = this.transactions.some(txn => txn.id === this.editingTransactionCategoryId);
+                    if (!stillExists) {
+                        this.cancelTransactionCategoryEdit();
+                    }
+                }
                 return true;
             } catch (error) {
                 console.error('Error fetching transactions:', error);
@@ -557,6 +1017,7 @@ const app = new Vue({
         await this.refreshData();
         this.updateStickyPositions();
         window.addEventListener('resize', this.handleResize);
+        document.addEventListener('click', this.handleDocumentClick, true);
     },
     updated: function() {
         this.updateInstitutionCheckboxStates();
@@ -567,5 +1028,6 @@ const app = new Vue({
             window.clearTimeout(this.searchDebounce);
         }
         window.removeEventListener('resize', this.handleResize);
+        document.removeEventListener('click', this.handleDocumentClick, true);
     }
 });
