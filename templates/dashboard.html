@@ -62,11 +62,29 @@
                 <button
                     type="button"
                     class="accounts-nav-btn"
+                    :class="{ active: activePane === 'dashboard' }"
+                    @click="setActivePane('dashboard')"
+                >
+                    <i class="fas fa-chart-line mr-2"></i>
+                    <span>Dashboard</span>
+                </button>
+                <button
+                    type="button"
+                    class="accounts-nav-btn"
                     :class="{ active: activePane === 'categories' }"
                     @click="setActivePane('categories')"
                 >
                     <i class="fas fa-tags mr-2"></i>
                     <span>Categories</span>
+                </button>
+                <button
+                    type="button"
+                    class="accounts-nav-btn"
+                    :class="{ active: activePane === 'budgets' }"
+                    @click="setActivePane('budgets')"
+                >
+                    <i class="fas fa-wallet mr-2"></i>
+                    <span>Budgets</span>
                 </button>
                 <div
                     class="transactions-nav"
@@ -508,6 +526,389 @@
                     </button>
                 </div>
             </div>
+            </section>
+            <section v-else-if="activePane === 'dashboard'" class="dashboard-section">
+                <div class="dashboard-tabs" role="tablist">
+                    <button
+                        type="button"
+                        class="dashboard-tab-btn"
+                        :class="{ active: dashboardTab === 'summary' }"
+                        @click="setDashboardTab('summary')"
+                    >
+                        <i class="fas fa-columns mr-2"></i>
+                        Balances &amp; Spending
+                    </button>
+                    <button
+                        type="button"
+                        class="dashboard-tab-btn"
+                        :class="{ active: dashboardTab === 'cashflow' }"
+                        @click="setDashboardTab('cashflow')"
+                    >
+                        <i class="fas fa-chart-line mr-2"></i>
+                        Cash Flow
+                    </button>
+                </div>
+                <div v-if="dashboardError" class="alert alert-warning py-2 px-3 mb-3">
+                    [[ dashboardError ]]
+                </div>
+                <div v-else-if="dashboardLoading" class="card shadow-sm dashboard-card">
+                    <div class="card-body text-center py-5">
+                        <div class="spinner-border text-primary mb-3" role="status">
+                            <span class="sr-only">Loading dashboard...</span>
+                        </div>
+                        <div class="text-muted">Loading your financial overview...</div>
+                    </div>
+                </div>
+                <div v-else>
+                    <template v-if="dashboardTab === 'summary'">
+                        <div class="dashboard-grid">
+                            <div class="card shadow-sm balances-card">
+                                <div class="card-header d-flex justify-content-between align-items-center">
+                                    <h5 class="mb-0">Balances</h5>
+                                    <small class="text-muted">Totals by account group and institution</small>
+                                </div>
+                                <div class="card-body">
+                                    <div v-if="!(dashboardData.balances.groups && dashboardData.balances.groups.length)" class="text-muted small">
+                                        No balance data available yet. Connect accounts or sync transactions to populate this section.
+                                    </div>
+                                    <div v-else class="dashboard-tree">
+                                        <div
+                                            v-for="group in dashboardData.balances.groups"
+                                            :key="group.key"
+                                            class="tree-group"
+                                        >
+                                            <button
+                                                type="button"
+                                                class="tree-toggle group-toggle"
+                                                @click="toggleBalanceGroup(group.key)"
+                                                :aria-expanded="isBalanceGroupOpen(group.key) ? 'true' : 'false'"
+                                            >
+                                                <i :class="isBalanceGroupOpen(group.key) ? 'fas fa-chevron-down' : 'fas fa-chevron-right'"></i>
+                                                <span class="tree-label">[[ group.label ]]</span>
+                                                <span class="tree-value" :class="{ 'text-danger': group.total < 0 }">
+                                                    [[ formatDashboardAmount(group.total, null) ]]
+                                                </span>
+                                            </button>
+                                            <div v-if="isBalanceGroupOpen(group.key)" class="tree-children">
+                                                <div
+                                                    v-for="institution in group.institutions"
+                                                    :key="institution.id"
+                                                    class="tree-institution"
+                                                >
+                                                    <button
+                                                        type="button"
+                                                        class="tree-toggle institution-toggle"
+                                                        @click="toggleBalanceInstitution(group.key, institution.id)"
+                                                        :aria-expanded="isBalanceInstitutionOpen(group.key, institution.id) ? 'true' : 'false'"
+                                                    >
+                                                        <i :class="isBalanceInstitutionOpen(group.key, institution.id) ? 'fas fa-chevron-down' : 'fas fa-chevron-right'"></i>
+                                                        <span class="tree-label">[[ institution.name ]]</span>
+                                                        <span class="tree-value" :class="{ 'text-danger': institution.total < 0 }">
+                                                            [[ formatDashboardAmount(institution.total, null) ]]
+                                                        </span>
+                                                    </button>
+                                                    <div v-if="isBalanceInstitutionOpen(group.key, institution.id)" class="tree-children accounts">
+                                                        <div
+                                                            v-for="account in institution.accounts"
+                                                            :key="account.id"
+                                                            class="tree-account"
+                                                        >
+                                                            <span class="tree-label">[[ account.name ]] <small v-if="account.mask" class="text-muted">([[ account.mask ]])</small></span>
+                                                            <span class="tree-value" :class="{ 'text-danger': account.balance < 0 }">
+                                                                [[ formatDashboardAmount(account.balance, null) ]]
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="tree-footer">
+                                            <span class="tree-label">Grand Total</span>
+                                            <span class="tree-value" :class="{ 'text-danger': dashboardData.balances.grand_total < 0 }">
+                                                [[ formatDashboardAmount(dashboardData.balances.grand_total, null) ]]
+                                            </span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="card shadow-sm spending-card">
+                                <div class="card-header d-flex justify-content-between align-items-center">
+                                    <h5 class="mb-0">Spending Report</h5>
+                                    <div class="spending-controls">
+                                        <label class="mb-0 mr-2" for="spendingYearSelect">Year</label>
+                                        <select
+                                            id="spendingYearSelect"
+                                            class="form-control form-control-sm"
+                                            v-model.number="selectedSpendingYear"
+                                            @change="handleSpendingYearChange"
+                                            :disabled="!spendingYearOptions.length"
+                                        >
+                                            <option v-for="year in spendingYearOptions" :key="`spending-year-${year}`" :value="year">
+                                                [[ year ]]
+                                            </option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="card-body">
+                                    <div v-if="!filteredSpendingMonths.length" class="text-muted small">
+                                        No spending data available. Start syncing transactions to analyze your budget.
+                                    </div>
+                                    <div v-else class="spending-months">
+                                        <div
+                                            v-for="month in filteredSpendingMonths"
+                                            :key="`spending-month-${selectedSpendingYear}-${month.month}`"
+                                            class="spending-month-block"
+                                        >
+                                            <button
+                                                type="button"
+                                                class="spending-month-toggle"
+                                                @click="toggleSpendingMonth(selectedSpendingYear, month.month)"
+                                                :aria-expanded="isSpendingMonthOpen(selectedSpendingYear, month.month) ? 'true' : 'false'"
+                                            >
+                                                <div class="spending-month-label">
+                                                    <i :class="isSpendingMonthOpen(selectedSpendingYear, month.month) ? 'fas fa-chevron-down' : 'fas fa-chevron-right'"></i>
+                                                    <span>[[ month.label ]]</span>
+                                                </div>
+                                                <span class="spending-month-total">[[ formatDashboardAmount(month.total, null) ]]</span>
+                                            </button>
+                                            <div v-if="isSpendingMonthOpen(selectedSpendingYear, month.month)" class="spending-month-table">
+                                                <div v-if="getSpendingCategoriesForMonth(month).length" class="spending-table">
+                                                    <div class="spending-table-header">
+                                                        <span>Category</span>
+                                                        <span>This Month</span>
+                                                        <span>6M Average</span>
+                                                        <span>Budget</span>
+                                                        <span>Remainder</span>
+                                                    </div>
+                                                    <div
+                                                        v-for="category in getSpendingCategoriesForMonth(month)"
+                                                        :key="`spending-${selectedSpendingYear}-${month.month}-${category.label}`"
+                                                        class="spending-table-row"
+                                                    >
+                                                        <span class="category">[[ category.label ]]</span>
+                                                        <span class="value">[[ formatDashboardAmount(category.value, null) ]]</span>
+                                                        <span class="value">[[ formatDashboardAmount(category.six_month_average, null) ]]</span>
+                                                        <span class="value">[[ category.budget !== null ? formatDashboardAmount(category.budget, null) : '—' ]]</span>
+                                                        <span class="value" :class="{
+                                                            'text-success': category.remainder !== null && category.remainder >= 0,
+                                                            'text-danger': category.remainder !== null && category.remainder < 0
+                                                        }">
+                                                            [[ category.remainder !== null ? formatDashboardAmount(category.remainder, null) : '—' ]]
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                                <div v-else class="text-muted small pt-2">
+                                                    No categories with budgets recorded for this month yet.
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+                    <template v-else>
+                        <div class="card shadow-sm cashflow-card cashflow-full">
+                            <div class="card-header d-flex justify-content-between align-items-center">
+                                <div>
+                                    <h5 class="mb-0">Cash Flow</h5>
+                                    <small class="text-muted">Trailing 12 months net income minus expenses</small>
+                                </div>
+                                <select class="form-control form-control-sm cashflow-select" v-model="selectedCashflowCategory">
+                                    <option value="all">All categories</option>
+                                    <option
+                                        v-for="category in (dashboardData.cashflow.categories || [])"
+                                        :key="`cashflow-cat-${category.key}`"
+                                        :value="category.key"
+                                    >
+                                        [[ category.label ]]
+                                    </option>
+                                </select>
+                            </div>
+                            <div class="card-body">
+                                <div v-if="!(filteredCashflowMonths && filteredCashflowMonths.length)" class="text-muted small">
+                                    Cash flow data will appear after transactions have been synced.
+                                </div>
+                                <div v-else class="cashflow-list">
+                                    <div
+                                        v-for="month in filteredCashflowMonths"
+                                        :key="`cashflow-${month.key}`"
+                                        class="cashflow-row"
+                                    >
+                                        <span class="cashflow-label">[[ month.label ]]</span>
+                                        <div class="cashflow-bar-container">
+                                            <div class="cashflow-value" :class="{ 'text-success': month.total >= 0, 'text-danger': month.total < 0 }">
+                                                [[ formatDashboardAmount(month.total, null) ]]
+                                            </div>
+                                            <div class="cashflow-bar">
+                                                <div
+                                                    class="cashflow-bar-negative"
+                                                    :style="{ width: cashflowBarSplit(month.total).negative + '%' }"
+                                                ></div>
+                                                <div class="cashflow-bar-axis"></div>
+                                                <div
+                                                    class="cashflow-bar-positive"
+                                                    :style="{ width: cashflowBarSplit(month.total).positive + '%' }"
+                                                ></div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </section>
+            <section v-else-if="activePane === 'budgets'" class="budgets-section">
+                <div class="budgets-header">
+                    <div>
+                        <h4 class="mb-0">Budgets</h4>
+                        <small class="text-muted">Compare planned amounts with recent and current spending.</small>
+                    </div>
+                    <div class="d-flex align-items-center">
+                        <button class="btn btn-primary btn-sm" @click="addBudgetRow">
+                            <i class="fas fa-plus mr-1"></i> Add Budget
+                        </button>
+                    </div>
+                </div>
+                <div class="budgets-summary" role="status">
+                    <div class="budgets-summary-item">
+                        <span class="label text-muted">Income Budgets</span>
+                        <strong class="text-success">
+                            [[ formatCurrency(budgetSummary.income_total, null) ]]
+                        </strong>
+                    </div>
+                    <div class="budgets-summary-item">
+                        <span class="label text-muted">Expense Budgets</span>
+                        <strong class="text-danger">
+                            [[ formatCurrency(budgetSummary.expense_total, null) ]]
+                        </strong>
+                    </div>
+                    <div class="budgets-summary-item">
+                        <span class="label text-muted">Net</span>
+                        <strong :class="budgetSummary.net_total >= 0 ? 'text-success' : 'text-danger'">
+                            [[ formatCurrency(budgetSummary.net_total, null) ]]
+                        </strong>
+                    </div>
+                </div>
+                <div v-if="budgetsError" class="alert alert-warning py-2 px-3 mb-3">
+                    [[ budgetsError ]]
+                </div>
+                <div v-if="budgetsLoading" class="card shadow-sm budgets-card">
+                    <div class="card-body text-center py-5">
+                        <div class="spinner-border text-primary mb-3" role="status">
+                            <span class="sr-only">Loading budgets...</span>
+                        </div>
+                        <div class="text-muted">Loading your budgets...</div>
+                    </div>
+                </div>
+                <div v-else class="card shadow-sm budgets-card">
+                    <div v-if="!budgets.length" class="card-body text-center text-muted py-5">
+                        No budgets yet. Add one to get started.
+                    </div>
+                    <div v-else class="table-responsive budgets-table">
+                        <table class="table table-sm mb-0">
+                            <thead class="thead-light">
+                                <tr>
+                                    <th scope="col">Category</th>
+                                    <th scope="col">Frequency</th>
+                                    <th scope="col" class="text-right">Amount</th>
+                                    <th scope="col" class="text-right">6M Average</th>
+                                    <th scope="col" class="text-right">This Month</th>
+                                    <th scope="col" class="text-right">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr
+                                    v-for="budget in budgets"
+                                    :key="budget.localId"
+                                    :class="{
+                                        'budget-income-row': budget.classification === 'income',
+                                        'budget-expense-row': budget.classification !== 'income'
+                                    }"
+                                >
+                                    <td class="budget-category-cell">
+                                        <div class="budget-category-wrapper">
+                                            <input
+                                                type="text"
+                                                class="form-control form-control-sm"
+                                                :ref="`budgetCategoryInput-${budget.localId}`"
+                                                v-model="budget.category_label"
+                                                @focus="openBudgetCategoryDropdown(budget)"
+                                                @input="handleBudgetCategoryInput(budget)"
+                                                @blur="onBudgetCategoryBlur"
+                                                placeholder="Select category"
+                                            >
+                                            <div
+                                                v-if="budgetCategoryDropdown.rowId === budget.localId && budgetCategoryDropdown.items.length"
+                                                class="category-edit-dropdown"
+                                            >
+                                                <button
+                                                    v-for="option in budgetCategoryDropdown.items"
+                                                    :key="`budget-category-${budget.localId}-${option}`"
+                                                    type="button"
+                                                    class="dropdown-item suggestion-item"
+                                                    @mousedown.prevent="applyBudgetCategorySuggestion(option, budget)"
+                                                >
+                                                    [[ option ]]
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <select class="form-control form-control-sm" v-model="budget.frequency" @change="markBudgetDirty(budget)">
+                                            <option
+                                                v-for="freq in budgetFrequencies"
+                                                :key="`frequency-${budget.localId}-${freq.value}`"
+                                                :value="freq.value"
+                                            >
+                                                [[ freq.label ]]
+                                            </option>
+                                        </select>
+                                    </td>
+                                    <td>
+                                        <input
+                                            type="number"
+                                            class="form-control form-control-sm text-right"
+                                            min="0"
+                                            step="0.01"
+                                            v-model="budget.amount"
+                                            @input="markBudgetDirty(budget)"
+                                            @blur="discardBudgetRowIfEmpty"
+                                            placeholder="0.00"
+                                        >
+                                    </td>
+                                    <td class="text-right">
+                                        [[ formatCurrency(Math.abs(budget.sixMonthAverage), null) ]]
+                                    </td>
+                                    <td class="text-right">
+                                        [[ formatCurrency(Math.abs(budget.currentMonthTotal), null) ]]
+                                    </td>
+                                    <td class="text-right">
+                                        <div class="btn-group btn-group-sm" role="group">
+                                            <button
+                                                class="btn btn-outline-success"
+                                                :disabled="budget.saving || !budget.isDirty"
+                                                @click="saveBudgetRow(budget)"
+                                            >
+                                                <span v-if="!budget.saving"><i class="fas fa-save"></i></span>
+                                                <span v-else><i class="fas fa-spinner fa-spin"></i></span>
+                                            </button>
+                                            <button
+                                                class="btn btn-outline-danger"
+                                                :disabled="budget.saving"
+                                                @click="deleteBudgetRow(budget)"
+                                            >
+                                                <i class="fas fa-trash-alt"></i>
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
             </section>
             <section v-else class="categories-section">
                 <div class="categories-header">

@@ -692,3 +692,363 @@ input[type="submit"] {
     border-top-left-radius: 0;
     border-bottom-left-radius: 0;
 }
+
+.budgets-section {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+}
+
+.budgets-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+}
+
+.budgets-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.5rem;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.75rem;
+    padding: 0.75rem 1rem;
+}
+
+.budgets-summary-item {
+    display: flex;
+    flex-direction: column;
+    min-width: 160px;
+}
+
+.budgets-summary-item .label {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.budgets-card {
+    border-radius: 0.75rem;
+}
+
+.budgets-table table {
+    border-radius: 0.5rem;
+    overflow: hidden;
+    border: 1px solid #e2e8f0;
+}
+
+.budget-income-row td:first-child {
+    border-left: 4px solid #2f855a;
+}
+
+.budget-expense-row td:first-child {
+    border-left: 4px solid #c53030;
+}
+
+.budget-category-cell {
+    position: relative;
+}
+
+.budget-category-wrapper {
+    position: relative;
+}
+
+.dashboard-tabs {
+    display: inline-flex;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+    border-bottom: 1px solid #e2e8f0;
+    padding-bottom: 0.5rem;
+}
+
+.dashboard-tab-btn {
+    border: none;
+    background: transparent;
+    padding: 0.45rem 0.85rem;
+    border-radius: 0.5rem;
+    font-weight: 600;
+    color: #4a5568;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    transition: background-color 0.15s ease, color 0.15s ease;
+    cursor: pointer;
+}
+
+.dashboard-tab-btn:hover,
+.dashboard-tab-btn:focus {
+    background-color: rgba(66, 153, 225, 0.12);
+    color: #2b6cb0;
+    outline: none;
+}
+
+.dashboard-tab-btn.active {
+    background-color: rgba(66, 153, 225, 0.18);
+    color: #2b6cb0;
+}
+
+.dashboard-section {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+}
+
+.dashboard-grid {
+    display: grid;
+    gap: 1.5rem;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+}
+
+.dashboard-card {
+    border-radius: 0.75rem;
+}
+
+.dashboard-tree {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.tree-toggle {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: transparent;
+    border: none;
+    padding: 0.35rem 0.5rem;
+    font-size: 0.85rem;
+    text-align: left;
+}
+
+.tree-toggle i {
+    margin-right: 0.5rem;
+}
+
+.tree-label {
+    flex: 1 1 auto;
+    font-weight: 500;
+}
+
+.tree-value {
+    flex: 0 0 auto;
+    font-variant-numeric: tabular-nums;
+}
+
+.tree-children {
+    margin-left: 1.25rem;
+    border-left: 1px solid #e2e8f0;
+    padding-left: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.tree-children.accounts {
+    margin-left: 2rem;
+}
+
+.tree-account {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.85rem;
+    padding: 0.2rem 0;
+}
+
+.tree-footer {
+    margin-top: 0.5rem;
+    display: flex;
+    justify-content: space-between;
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+
+.spending-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.spending-months {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.spending-month-block {
+    border: 1px solid #e2e8f0;
+    border-radius: 0.75rem;
+    overflow: hidden;
+}
+
+.spending-month-toggle {
+    width: 100%;
+    border: none;
+    background: rgba(236, 241, 247, 0.45);
+    padding: 0.65rem 0.85rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-weight: 600;
+}
+
+.spending-month-toggle i {
+    margin-right: 0.5rem;
+}
+
+.spending-month-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.spending-month-total {
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+}
+
+.spending-month-toggle:hover,
+.spending-month-toggle:focus {
+    background: rgba(66, 153, 225, 0.15);
+    outline: none;
+}
+
+.spending-month-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.spending-month-total {
+    font-variant-numeric: tabular-nums;
+}
+
+.spending-month-table {
+    padding: 0.65rem 0.85rem 0.85rem;
+    background: #ffffff;
+}
+
+.spending-table {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.spending-table-header,
+.spending-table-row {
+    display: grid;
+    grid-template-columns: 2fr repeat(4, minmax(90px, 1fr));
+    gap: 0.5rem;
+    align-items: center;
+    font-size: 0.85rem;
+}
+
+.spending-table-header {
+    font-weight: 600;
+    text-transform: uppercase;
+    font-size: 0.75rem;
+    letter-spacing: 0.05em;
+    color: #4a5568;
+}
+
+.spending-table-row .category {
+    font-weight: 500;
+}
+
+.spending-table-row .value {
+    font-variant-numeric: tabular-nums;
+}
+
+.cashflow-card .card-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+}
+
+.cashflow-full .card-body {
+    min-height: 420px;
+}
+
+.cashflow-select {
+    width: 200px;
+}
+
+.cashflow-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.cashflow-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    font-size: 0.85rem;
+}
+
+.cashflow-label {
+    width: 80px;
+    font-weight: 600;
+}
+
+.cashflow-bar-container {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+}
+
+.cashflow-bar {
+    display: grid;
+    grid-template-columns: 1fr 4px 1fr;
+    align-items: center;
+    height: 0.6rem;
+}
+
+.cashflow-bar-negative,
+.cashflow-bar-positive {
+    height: 0.6rem;
+    border-radius: 0.35rem;
+}
+
+.cashflow-bar-negative {
+    background: rgba(229, 62, 62, 0.35);
+    justify-self: flex-end;
+}
+
+.cashflow-bar-positive {
+    background: rgba(72, 187, 120, 0.45);
+    justify-self: flex-start;
+}
+
+.cashflow-bar-axis {
+    width: 4px;
+    height: 100%;
+    background: #cbd5f5;
+    border-radius: 2px;
+}
+
+.cashflow-value {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.dashboard-section .card-header h5 {
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+.dashboard-section .card-header small {
+    font-size: 0.75rem;
+    color: #718096;
+}
+
+.tree-toggle:focus,
+.tree-toggle:hover,
+.spending-month-toggle:focus,
+.spending-month-toggle:hover {
+    background: rgba(49, 130, 206, 0.08);
+    outline: none;
+    border-radius: 0.5rem;
+}

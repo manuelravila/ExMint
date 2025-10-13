@@ -181,7 +181,7 @@ const app = new Vue({
         hasMoreTransactions: false,
         searchDebounce: null,
         transactionsRequestToken: 0,
-        activePane: 'transactions',
+        activePane: 'dashboard',
         transactionsCollapsed: false,
         categoriesLoading: false,
         categoriesLoaded: false,
@@ -219,6 +219,43 @@ const app = new Vue({
             items: []
         },
         splitCategoryBlurTimeout: null,
+        budgets: [],
+        budgetsLoading: false,
+        budgetsLoaded: false,
+        budgetsError: null,
+        budgetSummary: {
+            income_total: 0,
+            expense_total: 0,
+            net_total: 0
+        },
+        budgetFrequencies: [
+            { value: 'monthly', label: 'Monthly' },
+            { value: 'semi-monthly', label: 'Semi-Monthly' },
+            { value: 'biweekly', label: 'Biweekly' },
+            { value: 'weekly', label: 'Weekly' },
+            { value: 'quarterly', label: 'Quarterly' },
+            { value: 'yearly', label: 'Yearly' }
+        ],
+        budgetCategoryDropdown: {
+            rowId: null,
+            items: []
+        },
+        budgetCategoryBlurTimeout: null,
+        nextBudgetTempId: 0,
+        dashboardLoading: false,
+        dashboardLoaded: false,
+        dashboardError: null,
+        dashboardData: {
+            balances: { groups: [], grand_total: 0 },
+            spending: { years: [], current_year: null, current_month: null },
+            cashflow: { months: [], categories: [], series: {} }
+        },
+        selectedCashflowCategory: 'all',
+        openBalanceGroups: [],
+        openBalanceInstitutions: {},
+        selectedSpendingYear: null,
+        openSpendingMonths: {},
+        dashboardTab: 'summary',
         nextSplitRowId: 0
     },
     computed: {
@@ -256,6 +293,11 @@ const app = new Vue({
             this.categoryRules.forEach(rule => {
                 if (rule.label) {
                     values.add(rule.label);
+                }
+            });
+            this.budgets.forEach(budget => {
+                if (budget.category_label) {
+                    values.add(budget.category_label);
                 }
             });
             this.transactions.forEach(txn => {
@@ -308,6 +350,52 @@ const app = new Vue({
         },
         splitCategoryOptions: function() {
             return this.transactionCategoryOptions;
+        },
+        spendingYearOptions: function() {
+            const spending = this.dashboardData.spending || {};
+            const years = spending.years || [];
+            return years.map(entry => entry.year).sort((a, b) => b - a);
+        },
+        filteredSpendingMonths: function() {
+            if (!this.selectedSpendingYear) {
+                return [];
+            }
+            const spending = this.dashboardData.spending || {};
+            const years = spending.years || [];
+            const yearEntry = years.find(entry => entry.year === this.selectedSpendingYear);
+            if (!yearEntry) {
+                return [];
+            }
+            const months = yearEntry.months || [];
+            return months.slice().sort((a, b) => b.month - a.month);
+        },
+        filteredCashflowMonths: function() {
+            const cashflow = this.dashboardData.cashflow || {};
+            const months = Array.isArray(cashflow.months) ? cashflow.months : [];
+            if (this.selectedCashflowCategory === 'all') {
+                const result = months.map(month => ({
+                    key: month.key,
+                    label: month.label,
+                    total: Math.round(Number(month.total || 0))
+                }));
+                return result.some(entry => entry.total !== 0) ? result : [];
+            }
+            const series = cashflow.series || {};
+            const data = series[this.selectedCashflowCategory] || {};
+            const result = months.map(month => {
+                const value = Math.round(Number(data[month.key] || 0));
+                return {
+                    key: month.key,
+                    label: month.label,
+                    total: value
+                };
+            });
+            return result.some(entry => entry.total !== 0) ? result : [];
+        },
+        cashflowMaxAbs: function() {
+            const values = this.filteredCashflowMonths.map(item => Math.abs(Math.round(Number(item.total) || 0)));
+            const max = values.length ? Math.max.apply(null, values) : 0;
+            return max > 0 ? max : 1;
         }
     },
     methods: {
@@ -318,6 +406,12 @@ const app = new Vue({
                 await this.fetchTransactions({ reset: true, skipLoadingState: true });
                 if (this.activePane === 'categories') {
                     await this.fetchCategories({ refresh: true, suppressLoader: true });
+                }
+                if (this.budgetsLoaded) {
+                    await this.fetchBudgets({ suppressLoader: true, force: true, refreshOnly: true });
+                }
+                if (this.dashboardLoaded) {
+                    await this.fetchDashboard({ suppressLoader: true, force: true });
                 }
             } finally {
                 this.loading = false;
@@ -335,9 +429,23 @@ const app = new Vue({
             if (pane !== 'transactions') {
                 this.cancelTransactionCategoryEdit();
             }
+            if (pane !== 'budgets') {
+                this.closeBudgetCategoryDropdown();
+            }
+            if (pane !== 'dashboard') {
+                this.dashboardError = null;
+            }
             if (pane === 'categories') {
                 if (!this.categoriesLoaded || (!this.categoryRules.length && !this.categoriesLoading)) {
                     await this.fetchCategories();
+                }
+            } else if (pane === 'budgets') {
+                if (!this.budgetsLoaded || (!this.budgets.length && !this.budgetsLoading)) {
+                    await this.fetchBudgets();
+                }
+            } else if (pane === 'dashboard') {
+                if (!this.dashboardLoaded || !this.dashboardData || !this.dashboardData.balances.groups.length) {
+                    await this.fetchDashboard();
                 }
             } else if (pane === 'transactions' && this.selectedAccountIds.length) {
                 if (!this.transactions.length) {
@@ -353,6 +461,158 @@ const app = new Vue({
             this.$nextTick(() => {
                 this.updateStickyPositions();
             });
+        },
+        fetchDashboard: async function(options = {}) {
+            const { suppressLoader = false, force = false } = options;
+            if (this.dashboardLoading) {
+                return;
+            }
+            if (this.dashboardLoaded && !force) {
+                return;
+            }
+            if (!suppressLoader) {
+                this.dashboardLoading = true;
+            }
+            this.dashboardError = null;
+            try {
+                const response = await fetch('/api/dashboard');
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to load dashboard.');
+                }
+                this.dashboardData = {
+                    balances: data.balances || { groups: [], grand_total: 0 },
+                    spending: data.spending || { years: [], current_year: null, current_month: null },
+                    cashflow: data.cashflow || { months: [], categories: [], series: {} }
+                };
+                this.dashboardLoaded = true;
+                this.initializeDashboardState();
+            } catch (error) {
+                console.error('Error fetching dashboard:', error);
+                this.dashboardError = error.message || 'Failed to load dashboard.';
+            } finally {
+                if (!suppressLoader) {
+                    this.dashboardLoading = false;
+                }
+            }
+        },
+        initializeDashboardState: function() {
+            const balances = this.dashboardData.balances || {};
+            this.openBalanceGroups = (balances.groups || []).map(group => group.key);
+            this.openBalanceInstitutions = {};
+            (balances.groups || []).forEach(group => {
+                const ids = (group.institutions || []).map(inst => inst.id);
+                this.$set(this.openBalanceInstitutions, group.key, ids);
+            });
+
+            const spending = this.dashboardData.spending || {};
+            const years = spending.years || [];
+            const sortedYears = years.slice().sort((a, b) => b.year - a.year);
+            let defaultYear = null;
+            if (spending.current_year && years.some(entry => entry.year === spending.current_year)) {
+                defaultYear = spending.current_year;
+            } else if (sortedYears.length) {
+                defaultYear = sortedYears[0].year;
+            }
+            this.selectedSpendingYear = defaultYear;
+            this.openSpendingMonths = {};
+            if (defaultYear !== null) {
+                this.resetOpenSpendingMonths();
+            }
+
+            const cashflow = this.dashboardData.cashflow || {};
+            if (!this.selectedCashflowCategory || this.selectedCashflowCategory === 'all') {
+                this.selectedCashflowCategory = 'all';
+            } else if (!Array.isArray(cashflow.categories) || !cashflow.categories.some(cat => cat.key === this.selectedCashflowCategory)) {
+                this.selectedCashflowCategory = 'all';
+            }
+        },
+        isBalanceGroupOpen: function(key) {
+            return this.openBalanceGroups.includes(key);
+        },
+        toggleBalanceGroup: function(key) {
+            if (!key) {
+                return;
+            }
+            if (this.isBalanceGroupOpen(key)) {
+                this.openBalanceGroups = this.openBalanceGroups.filter(item => item !== key);
+            } else {
+                this.openBalanceGroups = [...this.openBalanceGroups, key];
+            }
+        },
+        isBalanceInstitutionOpen: function(groupKey, institutionId) {
+            const entries = this.openBalanceInstitutions[groupKey] || [];
+            return entries.includes(institutionId);
+        },
+        toggleBalanceInstitution: function(groupKey, institutionId) {
+            if (!groupKey || !institutionId) {
+                return;
+            }
+            const entries = this.openBalanceInstitutions[groupKey] || [];
+            if (entries.includes(institutionId)) {
+                this.$set(this.openBalanceInstitutions, groupKey, entries.filter(item => item !== institutionId));
+            } else {
+                this.$set(this.openBalanceInstitutions, groupKey, [...entries, institutionId]);
+            }
+        },
+        setDashboardTab: function(tab) {
+            this.dashboardTab = tab;
+        },
+        handleSpendingYearChange: function() {
+            this.resetOpenSpendingMonths();
+        },
+        resetOpenSpendingMonths: function() {
+            if (!this.selectedSpendingYear) {
+                return;
+            }
+            const spending = this.dashboardData.spending || {};
+            const years = spending.years || [];
+            const yearEntry = years.find(entry => entry.year === this.selectedSpendingYear);
+            if (!yearEntry) {
+                this.$set(this.openSpendingMonths, this.selectedSpendingYear, []);
+                return;
+            }
+            const months = (yearEntry.months || []).slice().sort((a, b) => b.month - a.month);
+            if (!months.length) {
+                this.$set(this.openSpendingMonths, this.selectedSpendingYear, []);
+                return;
+            }
+            let defaultMonth = months[0].month;
+            if (spending.current_year === this.selectedSpendingYear && spending.current_month) {
+                const match = months.find(month => month.month === spending.current_month);
+                if (match) {
+                    defaultMonth = spending.current_month;
+                }
+            }
+            this.$set(this.openSpendingMonths, this.selectedSpendingYear, defaultMonth != null ? [defaultMonth] : []);
+        },
+        isSpendingMonthOpen: function(year, month) {
+            const months = this.openSpendingMonths[year] || [];
+            return months.includes(month);
+        },
+        toggleSpendingMonth: function(year, month) {
+            const months = this.openSpendingMonths[year] || [];
+            if (months.includes(month)) {
+                this.$set(this.openSpendingMonths, year, months.filter(item => item !== month));
+            } else {
+                this.$set(this.openSpendingMonths, year, [...months, month]);
+            }
+        },
+        getSpendingCategoriesForMonth: function(month) {
+            if (!month || !Array.isArray(month.categories)) {
+                return [];
+            }
+            const withBudget = month.categories.filter(category => category.budget !== null);
+            return withBudget.length ? withBudget : month.categories;
+        },
+        cashflowBarSplit: function(value) {
+            const total = Math.round(Number(value) || 0);
+            const max = this.cashflowMaxAbs || 1;
+            const ratio = Math.min(1, Math.abs(total) / max);
+            if (total >= 0) {
+                return { positive: ratio * 100, negative: 0 };
+            }
+            return { positive: 0, negative: ratio * 100 };
         },
         startTransactionCategoryEdit: function(transaction) {
             if (!transaction || transaction.savingCategory) {
@@ -997,6 +1257,278 @@ const app = new Vue({
                 this.updateCategoryLabels();
             }
         },
+        createBudgetRow: function(initial = {}) {
+            const localId = initial.id ? `budget-${initial.id}` : `budget-${Date.now()}-${++this.nextBudgetTempId}`;
+            return {
+                id: initial.id || null,
+                localId: localId,
+                category_label: initial.category_label || '',
+                frequency: initial.frequency || 'monthly',
+                amount: this.normalizeBudgetAmount(initial.amount),
+                sixMonthAverage: Number(initial.six_month_average || initial.sixMonthAverage || 0),
+                currentMonthTotal: Number(initial.current_month_total || initial.currentMonthTotal || 0),
+                classification: initial.classification || 'expense',
+                isDirty: Boolean(initial.isDirty),
+                isNew: !initial.id,
+                saving: false
+            };
+        },
+        normalizeBudgetAmount: function(value) {
+            const numeric = Number.parseFloat(value);
+            if (!Number.isFinite(numeric)) {
+                return '0.00';
+            }
+            return numeric.toFixed(2);
+        },
+        updateBudgetSummary: function(summary) {
+            if (!summary) {
+                this.budgetSummary = { income_total: 0, expense_total: 0, net_total: 0 };
+                return;
+            }
+            this.budgetSummary = {
+                income_total: Number(summary.income_total || 0),
+                expense_total: Number(summary.expense_total || 0),
+                net_total: Number(summary.net_total || 0)
+            };
+        },
+        fetchBudgets: async function(options = {}) {
+            const { suppressLoader = false, force = false } = options;
+            if (this.budgetsLoading) {
+                return;
+            }
+            if (this.budgetsLoaded && !force && !options.refreshOnly) {
+                return;
+            }
+            if (!suppressLoader) {
+                this.budgetsLoading = true;
+            }
+            this.budgetsError = null;
+            try {
+                const response = await fetch('/api/budgets');
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to load budgets.');
+                }
+                const rows = Array.isArray(data.budgets) ? data.budgets : [];
+                this.budgets = rows.map(raw => this.createBudgetRow(raw));
+                this.updateBudgetSummary(data.summary);
+                this.budgetsLoaded = true;
+            } catch (error) {
+                console.error('Error fetching budgets:', error);
+                this.budgetsError = error.message || 'Failed to load budgets.';
+            } finally {
+                if (!suppressLoader) {
+                    this.budgetsLoading = false;
+                }
+            }
+        },
+        addBudgetRow: function() {
+            const newRow = this.createBudgetRow({
+                category_label: '',
+                frequency: 'monthly',
+                amount: '0.00',
+                isDirty: true
+            });
+            newRow.isNew = true;
+            this.budgets.unshift(newRow);
+            this.budgetsError = null;
+            this.openBudgetCategoryDropdown(newRow);
+            this.budgetsLoaded = true;
+            this.markBudgetDirty(newRow);
+            this.$nextTick(() => {
+                const ref = this.$refs[`budgetCategoryInput-${newRow.localId}`];
+                const input = Array.isArray(ref) ? ref[0] : ref;
+                if (input && typeof input.focus === 'function') {
+                    input.focus();
+                    input.select();
+                }
+            });
+        },
+        markBudgetDirty: function(budget) {
+            if (!budget) {
+                return;
+            }
+            budget.isDirty = true;
+            this.budgetsError = null;
+            this.cancelBudgetBlur();
+        },
+        saveBudgetRow: async function(budget) {
+            if (!budget || budget.saving) {
+                return;
+            }
+            const category = (budget.category_label || '').trim();
+            if (!category) {
+                this.budgetsError = 'Category is required.';
+                return;
+            }
+            const amountValue = Number.parseFloat(budget.amount);
+            if (!Number.isFinite(amountValue) || amountValue <= 0) {
+                this.budgetsError = 'Amount must be greater than zero.';
+                return;
+            }
+            budget.saving = true;
+            this.budgetsError = null;
+            try {
+                const payload = {
+                    category_label: category,
+                    frequency: budget.frequency,
+                    amount: this.normalizeBudgetAmount(budget.amount)
+                };
+                const url = budget.id ? `/api/budgets/${budget.id}` : '/api/budgets';
+                const method = budget.id ? 'PUT' : 'POST';
+                const response = await fetch(url, {
+                    method,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to save budget.');
+                }
+                if (data.budget) {
+                    const updated = this.createBudgetRow(data.budget);
+                    Object.assign(budget, updated, { isDirty: false, isNew: false, saving: false });
+                }
+                if (data.summary) {
+                    this.updateBudgetSummary(data.summary);
+                }
+                this.budgetsLoaded = true;
+                if (data.budgets) {
+                    this.budgets = data.budgets.map(raw => this.createBudgetRow(raw));
+                    this.budgetsLoaded = true;
+                }
+                this.closeBudgetCategoryDropdown();
+            } catch (error) {
+                console.error('Error saving budget:', error);
+                this.budgetsError = error.message || 'Failed to save budget.';
+            } finally {
+                budget.saving = false;
+            }
+        },
+        deleteBudgetRow: async function(budget) {
+            if (!budget) {
+                return;
+            }
+            if (!budget.id) {
+                this.budgets = this.budgets.filter(item => item.localId !== budget.localId);
+                if (this.budgetCategoryDropdown.rowId === budget.localId) {
+                    this.closeBudgetCategoryDropdown();
+                }
+                this.cancelBudgetBlur();
+                return;
+            }
+            if (!window.confirm('Delete this budget entry?')) {
+                return;
+            }
+            budget.saving = true;
+            try {
+                const response = await fetch(`/api/budgets/${budget.id}`, { method: 'DELETE' });
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to delete budget.');
+                }
+                if (data.budgets) {
+                    this.budgets = data.budgets.map(raw => this.createBudgetRow(raw));
+                    this.budgetsLoaded = true;
+                } else {
+                    this.budgets = this.budgets.filter(item => item.localId !== budget.localId);
+                }
+                if (data.summary) {
+                    this.updateBudgetSummary(data.summary);
+                }
+                this.closeBudgetCategoryDropdown();
+                this.cancelBudgetBlur();
+            } catch (error) {
+                console.error('Error deleting budget:', error);
+                this.budgetsError = error.message || 'Failed to delete budget.';
+            } finally {
+                budget.saving = false;
+            }
+        },
+        openBudgetCategoryDropdown: function(budget) {
+            if (!budget) {
+                return;
+            }
+            this.budgetCategoryDropdown.rowId = budget.localId;
+            this.updateBudgetCategorySuggestions(budget);
+        },
+        handleBudgetCategoryInput: function(budget) {
+            if (!budget) {
+                return;
+            }
+            this.openBudgetCategoryDropdown(budget);
+            this.markBudgetDirty(budget);
+            this.cancelBudgetBlur();
+        },
+        updateBudgetCategorySuggestions: function(budget) {
+            const options = this.transactionCategoryOptions || [];
+            let items = options;
+            const query = (budget.category_label || '').trim().toLowerCase();
+            if (query) {
+                items = options.filter(option => option.toLowerCase().includes(query));
+            }
+            this.budgetCategoryDropdown.items = items.slice(0, 8);
+            this.cancelBudgetBlur();
+        },
+        applyBudgetCategorySuggestion: function(option, budget) {
+            if (!option || !budget) {
+                return;
+            }
+            budget.category_label = option;
+            this.markBudgetDirty(budget);
+            this.closeBudgetCategoryDropdown();
+            this.$nextTick(() => {
+                const ref = this.$refs[`budgetCategoryInput-${budget.localId}`];
+                const input = Array.isArray(ref) ? ref[0] : ref;
+                if (input && typeof input.focus === 'function') {
+                    input.focus();
+                    input.select();
+                }
+            });
+        },
+        closeBudgetCategoryDropdown: function() {
+            this.budgetCategoryDropdown.rowId = null;
+            this.budgetCategoryDropdown.items = [];
+            if (this.budgetCategoryBlurTimeout) {
+                window.clearTimeout(this.budgetCategoryBlurTimeout);
+                this.budgetCategoryBlurTimeout = null;
+            }
+        },
+        onBudgetCategoryBlur: function() {
+            if (this.budgetCategoryBlurTimeout) {
+                window.clearTimeout(this.budgetCategoryBlurTimeout);
+            }
+            this.budgetCategoryBlurTimeout = window.setTimeout(() => {
+                this.closeBudgetCategoryDropdown();
+                this.discardBudgetRowIfEmpty();
+            }, 120);
+        },
+        cancelBudgetBlur: function() {
+            if (this.budgetCategoryBlurTimeout) {
+                window.clearTimeout(this.budgetCategoryBlurTimeout);
+                this.budgetCategoryBlurTimeout = null;
+            }
+        },
+        discardBudgetRowIfEmpty: function() {
+            const removableIds = new Set();
+            this.budgets.forEach(budget => {
+                if (budget.id) {
+                    return;
+                }
+                const category = (budget.category_label || '').trim();
+                const amountValue = Number.parseFloat(budget.amount);
+                if (!category || !Number.isFinite(amountValue) || amountValue <= 0) {
+                    removableIds.add(budget.localId);
+                }
+            });
+            if (!removableIds.size) {
+                return;
+            }
+            this.budgets = this.budgets.filter(budget => !removableIds.has(budget.localId));
+            if (removableIds.has(this.budgetCategoryDropdown.rowId)) {
+                this.closeBudgetCategoryDropdown();
+            }
+        },
         fetchCategories: async function(options = {}) {
             const { force = false, suppressLoader = false } = options;
             if (!force && this.categoriesLoaded) {
@@ -1249,6 +1781,12 @@ const app = new Vue({
                     this.closeSplitCategoryDropdown();
                 }
             }
+            if (this.budgetCategoryDropdown.rowId !== null) {
+                const cell = event.target.closest('.budget-category-cell');
+                if (!cell) {
+                    this.closeBudgetCategoryDropdown();
+                }
+            }
             if (this.transactionMenu.visible) {
                 const menuRef = this.$refs.transactionContextMenu;
                 const menu = Array.isArray(menuRef) ? menuRef[0] : menuRef;
@@ -1263,6 +1801,9 @@ const app = new Vue({
             }
             if (this.splitCategoryDropdown.rowId !== null) {
                 this.closeSplitCategoryDropdown();
+            }
+            if (this.budgetCategoryDropdown.rowId !== null) {
+                this.closeBudgetCategoryDropdown();
             }
             if (this.splitModal.visible) {
                 if (this.splitModal.saving) {
@@ -1477,6 +2018,21 @@ const app = new Vue({
                 return `${code} ${value.toFixed(2)}`.trim();
             }
         },
+        formatDashboardAmount: function(amount, currency) {
+            const value = Number(amount) || 0;
+            const rounded = Math.round(value);
+            const code = currency || 'USD';
+            try {
+                return new Intl.NumberFormat('en-US', {
+                    style: 'currency',
+                    currency: code,
+                    minimumFractionDigits: 0,
+                    maximumFractionDigits: 0
+                }).format(rounded);
+            } catch (error) {
+                return `${code} ${rounded}`.trim();
+            }
+        },
         formatDate: function(isoDate) {
             if (!isoDate) {
                 return '—';
@@ -1624,8 +2180,18 @@ const app = new Vue({
             this.modalBanks = this.banks;
         }
     },
+    watch: {
+        selectedSpendingYear: function() {
+            this.resetOpenSpendingMonths();
+        }
+    },
     mounted: async function() {
         await this.refreshData();
+        if (this.activePane === 'dashboard') {
+            await this.fetchDashboard();
+        } else if (this.activePane === 'budgets') {
+            await this.fetchBudgets();
+        }
         this.updateStickyPositions();
         window.addEventListener('resize', this.handleResize);
         document.addEventListener('click', this.handleDocumentClick, true);
@@ -1645,6 +2211,14 @@ const app = new Vue({
         if (this.highlightedRuleTimeout) {
             window.clearTimeout(this.highlightedRuleTimeout);
             this.highlightedRuleTimeout = null;
+        }
+        if (this.splitCategoryBlurTimeout) {
+            window.clearTimeout(this.splitCategoryBlurTimeout);
+            this.splitCategoryBlurTimeout = null;
+        }
+        if (this.budgetCategoryBlurTimeout) {
+            window.clearTimeout(this.budgetCategoryBlurTimeout);
+            this.budgetCategoryBlurTimeout = null;
         }
         document.body.classList.remove('modal-open');
     }
