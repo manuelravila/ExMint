@@ -1,3 +1,17 @@
+## [0.6.9] - 2025-01-07
+
+### Added
+- Added a contextual right-click menu on transactions with Auto-categorize, Edit category, and Split transaction actions.
+- Introduced transaction splitting with a guided modal, automatic remainder balancing, and category helper dropdowns.
+- Persist parent/child relationships for split transactions, including schema migration and API support.
+
+### Changed
+- Automatically rescale child split amounts when Plaid updates the parent transaction amount.
+- Block split operations on child transactions to prevent nested splits and ensure data integrity.
+
+### Fixed
+- Synced splits now remove or flag child rows when the parent transaction is deleted or refreshed from Plaid.
+
 ## [0.6.8] - 2025-10-11
 
 ### Added

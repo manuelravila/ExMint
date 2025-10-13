@@ -17,8 +17,9 @@ from io import StringIO
 import csv
 from config import Config
 from version import __version__ as VERSION
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from sqlalchemy.exc import OperationalError
+from uuid import uuid4
 
 core = Blueprint('core', __name__)
 
@@ -26,6 +27,7 @@ _CATEGORY_SCHEMA_CHECKED = False
 FALLBACK_CATEGORY_COLOR = '#E2E8F0'
 DEFAULT_MANUAL_COLOR = '#2C6B4F'
 UNCATEGORIZED_LABEL = 'Uncategorized'
+CENT = Decimal('0.01')
 
 
 def ensure_category_schema(force=False):
@@ -177,7 +179,11 @@ def _serialize_transaction(txn, override_map):
         'custom_category': label,
         'custom_category_color': color,
         'custom_category_source': source,
-        'custom_category_is_fallback': source == 'fallback'
+        'custom_category_is_fallback': source == 'fallback',
+        'parent_transaction_id': txn.parent_transaction_id,
+        'is_split_child': bool(getattr(txn, 'is_split_child', False)),
+        'has_split_children': bool(getattr(txn, 'has_split_children', False)),
+        'split_children_count': txn.split_children.count() if getattr(txn, 'has_split_children', False) else 0
     }
 
 _COLOR_RE = re.compile(r'^#([0-9a-fA-F]{6})$')
@@ -388,6 +394,180 @@ def _collect_category_labels(user_id):
         label for (label,) in labels if label
     )
 
+
+def _normalize_split_amount(value):
+    if value is None or value == '':
+        raise ValueError('Amount is required for each split.')
+    try:
+        decimal_value = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        raise ValueError('Invalid amount value.')
+    decimal_value = decimal_value.copy_abs().quantize(CENT, rounding=ROUND_HALF_UP)
+    if decimal_value <= Decimal('0.00'):
+        raise ValueError('Split amounts must be greater than zero.')
+    return decimal_value
+
+
+def _generate_split_transaction_id(base_identifier):
+    suffix = uuid4().hex[:10]
+    base = (base_identifier or 'local')[:90]
+    max_base_length = max(0, 100 - len('-split-') - len(suffix))
+    trimmed = base[:max_base_length] if max_base_length else ''
+    if not trimmed:
+        trimmed = 'local'
+    return f"{trimmed}-split-{suffix}"
+
+
+def _delete_existing_split_children(parent_txn):
+    if not parent_txn or not parent_txn.has_split_children:
+        return
+    existing_children = parent_txn.split_children.all()
+    for child in existing_children:
+        db.session.delete(child)
+    parent_txn.has_split_children = False
+
+
+def _mark_split_children_removed(parent_txn):
+    if not parent_txn or not parent_txn.has_split_children:
+        return
+    active_children = parent_txn.split_children.filter(Transaction.is_removed.is_(False)).all()
+    for child in active_children:
+        child.is_removed = True
+        child.last_action = 'removed'
+        child.updated_at = datetime.utcnow()
+    parent_txn.has_split_children = False
+
+
+def _rebalance_split_children(parent_txn, previous_amount, new_amount):
+    if not parent_txn or not parent_txn.has_split_children:
+        return
+
+    previous_amount = Decimal(previous_amount or 0)
+    new_amount = Decimal(new_amount or 0)
+    previous_abs = previous_amount.copy_abs()
+    new_abs = new_amount.copy_abs()
+
+    children = parent_txn.split_children.filter(Transaction.is_removed.is_(False)).all()
+    if not children:
+        parent_txn.has_split_children = False
+        return
+
+    sign = -1 if new_amount < 0 or (new_amount == 0 and previous_amount < 0) else 1
+
+    if previous_abs == 0:
+        if new_abs == 0:
+            for child in children:
+                child.amount = Decimal('0.00')
+                child.updated_at = datetime.utcnow()
+                child.last_action = 'modified'
+            return
+        equal_share = (new_abs / len(children)).quantize(CENT, rounding=ROUND_HALF_UP)
+        values = [equal_share for _ in children]
+        total = sum(values, Decimal('0.00'))
+        diff = (new_abs - total).quantize(CENT, rounding=ROUND_HALF_UP)
+        if values:
+            values[-1] = (values[-1] + diff).quantize(CENT, rounding=ROUND_HALF_UP)
+    else:
+        ratio = (new_abs / previous_abs) if previous_abs != 0 else Decimal('0')
+        values = []
+        total = Decimal('0.00')
+        for child in children:
+            child_abs = Decimal(child.amount or 0).copy_abs()
+            scaled = (child_abs * ratio).quantize(CENT, rounding=ROUND_HALF_UP)
+            values.append(scaled)
+            total += scaled
+        diff = (new_abs - total).quantize(CENT, rounding=ROUND_HALF_UP)
+        if values:
+            values[-1] = (values[-1] + diff).quantize(CENT, rounding=ROUND_HALF_UP)
+
+    for idx, child in enumerate(children):
+        adjusted = values[idx] if idx < len(values) else Decimal('0.00')
+        if adjusted < 0:
+            adjusted = Decimal('0.00')
+        child.amount = adjusted * sign
+        child.updated_at = datetime.utcnow()
+        child.last_action = 'modified'
+
+
+def _create_split_children(parent_txn, split_specs):
+    if not parent_txn:
+        raise ValueError('Parent transaction not provided.')
+    if not split_specs or len(split_specs) < 2:
+        raise ValueError('At least two split entries are required.')
+
+    _delete_existing_split_children(parent_txn)
+    db.session.flush()
+
+    label_map = {
+        (category.label or '').strip().lower(): category
+        for category in Category.query.filter_by(user_id=parent_txn.user_id).all()
+        if category.label
+    }
+
+    parent_sign = -1 if (parent_txn.amount or Decimal('0')) < 0 else 1
+    timestamp = datetime.utcnow()
+    new_children = []
+
+    for spec in split_specs:
+        description = spec['description']
+        category_label = spec['category']
+        amount_abs = spec['amount']
+        child_amount = (amount_abs * parent_sign).quantize(CENT, rounding=ROUND_HALF_UP)
+        plaid_id = _generate_split_transaction_id(parent_txn.plaid_transaction_id)
+
+        child = Transaction(
+            plaid_transaction_id=plaid_id,
+            user_id=parent_txn.user_id,
+            credential_id=parent_txn.credential_id,
+            account_id=parent_txn.account_id,
+            name=description,
+            amount=child_amount,
+            iso_currency_code=parent_txn.iso_currency_code,
+            category=parent_txn.category,
+            merchant_name=parent_txn.merchant_name,
+            payment_channel=parent_txn.payment_channel,
+            date=parent_txn.date,
+            pending=parent_txn.pending,
+            is_removed=False,
+            last_action='split',
+            created_at=timestamp,
+            updated_at=timestamp,
+            parent_transaction_id=parent_txn.id,
+            is_split_child=True,
+            has_split_children=False
+        )
+
+        matching_category = label_map.get(category_label.lower())
+        if matching_category:
+            child.custom_category_id = matching_category.id
+
+        db.session.add(child)
+        new_children.append((child, matching_category, category_label))
+
+    db.session.flush()
+
+    for child, matching_category, category_label in new_children:
+        if matching_category:
+            continue
+        override = TransactionCategoryOverride(
+            transaction_id=child.id,
+            label=category_label,
+            color=DEFAULT_MANUAL_COLOR
+        )
+        db.session.add(override)
+
+    parent_txn.has_split_children = True
+    parent_txn.is_split_child = False
+    parent_txn.updated_at = datetime.utcnow()
+    parent_txn.last_action = 'split'
+    parent_txn.custom_category_id = None
+
+    parent_override = TransactionCategoryOverride.query.filter_by(transaction_id=parent_txn.id).first()
+    if parent_override:
+        db.session.delete(parent_override)
+
+    return [child for child, _, _ in new_children]
+
 @core.route('/create_link_token', methods=['POST'])
 @login_required
 def create_link_token():
@@ -594,9 +774,11 @@ def _persist_transactions_from_payload(user, credential, data):
             transaction.is_removed = True
             transaction.last_action = 'removed'
             transaction.updated_at = datetime.utcnow()
+            _mark_split_children_removed(transaction)
             counts['removed'] += 1
         elif transaction:
             transaction.last_action = 'removed'
+            _mark_split_children_removed(transaction)
 
     for action in ['added', 'modified']:
         for payload in payload_by_action[action]:
@@ -627,6 +809,12 @@ def _persist_transactions_from_payload(user, credential, data):
             else:
                 transaction.credential_id = credential.id
                 transaction.account_id = account.id
+            previous_amount = None
+            if transaction.id is not None and transaction.amount is not None:
+                try:
+                    previous_amount = Decimal(transaction.amount)
+                except (InvalidOperation, TypeError, ValueError):
+                    previous_amount = None
 
             raw_amount = payload.get('amount', 0)
             if raw_amount is None:
@@ -637,7 +825,8 @@ def _persist_transactions_from_payload(user, credential, data):
                 amount_decimal = Decimal(str(raw_amount))
             except (InvalidOperation, TypeError, ValueError):
                 amount_decimal = Decimal('0')
-            transaction.amount = -amount_decimal
+            new_amount = -amount_decimal
+            transaction.amount = new_amount
             transaction.iso_currency_code = payload.get('iso_currency_code')
             transaction.category = json.dumps(payload.get('category', []))
             transaction.merchant_name = payload.get('merchant_name')
@@ -670,6 +859,8 @@ def _persist_transactions_from_payload(user, credential, data):
             transaction.is_removed = False
             transaction.last_action = action
             transaction.updated_at = datetime.utcnow()
+            if transaction.has_split_children and previous_amount is not None and previous_amount != new_amount:
+                _rebalance_split_children(transaction, previous_amount, new_amount)
 
             if action in counts:
                 counts[action] += 1
@@ -960,6 +1151,102 @@ def get_transactions():
             sort_desc=sort_desc,
             search=search_term
         )
+
+    return _with_schema_retry(handler)
+
+
+@core.route('/api/transactions/<int:transaction_id>/split', methods=['GET', 'POST'])
+@login_required
+def split_transaction(transaction_id):
+    ensure_category_schema()
+
+    def handler():
+        txn = Transaction.query.options(
+            joinedload(Transaction.account),
+            joinedload(Transaction.credential),
+            joinedload(Transaction.custom_category)
+        ).filter_by(id=transaction_id, user_id=current_user.id).first()
+
+        if not txn or txn.is_removed:
+            return jsonify({'error': 'Transaction not found.'}), 404
+
+        if txn.is_split_child:
+            return jsonify({'error': 'Split transactions cannot be split again.'}), 400
+
+        if request.method == 'GET':
+            child_query = txn.split_children.filter(
+                Transaction.is_removed.is_(False),
+                Transaction.is_split_child.is_(True)
+            ).order_by(Transaction.id.asc())
+            children = child_query.all()
+            override_map = _load_overrides([txn.id] + [child.id for child in children])
+            return jsonify({
+                'parent': _serialize_transaction(txn, override_map),
+                'children': [_serialize_transaction(child, override_map) for child in children]
+            })
+
+        payload = request.get_json() or {}
+        splits = payload.get('splits')
+        if not isinstance(splits, list):
+            return jsonify({'error': 'Invalid payload.'}), 400
+
+        if len(splits) < 2:
+            return jsonify({'error': 'Provide at least two split rows.'}), 400
+
+        parent_amount = Decimal(txn.amount or 0)
+        parent_abs = parent_amount.copy_abs().quantize(CENT, rounding=ROUND_HALF_UP)
+        if parent_abs <= Decimal('0.00'):
+            return jsonify({'error': 'Only transactions with a non-zero amount can be split.'}), 400
+
+        seen_categories = set()
+        processed = []
+        for index, split in enumerate(splits, start=1):
+            description = (split.get('description') or '').strip()
+            category_label = (split.get('category') or '').strip()
+            if not description:
+                return jsonify({'error': f'Row {index}: Description is required.'}), 400
+            if not category_label:
+                return jsonify({'error': f'Row {index}: Category is required.'}), 400
+
+            normalized_category = category_label.lower()
+            if normalized_category in seen_categories:
+                return jsonify({'error': 'Each split must use a unique category.'}), 400
+            seen_categories.add(normalized_category)
+
+            try:
+                amount_abs = _normalize_split_amount(split.get('amount'))
+            except ValueError as exc:
+                return jsonify({'error': f'Row {index}: {exc}'}), 400
+
+            processed.append({
+                'description': description,
+                'category': category_label,
+                'amount': amount_abs
+            })
+
+        total_amount = sum((item['amount'] for item in processed), Decimal('0.00'))
+        remainder = (parent_abs - total_amount).quantize(CENT, rounding=ROUND_HALF_UP)
+
+        if abs(remainder) > CENT:
+            return jsonify({'error': 'Split amounts must total the transaction amount.'}), 400
+
+        if processed:
+            adjusted = (processed[-1]['amount'] + remainder).quantize(CENT, rounding=ROUND_HALF_UP)
+            if adjusted <= Decimal('0.00'):
+                return jsonify({'error': 'Each split amount must be greater than zero.'}), 400
+            processed[-1]['amount'] = adjusted
+
+        children = _create_split_children(txn, processed)
+
+        db.session.flush()
+        override_map = _load_overrides([txn.id] + [child.id for child in children])
+
+        response_payload = {
+            'parent': _serialize_transaction(txn, override_map),
+            'children': [_serialize_transaction(child, override_map) for child in children]
+        }
+        db.session.commit()
+        return jsonify(response_payload), 201
 
     return _with_schema_retry(handler)
 

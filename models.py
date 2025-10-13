@@ -115,9 +115,18 @@ class Transaction(db.Model):
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
     custom_category_id = db.Column(db.Integer, db.ForeignKey('categories.id'), nullable=True)
+    parent_transaction_id = db.Column(db.Integer, db.ForeignKey('transactions.id'), nullable=True)
+    is_split_child = db.Column(db.Boolean, nullable=False, default=False)
+    has_split_children = db.Column(db.Boolean, nullable=False, default=False)
 
     credential = db.relationship('Credential', backref=db.backref('transactions', lazy=True))
     custom_category = db.relationship('Category', back_populates='transactions', lazy=True)
+    parent_transaction = db.relationship(
+        'Transaction',
+        remote_side=[id],
+        backref=db.backref('split_children', lazy='dynamic'),
+        foreign_keys=[parent_transaction_id]
+    )
 
     def __repr__(self):
         return f'<Transaction {self.plaid_transaction_id}>'
