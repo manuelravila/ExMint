@@ -1,4 +1,18 @@
 //vuePlaid.js
+Vue.component('line-chart', {
+  extends: window.VueChartJs.Line,
+  props: ['chartData', 'options'],
+  watch: {
+    chartData () {
+      this.$data._chart.destroy()
+      this.renderChart(this.chartData, this.options)
+    }
+  },
+  mounted () {
+    this.renderChart(this.chartData, this.options)
+  }
+})
+
 const linkButton = document.getElementById('link-button');
 let linkHandler = null;
 
@@ -373,29 +387,57 @@ const app = new Vue({
             const cashflow = this.dashboardData.cashflow || {};
             const months = Array.isArray(cashflow.months) ? cashflow.months : [];
             if (this.selectedCashflowCategory === 'all') {
-                const result = months.map(month => ({
-                    key: month.key,
-                    label: month.label,
-                    total: Math.round(Number(month.total || 0))
+                return months.map(month => ({
+                    ...month,
+                    total: Number(month.total || 0)
                 }));
-                return result.some(entry => entry.total !== 0) ? result : [];
             }
             const series = cashflow.series || {};
             const data = series[this.selectedCashflowCategory] || {};
-            const result = months.map(month => {
-                const value = Math.round(Number(data[month.key] || 0));
+            return months.map(month => {
+                const value = Number(data[month.key] || 0);
+                
+                // When a category is selected, we need to recalculate the series for the bar chart.
+                const new_series = {
+                    positive: { value: Math.max(0, value), color: '#2C6B4F' },
+                    negative: { value: Math.abs(Math.min(0, value)), color: '#F94144' }
+                };
+
                 return {
-                    key: month.key,
-                    label: month.label,
-                    total: value
+                    ...month,
+                    total: value,
+                    series: new_series
                 };
             });
-            return result.some(entry => entry.total !== 0) ? result : [];
         },
-        cashflowMaxAbs: function() {
-            const values = this.filteredCashflowMonths.map(item => Math.abs(Math.round(Number(item.total) || 0)));
-            const max = values.length ? Math.max.apply(null, values) : 0;
-            return max > 0 ? max : 1;
+        cashflowChartData: function() {
+            const labels = this.filteredCashflowMonths.map(month => month.label);
+            const data = this.filteredCashflowMonths.map(month => month.total);
+            return {
+                labels: labels,
+                datasets: [
+                    {
+                        label: 'Cash Flow',
+                        backgroundColor: '#2C6B4F',
+                        borderColor: '#2C6B4F',
+                        data: data,
+                        fill: false,
+                    }
+                ]
+            }
+        },
+        cashflowChartOptions: function() {
+            return {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    yAxes: [{
+                        ticks: {
+                            beginAtZero: true
+                        }
+                    }]
+                }
+            }
         }
     },
     methods: {
@@ -507,13 +549,10 @@ const app = new Vue({
 
             const spending = this.dashboardData.spending || {};
             const years = spending.years || [];
-            const sortedYears = years.slice().sort((a, b) => b.year - a.year);
-            let defaultYear = null;
-            if (spending.current_year && years.some(entry => entry.year === spending.current_year)) {
-                defaultYear = spending.current_year;
-            } else if (sortedYears.length) {
-                defaultYear = sortedYears[0].year;
-            }
+            const yearOptions = years.map(y => y.year).sort((a, b) => b - a);
+
+            let defaultYear = spending.current_year;
+            if (!yearOptions.includes(defaultYear)) defaultYear = yearOptions[0] || null;
             this.selectedSpendingYear = defaultYear;
             this.openSpendingMonths = {};
             if (defaultYear !== null) {
@@ -602,18 +641,9 @@ const app = new Vue({
             if (!month || !Array.isArray(month.categories)) {
                 return [];
             }
-            const withBudget = month.categories.filter(category => category.budget !== null);
-            return withBudget.length ? withBudget : month.categories;
+            return month.categories;
         },
-        cashflowBarSplit: function(value) {
-            const total = Math.round(Number(value) || 0);
-            const max = this.cashflowMaxAbs || 1;
-            const ratio = Math.min(1, Math.abs(total) / max);
-            if (total >= 0) {
-                return { positive: ratio * 100, negative: 0 };
-            }
-            return { positive: 0, negative: ratio * 100 };
-        },
+
         startTransactionCategoryEdit: function(transaction) {
             if (!transaction || transaction.savingCategory) {
                 return;

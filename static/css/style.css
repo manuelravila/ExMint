@@ -1034,6 +1034,80 @@ input[type="submit"] {
     font-variant-numeric: tabular-nums;
 }
 
+.cashflow-v-chart {
+    display: flex;
+    justify-content: space-around;
+    align-items: stretch;
+    gap: 1rem;
+    height: 100%;
+    padding: 1rem 0.5rem;
+}
+
+.cashflow-v-col {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex: 1 1 0;
+    min-width: 40px;
+    flex-grow: 1;
+    max-width: 70px;
+}
+
+.cashflow-v-value {
+    font-size: 0.8rem;
+    font-weight: 600;
+    margin-bottom: 0.35rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.cashflow-v-bar-container {
+    display: flex;
+    width: 100%;
+    flex-grow: 1;
+}
+
+.negative-container {
+    flex-direction: column; /* Bars grow downwards */
+}
+
+.positive-container {
+    flex-direction: column-reverse; /* Bars grow upwards */
+}
+
+.cashflow-v-bar {
+    /* This class was previously missing, adding it for completeness */
+    width: 100%;
+    transition: height 0.3s ease-out;
+}
+
+.cashflow-v-bar-positive {
+    background: rgba(72, 187, 120, 0.55);
+    border-top-left-radius: 4px;
+    border-top-right-radius: 4px;
+    transition: height 0.3s ease-out;
+}
+
+.cashflow-v-bar-negative {
+    background: rgba(229, 62, 62, 0.45);
+    border-bottom-left-radius: 4px;
+    border-bottom-right-radius: 4px;
+    transition: height 0.3s ease-out;
+}
+
+.cashflow-v-axis {
+    width: 100%;
+    height: 2px;
+    background-color: #cbd5f5;
+}
+
+.cashflow-v-label {
+    margin-top: 0.5rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: #4a5568;
+}
+
 .dashboard-section .card-header h5 {
     font-size: 1rem;
     font-weight: 600;

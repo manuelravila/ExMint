@@ -676,6 +676,75 @@ def _collect_balances_summary(user_id):
     }
 
 
+def _calculate_spending_metrics(user_id, category_labels):
+    """
+    Calculates 6-month average and current month total for spending categories,
+    only considering expenses (negative amounts). Used specifically for the spending report.
+    """
+    normalized_labels = {
+        (label or '').strip().lower(): label
+        for label in category_labels if label and label.strip()
+    }
+    if not normalized_labels:
+        return {}
+
+    today = date.today()
+    month_starts = [_month_start_offset(today, offset) for offset in range(0, 6)]
+    earliest_start = month_starts[-1]
+    month_keys = [start.strftime('%Y-%m') for start in month_starts]
+    current_month_key = month_keys[0]
+
+    transactions = Transaction.query.options(
+        joinedload(Transaction.custom_category)
+    ).filter(
+        Transaction.user_id == user_id,
+        Transaction.is_removed.is_(False),
+        Transaction.date >= earliest_start,
+        Transaction.amount < 0  # Only consider expenses
+    ).all()
+
+    override_map = _load_overrides([txn.id for txn in transactions])
+    monthly_spending_totals = defaultdict(lambda: defaultdict(lambda: Decimal('0.00')))
+
+    for txn in transactions:
+        if txn.has_split_children and not txn.is_split_child:
+            continue
+        label = _resolve_transaction_category_label(txn, override_map)
+        if not label:
+            continue
+        label_key = label.lower()
+        if label_key not in normalized_labels:
+            continue
+        if not txn.date:
+            continue
+        month_key = txn.date.strftime('%Y-%m')
+        if month_key not in month_keys:
+            continue
+        amount = Decimal(txn.amount or 0).quantize(CENT, rounding=ROUND_HALF_UP)
+        monthly_spending_totals[label_key][month_key] += abs(amount)  # Sum absolute values of expenses
+
+    metrics = {}
+    for label_key in normalized_labels:
+        totals_by_month = monthly_spending_totals.get(label_key, {})
+        month_values = [totals_by_month.get(key, Decimal('0.00')) for key in month_keys]
+        non_zero_values = [value for value in month_values if value != Decimal('0.00')]
+        if non_zero_values:
+            average_value = (sum(non_zero_values, Decimal('0.00')) / Decimal(len(non_zero_values))).quantize(CENT, rounding=ROUND_HALF_UP)
+        else:
+            average_value = Decimal('0.00')
+        current_value = totals_by_month.get(current_month_key, Decimal('0.00')).quantize(CENT, rounding=ROUND_HALF_UP)
+        
+        # For spending report, classification is always 'expense' if there's spending
+        classification = 'expense' if current_value > 0 or average_value > 0 else 'expense'
+
+        metrics[label_key] = {
+            'six_month_average': average_value,
+            'current_month_total': current_value,
+            'classification': classification
+        }
+    return metrics
+
+
 def _collect_spending_summary(user_id):
     today = date.today()
     current_year = today.year
@@ -692,7 +761,22 @@ def _collect_spending_summary(user_id):
 
     override_map = _load_overrides([txn.id for txn in transactions])
 
+    # First, find all unique category labels from the transaction set
+    all_category_labels = set()
+    for txn in transactions:
+        label = _resolve_transaction_category_label(txn, override_map)
+        if label:
+            all_category_labels.add(label)
+
     category_entries = {}
+    for label in sorted(list(all_category_labels)):
+        label_key = label.lower()
+        category_entries[label_key] = {
+            'label': label,
+            'totals': defaultdict(lambda: defaultdict(lambda: Decimal('0.00'))),
+            'raw_sum': Decimal('0.00')
+        }
+
     for txn in transactions:
         if txn.has_split_children and not txn.is_split_child:
             continue
@@ -708,10 +792,9 @@ def _collect_spending_summary(user_id):
         year = txn.date.year
         month = txn.date.month
         value = Decimal(txn.amount or 0).quantize(CENT, rounding=ROUND_HALF_UP)
-        spending_value = abs(value)
-        if spending_value == 0:
-            continue
-        info['totals'][year][month] += spending_value
+        if value < 0:
+            spending_value = abs(value)
+            info['totals'][year][month] += spending_value
         info['raw_sum'] += value
 
     metrics = _calculate_budget_metrics(user_id, [info['label'] for info in category_entries.values()])
@@ -734,6 +817,11 @@ def _collect_spending_summary(user_id):
         classification = metrics_entry.get('classification')
         if classification is None:
             classification = 'income' if info['raw_sum'] > 0 else 'expense'
+        
+        # Skip pure income categories from the spending report
+        if classification == 'income' and not any(month for month in info['totals'].values() if any(val > 0 for val in month.values())):
+            continue
+
         budget_amount = budget_map.get(label_key)
 
         for year, months in info['totals'].items():
@@ -847,12 +935,26 @@ def _collect_cashflow_summary(user_id):
     for key in month_order:
         entry = month_map[key]
         net_total = entry['income'] + entry['expense']
+        income_val = entry['income'].quantize(CENT, rounding=ROUND_HALF_UP)
+        expense_val = entry['expense'].quantize(CENT, rounding=ROUND_HALF_UP)
+        net_total = income_val + expense_val
+
         months_output.append({
             'key': key,
             'label': entry['label'],
-            'income': float(entry['income'].quantize(CENT, rounding=ROUND_HALF_UP)),
-            'expense': float(entry['expense'].quantize(CENT, rounding=ROUND_HALF_UP)),
-            'total': float(net_total.quantize(CENT, rounding=ROUND_HALF_UP))
+            'income': float(income_val),
+            'expense': float(expense_val),
+            'total': float(net_total),
+            'series': {
+                'positive': {
+                    'value': float(income_val),
+                    'color': '#2C6B4F'
+                },
+                'negative': {
+                    'value': float(abs(expense_val)),
+                    'color': '#A53A3D'
+                }
+            }
         })
 
     series_output = {}
