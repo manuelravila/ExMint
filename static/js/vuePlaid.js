@@ -197,7 +197,29 @@ const app = new Vue({
         ],
         editingTransactionCategoryId: null,
         editingTransactionCategoryValue: '',
-        transactionCategoryBlurTimeout: null
+        transactionCategoryBlurTimeout: null,
+        transactionMenu: {
+            visible: false,
+            x: 0,
+            y: 0,
+            transaction: null
+        },
+        highlightedRuleLocalId: null,
+        highlightedRuleTimeout: null,
+        splitModal: {
+            visible: false,
+            transaction: null,
+            rows: [],
+            parentAmountCents: 0,
+            errors: [],
+            saving: false
+        },
+        splitCategoryDropdown: {
+            rowId: null,
+            items: []
+        },
+        splitCategoryBlurTimeout: null,
+        nextSplitRowId: 0
     },
     computed: {
         totalAccountCount: function() {
@@ -260,6 +282,32 @@ const app = new Vue({
                 return options.slice(0, 8);
             }
             return options.filter(option => option.toLowerCase().includes(query)).slice(0, 8);
+        },
+        splitModalRemainingCents: function() {
+            if (!this.splitModal.visible) {
+                return 0;
+            }
+            const parent = this.splitModal.parentAmountCents || 0;
+            const total = this.splitModal.rows.reduce((sum, row) => {
+                const cents = this.parseAmountToCents(row.amount);
+                if (cents === null) {
+                    return sum;
+                }
+                return sum + cents;
+            }, 0);
+            return parent - total;
+        },
+        canSubmitSplit: function() {
+            if (!this.splitModal.visible) {
+                return false;
+            }
+            if (this.splitModal.saving) {
+                return false;
+            }
+            return this.splitModal.errors.length === 0;
+        },
+        splitCategoryOptions: function() {
+            return this.transactionCategoryOptions;
         }
     },
     methods: {
@@ -430,6 +478,525 @@ const app = new Vue({
             }
             this.saveTransactionCategoryEdit(transaction);
         },
+        openTransactionMenu: function(event, transaction) {
+            if (!transaction) {
+                return;
+            }
+            this.closeTransactionMenu();
+            this.transactionMenu.transaction = transaction;
+            this.transactionMenu.visible = true;
+            this.transactionMenu.x = event.clientX;
+            this.transactionMenu.y = event.clientY;
+            this.$nextTick(() => {
+                const menu = this.$refs.transactionContextMenu;
+                if (!menu || typeof menu.getBoundingClientRect !== 'function') {
+                    return;
+                }
+                const rect = menu.getBoundingClientRect();
+                const padding = 8;
+                let adjustedX = this.transactionMenu.x;
+                let adjustedY = this.transactionMenu.y;
+                if (adjustedX + rect.width + padding > window.innerWidth) {
+                    adjustedX = Math.max(padding, window.innerWidth - rect.width - padding);
+                }
+                if (adjustedY + rect.height + padding > window.innerHeight) {
+                    adjustedY = Math.max(padding, window.innerHeight - rect.height - padding);
+                }
+                this.transactionMenu.x = adjustedX;
+                this.transactionMenu.y = adjustedY;
+            });
+        },
+        closeTransactionMenu: function() {
+            this.transactionMenu.visible = false;
+            this.transactionMenu.transaction = null;
+        },
+        handleTransactionMenuAutoCategorize: async function() {
+            const contextTransaction = this.transactionMenu.transaction;
+            this.closeTransactionMenu();
+            if (!contextTransaction) {
+                return;
+            }
+            const transaction = this.transactions.find(txn => txn.id === contextTransaction.id) || contextTransaction;
+            if (transaction.custom_category_source === 'rule' && transaction.custom_category_id) {
+                await this.focusRuleById(transaction.custom_category_id);
+                return;
+            }
+
+            await this.ensureCategoriesPane();
+            const description = transaction.name || '';
+            const newRule = this.addCategoryRule({
+                text_to_match: description,
+                field_to_match: 'description',
+                transaction_type: '',
+                label: ''
+            });
+            this.highlightRuleRow(newRule.localId, { focusField: 'label' });
+        },
+        handleTransactionMenuManualOverride: function() {
+            const contextTransaction = this.transactionMenu.transaction;
+            this.closeTransactionMenu();
+            if (!contextTransaction) {
+                return;
+            }
+            if (this.activePane !== 'transactions') {
+                this.setActivePane('transactions');
+            }
+            this.$nextTick(() => {
+                const transaction = this.transactions.find(txn => txn.id === contextTransaction.id) || contextTransaction;
+                this.startTransactionCategoryEdit(transaction);
+            });
+        },
+        handleTransactionMenuSplit: function() {
+            const contextTransaction = this.transactionMenu.transaction;
+            this.closeTransactionMenu();
+            if (!contextTransaction || contextTransaction.is_split_child) {
+                return;
+            }
+            const transaction = this.transactions.find(txn => txn.id === contextTransaction.id) || contextTransaction;
+            this.openSplitModal(transaction);
+        },
+        openSplitModal: async function(transaction) {
+            if (!transaction) {
+                return;
+            }
+            let parentSnapshot = transaction;
+            let fetchedChildren = [];
+            if (transaction.has_split_children) {
+                try {
+                    const response = await fetch(`/api/transactions/${transaction.id}/split`);
+                    if (response.ok) {
+                        const data = await response.json();
+                        const childPayload = Array.isArray(data.children) ? data.children : [];
+                        fetchedChildren = childPayload;
+                        if (data.parent) {
+                            parentSnapshot = data.parent;
+                        }
+                    }
+                } catch (error) {
+                    console.error('Error fetching split details:', error);
+                }
+            }
+            const parentCents = this.parseAmountToCents(parentSnapshot.amount);
+            if (!Number.isFinite(parentCents) || parentCents <= 0) {
+                alert('Only transactions with a non-zero amount can be split.');
+                return;
+            }
+            if (parentCents < 2) {
+                alert('This transaction amount is too small to split into multiple parts.');
+                return;
+            }
+            let rows = [];
+            if (fetchedChildren.length) {
+                rows = fetchedChildren
+                    .filter(child => child && child.is_split_child)
+                    .map(child => {
+                        const amountCents = this.parseAmountToCents(child.amount);
+                        return this.createSplitRow({
+                            description: child.name || '',
+                            category: child.custom_category || '',
+                            amountCents: Number.isFinite(amountCents) ? amountCents : 0
+                        });
+                    });
+            }
+            if (!rows.length) {
+                const existingChildren = this.transactions.filter(
+                    txn => txn.parent_transaction_id === parentSnapshot.id && txn.is_split_child
+                );
+                if (existingChildren.length) {
+                    const sorted = existingChildren.slice().sort((a, b) => a.id - b.id);
+                    rows = sorted.map(child => {
+                        const childCents = this.parseAmountToCents(child.amount);
+                        return this.createSplitRow({
+                            description: child.name || '',
+                            category: child.custom_category || '',
+                            amountCents: Number.isFinite(childCents) ? childCents : 0
+                        });
+                    });
+                }
+            }
+            if (rows.length < 2) {
+                const half = Math.floor(parentCents / 2);
+                const remainder = parentCents - half;
+                rows = [
+                    this.createSplitRow({
+                        description: parentSnapshot.name || '',
+                        category: '',
+                        amountCents: half || parentCents
+                    }),
+                    this.createSplitRow({
+                        description: parentSnapshot.name || '',
+                        category: '',
+                        amountCents: remainder
+                    })
+                ];
+            }
+            this.splitModal.visible = true;
+            this.splitModal.transaction = parentSnapshot;
+            this.splitModal.parentAmountCents = parentCents;
+            this.splitModal.rows = rows;
+            this.splitModal.errors = [];
+            this.splitModal.saving = false;
+            this.closeSplitCategoryDropdown();
+            document.body.classList.add('modal-open');
+            this.$nextTick(() => {
+                this.recalculateSplitAutoAmounts();
+                this.updateSplitValidation();
+                const firstRowRef = this.$refs[`splitDescription-${rows[0].id}`];
+                const input = Array.isArray(firstRowRef) ? firstRowRef[0] : firstRowRef;
+                if (input && typeof input.focus === 'function') {
+                    input.focus();
+                    input.select();
+                }
+            });
+        },
+        closeSplitModal: function() {
+            this.splitModal.visible = false;
+            this.splitModal.transaction = null;
+            this.splitModal.rows = [];
+            this.splitModal.errors = [];
+            this.splitModal.parentAmountCents = 0;
+            this.splitModal.saving = false;
+            this.closeSplitCategoryDropdown();
+            document.body.classList.remove('modal-open');
+        },
+        createSplitRow: function(initial = {}) {
+            const id = `split-${Date.now()}-${++this.nextSplitRowId}`;
+            let amountValue = '0.00';
+            if (typeof initial.amountCents === 'number') {
+                amountValue = this.formatCentsToAmount(initial.amountCents);
+            } else if (typeof initial.amount === 'string' || typeof initial.amount === 'number') {
+                const cents = this.parseAmountToCents(initial.amount);
+                amountValue = this.formatCentsToAmount(Number.isFinite(cents) ? cents : 0);
+            }
+            return {
+                id,
+                description: initial.description || '',
+                category: initial.category || '',
+                amount: amountValue
+            };
+        },
+        recalculateSplitAutoAmounts: function() {
+            if (!this.splitModal.rows.length) {
+                return;
+            }
+            const parentCents = this.splitModal.parentAmountCents || 0;
+            const lastIndex = this.splitModal.rows.length - 1;
+            let used = 0;
+            this.splitModal.rows.forEach((row, index) => {
+                if (index === lastIndex) {
+                    return;
+                }
+                const cents = this.parseAmountToCents(row.amount);
+                if (cents !== null) {
+                    used += cents;
+                }
+            });
+            const remaining = parentCents - used;
+            const lastRow = this.splitModal.rows[lastIndex];
+            if (lastRow) {
+                lastRow.amount = this.formatCentsToAmount(remaining >= 0 ? remaining : 0);
+            }
+        },
+        parseAmountToCents: function(value) {
+            if (value === null || value === undefined || value === '') {
+                return null;
+            }
+            const numeric = Number(String(value).replace(/[^0-9.\-]/g, ''));
+            if (!Number.isFinite(numeric)) {
+                return null;
+            }
+            return Math.round(Math.abs(numeric) * 100);
+        },
+        formatCentsToAmount: function(cents) {
+            if (!Number.isFinite(cents)) {
+                return '0.00';
+            }
+            return (Math.max(0, cents) / 100).toFixed(2);
+        },
+        updateSplitValidation: function() {
+            if (!this.splitModal.visible) {
+                this.splitModal.errors = [];
+                return true;
+            }
+            const errors = [];
+            const rows = this.splitModal.rows;
+            const parentCents = this.splitModal.parentAmountCents || 0;
+            if (rows.length < 2) {
+                errors.push('Provide at least two split rows.');
+            }
+            const categorySet = new Set();
+            let totalCents = 0;
+            rows.forEach((row, index) => {
+                const desc = (row.description || '').trim();
+                const category = (row.category || '').trim();
+                if (!desc) {
+                    errors.push(`Row ${index + 1}: Description is required.`);
+                }
+                if (!category) {
+                    errors.push(`Row ${index + 1}: Category is required.`);
+                } else {
+                    const key = category.toLowerCase();
+                    if (categorySet.has(key)) {
+                        errors.push('Split categories must be unique.');
+                    } else {
+                        categorySet.add(key);
+                    }
+                }
+                const cents = this.parseAmountToCents(row.amount);
+                if (cents === null || cents <= 0) {
+                    errors.push(`Row ${index + 1}: Amount must be greater than zero.`);
+                } else {
+                    totalCents += cents;
+                }
+            });
+            const diff = parentCents - totalCents;
+            if (diff !== 0) {
+                errors.push('Split amounts must total the transaction amount.');
+            }
+            this.splitModal.errors = Array.from(new Set(errors));
+            return this.splitModal.errors.length === 0;
+        },
+        handleSplitAmountInput: function() {
+            if (!this.splitModal.visible) {
+                return;
+            }
+            this.recalculateSplitAutoAmounts();
+            this.updateSplitValidation();
+        },
+        handleSplitFieldInput: function() {
+            if (!this.splitModal.visible) {
+                return;
+            }
+            this.updateSplitValidation();
+        },
+        openSplitCategoryDropdown: function(row) {
+            if (!row) {
+                return;
+            }
+            this.splitCategoryDropdown.rowId = row.id;
+            this.updateSplitCategorySuggestions(row);
+        },
+        handleSplitCategoryInput: function(row) {
+            if (!row) {
+                return;
+            }
+            this.openSplitCategoryDropdown(row);
+            this.handleSplitFieldInput();
+        },
+        updateSplitCategorySuggestions: function(row) {
+            const options = this.splitCategoryOptions || [];
+            let items = options;
+            const query = (row.category || '').trim().toLowerCase();
+            if (query) {
+                items = options.filter(option => option.toLowerCase().includes(query));
+            }
+            this.splitCategoryDropdown.items = items.slice(0, 8);
+        },
+        applySplitCategorySuggestion: function(option, row) {
+            if (!option || !row) {
+                return;
+            }
+            row.category = option;
+            this.handleSplitFieldInput();
+            this.closeSplitCategoryDropdown();
+            this.$nextTick(() => {
+                const ref = this.$refs[`splitCategoryInput-${row.id}`];
+                const input = Array.isArray(ref) ? ref[0] : ref;
+                if (input && typeof input.focus === 'function') {
+                    input.focus();
+                    input.select();
+                }
+            });
+        },
+        closeSplitCategoryDropdown: function() {
+            this.splitCategoryDropdown.rowId = null;
+            this.splitCategoryDropdown.items = [];
+            if (this.splitCategoryBlurTimeout) {
+                window.clearTimeout(this.splitCategoryBlurTimeout);
+                this.splitCategoryBlurTimeout = null;
+            }
+        },
+        onSplitCategoryBlur: function() {
+            if (this.splitCategoryBlurTimeout) {
+                window.clearTimeout(this.splitCategoryBlurTimeout);
+            }
+            this.splitCategoryBlurTimeout = window.setTimeout(() => {
+                this.closeSplitCategoryDropdown();
+            }, 120);
+        },
+        addSplitRow: function() {
+            if (!this.splitModal.visible) {
+                return;
+            }
+            const insertionIndex = Math.max(this.splitModal.rows.length - 1, 0);
+            const newRow = this.createSplitRow();
+            this.splitModal.rows.splice(insertionIndex, 0, newRow);
+            this.$nextTick(() => {
+                this.recalculateSplitAutoAmounts();
+                this.updateSplitValidation();
+                const ref = this.$refs[`splitDescription-${newRow.id}`];
+                const input = Array.isArray(ref) ? ref[0] : ref;
+                if (input && typeof input.focus === 'function') {
+                    input.focus();
+                    input.select();
+                }
+            });
+        },
+        removeSplitRow: function(index) {
+            if (!this.splitModal.visible) {
+                return;
+            }
+            if (this.splitModal.rows.length <= 2) {
+                return;
+            }
+            const focusIndex = Math.min(index, this.splitModal.rows.length - 2);
+            const focusRow = this.splitModal.rows[focusIndex];
+            this.splitModal.rows.splice(index, 1);
+            this.$nextTick(() => {
+                this.recalculateSplitAutoAmounts();
+                this.updateSplitValidation();
+                if (focusRow) {
+                    const ref = this.$refs[`splitDescription-${focusRow.id}`];
+                    const input = Array.isArray(ref) ? ref[0] : ref;
+                    if (input && typeof input.focus === 'function') {
+                        input.focus();
+                    }
+                }
+            });
+        },
+        submitSplitModal: async function() {
+            if (!this.splitModal.visible || this.splitModal.saving) {
+                return;
+            }
+            this.recalculateSplitAutoAmounts();
+            if (!this.updateSplitValidation()) {
+                return;
+            }
+            const transaction = this.splitModal.transaction;
+            if (!transaction) {
+                return;
+            }
+            this.splitModal.saving = true;
+            try {
+                const payload = {
+                    splits: this.splitModal.rows.map(row => ({
+                        description: (row.description || '').trim(),
+                        category: (row.category || '').trim(),
+                        amount: row.amount
+                    }))
+                };
+                const response = await fetch(`/api/transactions/${transaction.id}/split`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    const message = data && data.error ? data.error : 'Failed to split transaction.';
+                    this.splitModal.errors = [message];
+                    return;
+                }
+                this.closeSplitModal();
+                await this.fetchTransactions({ reset: false, skipLoadingState: true });
+            } catch (error) {
+                console.error('Error splitting transaction:', error);
+                this.splitModal.errors = [error.message || 'Failed to split transaction.'];
+            } finally {
+                this.splitModal.saving = false;
+            }
+        },
+        ensureCategoriesPane: async function() {
+            if (this.activePane !== 'categories') {
+                await this.setActivePane('categories');
+            } else if (!this.categoriesLoaded && !this.categoriesLoading) {
+                await this.fetchCategories();
+            }
+        },
+        focusRuleById: async function(ruleId) {
+            if (!ruleId) {
+                return;
+            }
+            await this.ensureCategoriesPane();
+            const rule = this.categoryRules.find(item => item.id === ruleId);
+            if (rule) {
+                this.highlightRuleRow(rule.localId);
+            }
+        },
+        highlightRuleRow: function(localId, options = {}) {
+            if (!localId) {
+                return;
+            }
+            if (this.highlightedRuleTimeout) {
+                window.clearTimeout(this.highlightedRuleTimeout);
+                this.highlightedRuleTimeout = null;
+            }
+            this.highlightedRuleLocalId = localId;
+            const duration = typeof options.duration === 'number' ? options.duration : 2600;
+            this.$nextTick(() => {
+                const rowRefName = `categoryRuleRow-${localId}`;
+                const rowRefs = this.$refs[rowRefName];
+                const row = Array.isArray(rowRefs) ? rowRefs[0] : rowRefs;
+                if (row && typeof row.scrollIntoView === 'function') {
+                    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+                if (options.focusField) {
+                    this.focusRuleInput(localId, options.focusField);
+                }
+            });
+            if (duration > 0) {
+                this.highlightedRuleTimeout = window.setTimeout(() => {
+                    this.highlightedRuleLocalId = null;
+                    this.highlightedRuleTimeout = null;
+                }, duration);
+            }
+        },
+        focusRuleInput: function(localId, target) {
+            if (!localId || !target) {
+                return;
+            }
+            const refName = target === 'label' ? `ruleLabelInput-${localId}` : `ruleTextInput-${localId}`;
+            const refs = this.$refs[refName];
+            const input = Array.isArray(refs) ? refs[0] : refs;
+            if (input && typeof input.focus === 'function') {
+                input.focus();
+                if (target === 'text' && typeof input.select === 'function') {
+                    input.select();
+                }
+            }
+        },
+        handleRuleInputBlur: function(rule) {
+            if (!rule) {
+                return;
+            }
+            window.setTimeout(() => {
+                const rowRefName = `categoryRuleRow-${rule.localId}`;
+                const rowRefs = this.$refs[rowRefName];
+                const row = Array.isArray(rowRefs) ? rowRefs[0] : rowRefs;
+                const active = document.activeElement;
+                if (row && active && row.contains(active)) {
+                    return;
+                }
+                this.discardRuleIfEmpty(rule);
+            }, 0);
+        },
+        discardRuleIfEmpty: function(rule) {
+            if (!rule) {
+                return;
+            }
+            const text = (rule.text_to_match || '').trim();
+            const label = (rule.label || '').trim();
+            if (text && label) {
+                return;
+            }
+            if (rule.isNew) {
+                this.categoryRules = this.categoryRules.filter(item => item.localId !== rule.localId);
+                if (this.highlightedRuleLocalId === rule.localId) {
+                    this.highlightedRuleLocalId = null;
+                }
+                this.categoriesError = null;
+                this.updateCategoryLabels();
+            }
+        },
         fetchCategories: async function(options = {}) {
             const { force = false, suppressLoader = false } = options;
             if (!force && this.categoriesLoaded) {
@@ -481,25 +1048,28 @@ const app = new Vue({
                 saving: false
             };
         },
-        addCategoryRule: function() {
+        addCategoryRule: function(initial = {}) {
             const tempId = `new-${Date.now()}-${++this.nextCategoryTempId}`;
-            this.categoryRules.unshift({
+            const defaultColor = initial.color ? this.normalizeColor(initial.color) : this.categoryPalette[0];
+            const newRule = {
                 id: null,
                 localId: tempId,
-                text_to_match: '',
-                field_to_match: 'description',
-                transaction_type: '',
-                amount_min: '',
-                amount_max: '',
-                color: this.categoryPalette[0],
-                label: '',
-                isDirty: true,
+                text_to_match: initial.text_to_match || '',
+                field_to_match: initial.field_to_match || 'description',
+                transaction_type: initial.transaction_type || '',
+                amount_min: initial.amount_min || '',
+                amount_max: initial.amount_max || '',
+                color: defaultColor,
+                label: initial.label || '',
+                isDirty: initial.isDirty !== undefined ? initial.isDirty : true,
                 isNew: true,
                 saving: false
-            });
+            };
+            this.categoryRules.unshift(newRule);
             this.categoriesLoaded = true;
             this.categoriesError = null;
             this.updateCategoryLabels();
+            return newRule;
         },
         markRuleDirty: function(rule) {
             if (!rule) {
@@ -667,12 +1237,46 @@ const app = new Vue({
             };
         },
         handleDocumentClick: function(event) {
-            if (!this.openColorRuleId) {
+            if (this.openColorRuleId) {
+                const cell = event.target.closest('.category-color-cell');
+                if (!cell) {
+                    this.openColorRuleId = null;
+                }
+            }
+            if (this.splitCategoryDropdown.rowId !== null) {
+                const cell = event.target.closest('.split-category-cell');
+                if (!cell) {
+                    this.closeSplitCategoryDropdown();
+                }
+            }
+            if (this.transactionMenu.visible) {
+                const menuRef = this.$refs.transactionContextMenu;
+                const menu = Array.isArray(menuRef) ? menuRef[0] : menuRef;
+                if (!menu || !menu.contains(event.target)) {
+                    this.closeTransactionMenu();
+                }
+            }
+        },
+        handleGlobalKeydown: function(event) {
+            if (event.key !== 'Escape') {
                 return;
             }
-            const cell = event.target.closest('.category-color-cell');
-            if (!cell) {
+            if (this.splitCategoryDropdown.rowId !== null) {
+                this.closeSplitCategoryDropdown();
+            }
+            if (this.splitModal.visible) {
+                if (this.splitModal.saving) {
+                    return;
+                }
+                event.preventDefault();
+                this.closeSplitModal();
+                return;
+            }
+            if (this.openColorRuleId) {
                 this.openColorRuleId = null;
+            }
+            if (this.transactionMenu.visible) {
+                this.closeTransactionMenu();
             }
         },
         fetchBanks: async function() {
@@ -765,6 +1369,13 @@ const app = new Vue({
                 this.transactions = data.transactions || [];
                 this.transactionsTotal = data.total_count || 0;
                 this.hasMoreTransactions = Boolean(data.has_more);
+                if (this.transactionMenu.visible) {
+                    const menuTransaction = this.transactionMenu.transaction;
+                    const stillExists = menuTransaction && this.transactions.some(txn => txn.id === menuTransaction.id);
+                    if (!stillExists) {
+                        this.closeTransactionMenu();
+                    }
+                }
                 if (this.editingTransactionCategoryId !== null) {
                     const stillExists = this.transactions.some(txn => txn.id === this.editingTransactionCategoryId);
                     if (!stillExists) {
@@ -1018,6 +1629,7 @@ const app = new Vue({
         this.updateStickyPositions();
         window.addEventListener('resize', this.handleResize);
         document.addEventListener('click', this.handleDocumentClick, true);
+        document.addEventListener('keydown', this.handleGlobalKeydown);
     },
     updated: function() {
         this.updateInstitutionCheckboxStates();
@@ -1029,5 +1641,11 @@ const app = new Vue({
         }
         window.removeEventListener('resize', this.handleResize);
         document.removeEventListener('click', this.handleDocumentClick, true);
+        document.removeEventListener('keydown', this.handleGlobalKeydown);
+        if (this.highlightedRuleTimeout) {
+            window.clearTimeout(this.highlightedRuleTimeout);
+            this.highlightedRuleTimeout = null;
+        }
+        document.body.classList.remove('modal-open');
     }
 });

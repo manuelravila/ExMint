@@ -233,7 +233,15 @@
                             </tr>
                         </thead>
                         <tbody>
-                            <tr v-for="transaction in displayedTransactions" :key="transaction.id">
+                            <tr
+                                v-for="transaction in displayedTransactions"
+                                :key="transaction.id"
+                                :class="{
+                                    'transaction-row-context': transactionMenu.visible && transactionMenu.transaction && transactionMenu.transaction.id === transaction.id
+                                }"
+                                @contextmenu.prevent="openTransactionMenu($event, transaction)"
+                                :data-transaction-id="transaction.id"
+                            >
                                 <td>[[ formatDate(transaction.date) ]]<span v-if="transaction.pending" class="badge badge-warning ml-2">Pending</span></td>
                                 <td>[[ transaction.name ]]</td>
                                 <td>[[ transaction.merchant_name || '—' ]]</td>
@@ -294,6 +302,200 @@
                         </tbody>
                     </table>
                 </div>
+                <div
+                    v-if="transactionMenu.visible"
+                    class="transaction-context-menu"
+                    :style="{ top: transactionMenu.y + 'px', left: transactionMenu.x + 'px' }"
+                    ref="transactionContextMenu"
+                    role="menu"
+                    @click.stop
+                    @contextmenu.prevent
+                >
+                    <button
+                        type="button"
+                        class="transaction-context-menu-item"
+                        @click="handleTransactionMenuAutoCategorize"
+                    >
+                        <i class="fas fa-magic mr-2"></i>
+                        Auto-categorize
+                    </button>
+                    <button
+                        type="button"
+                        class="transaction-context-menu-item"
+                        @click="handleTransactionMenuSplit"
+                        :disabled="transactionMenu.transaction && transactionMenu.transaction.is_split_child"
+                    >
+                        <i class="fas fa-cut mr-2"></i>
+                        Split transaction
+                    </button>
+                    <button
+                        type="button"
+                        class="transaction-context-menu-item"
+                        @click="handleTransactionMenuManualOverride"
+                    >
+                        <i class="fas fa-edit mr-2"></i>
+                        Edit category
+                    </button>
+                </div>
+                <div v-if="splitModal.visible">
+                    <div
+                        class="modal fade show split-transaction-modal"
+                        style="display: block;"
+                        role="dialog"
+                        aria-modal="true"
+                    >
+                        <div class="modal-dialog modal-lg modal-dialog-centered">
+                            <div class="modal-content">
+                                <div class="modal-header">
+                                    <h5 class="modal-title">Split Transaction</h5>
+                                    <button type="button" class="close" @click="closeSplitModal" :disabled="splitModal.saving" aria-label="Close split transaction modal">
+                                        <span aria-hidden="true">&times;</span>
+                                    </button>
+                                </div>
+                                <div class="modal-body">
+                                    <div class="mb-3 split-transaction-summary" v-if="splitModal.transaction">
+                                        <div class="d-flex justify-content-between align-items-start">
+                                            <div>
+                                                <h6 class="mb-1">[[ splitModal.transaction.name ]]</h6>
+                                                <small class="text-muted d-block">
+                                                    [[ formatDate(splitModal.transaction.date) ]] · [[ splitModal.transaction.account_name ]]
+                                                </small>
+                                                <small class="text-muted" v-if="splitModal.transaction.institution_name">
+                                                    [[ splitModal.transaction.institution_name ]]
+                                                </small>
+                                            </div>
+                                            <div class="text-right">
+                                                <span class="badge badge-light mb-1">Original Amount</span>
+                                                <div class="font-weight-bold">
+                                                    [[ formatCurrency(Math.abs(splitModal.transaction.amount || 0), splitModal.transaction.iso_currency_code) ]]
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="alert alert-warning py-2 px-3 mb-3" v-if="splitModal.errors.length">
+                                        <ul class="mb-0 pl-3">
+                                            <li v-for="error in splitModal.errors" :key="`split-error-${error}`">[[ error ]]</li>
+                                        </ul>
+                                    </div>
+                                    <div class="table-responsive split-transaction-table">
+                                        <table class="table table-sm mb-0">
+                                            <thead class="thead-light">
+                                                <tr>
+                                                    <th scope="col">Description</th>
+                                                    <th scope="col">Category</th>
+                                                    <th scope="col" class="text-right">Amount</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <tr v-for="(row, index) in splitModal.rows" :key="row.id">
+                                                    <td>
+                                                        <input
+                                                            type="text"
+                                                            class="form-control form-control-sm"
+                                                            :ref="`splitDescription-${row.id}`"
+                                                            v-model="row.description"
+                                                            @input="handleSplitFieldInput"
+                                                            placeholder="Description"
+                                                        >
+                                                    </td>
+                                                    <td class="split-category-cell">
+                                                        <div class="split-category-wrapper">
+                                                            <input
+                                                                type="text"
+                                                                class="form-control form-control-sm"
+                                                                :ref="`splitCategoryInput-${row.id}`"
+                                                                v-model="row.category"
+                                                                @focus="openSplitCategoryDropdown(row)"
+                                                                @input="handleSplitCategoryInput(row)"
+                                                                @blur="onSplitCategoryBlur"
+                                                                list="custom-category-options"
+                                                                placeholder="Select category"
+                                                            >
+                                                            <div
+                                                                v-if="splitCategoryDropdown.rowId === row.id && splitCategoryDropdown.items.length"
+                                                                class="category-edit-dropdown"
+                                                            >
+                                                                <button
+                                                                    v-for="option in splitCategoryDropdown.items"
+                                                                    :key="`split-category-${row.id}-${option}`"
+                                                                    type="button"
+                                                                    class="dropdown-item suggestion-item"
+                                                                    @mousedown.prevent="applySplitCategorySuggestion(option, row)"
+                                                                >
+                                                                    [[ option ]]
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    </td>
+                                                    <td>
+                                                        <div class="input-group input-group-sm split-amount-group">
+                                                            <input
+                                                                type="number"
+                                                                class="form-control form-control-sm text-right"
+                                                                min="0"
+                                                                step="0.01"
+                                                                v-model="row.amount"
+                                                                @input="handleSplitAmountInput(index)"
+                                                                :readonly="index === splitModal.rows.length - 1"
+                                                                aria-label="Split amount"
+                                                            >
+                                                            <div class="input-group-append" v-if="splitModal.rows.length > 2 && index < splitModal.rows.length - 1">
+                                                                <button
+                                                                    type="button"
+                                                                    class="btn btn-outline-danger"
+                                                                    @click="removeSplitRow(index)"
+                                                                    :disabled="splitModal.saving"
+                                                                    aria-label="Remove split row"
+                                                                >
+                                                                    <i class="fas fa-times"></i>
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    <div class="d-flex justify-content-between align-items-center mt-3">
+                                        <button
+                                            type="button"
+                                            class="btn btn-outline-secondary btn-sm"
+                                            @click="addSplitRow"
+                                            :disabled="splitModal.saving"
+                                        >
+                                            <i class="fas fa-plus mr-1"></i>
+                                            Add split row
+                                        </button>
+                                        <div class="text-right small">
+                                            <div class="text-muted">Remaining balance auto-fills the final row.</div>
+                                            <div v-if="splitModalRemainingCents !== 0">
+                                                <span class="text-danger">
+                                                    Difference: [[ formatCentsToAmount(Math.abs(splitModalRemainingCents)) ]]
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="modal-footer">
+                                    <button type="button" class="btn btn-secondary" @click="closeSplitModal" :disabled="splitModal.saving">
+                                        Cancel
+                                    </button>
+                                    <button type="button" class="btn btn-primary" @click="submitSplitModal" :disabled="!canSubmitSplit">
+                                        <span v-if="!splitModal.saving">
+                                            <i class="fas fa-cut mr-1"></i>
+                                            Split
+                                        </span>
+                                        <span v-else>
+                                            <i class="fas fa-spinner fa-spin mr-1"></i>
+                                            Splitting…
+                                        </span>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-backdrop fade show"></div>
+                </div>
                 <div v-if="showPagination" class="card-footer d-flex justify-content-between align-items-center">
                     <button class="btn btn-outline-secondary btn-sm" @click="goToPreviousPage" :disabled="transactionsPage === 1 || loading">
                         Previous
@@ -349,13 +551,20 @@
                             </tr>
                             </thead>
                             <tbody>
-                                <tr v-for="rule in categoryRules" :key="rule.localId">
+                                <tr
+                                    v-for="rule in categoryRules"
+                                    :key="rule.localId"
+                                    :ref="`categoryRuleRow-${rule.localId}`"
+                                    :class="{ 'highlighted-rule': highlightedRuleLocalId === rule.localId }"
+                                >
                                     <td>
                                         <input
                                             type="text"
                                             class="form-control form-control-sm"
+                                            :ref="`ruleTextInput-${rule.localId}`"
                                             v-model="rule.text_to_match"
                                             @input="markRuleDirty(rule)"
+                                            @blur="handleRuleInputBlur(rule)"
                                             placeholder="Enter pattern (* ? # supported)"
                                         >
                                     </td>
@@ -430,8 +639,10 @@
                                         <input
                                             type="text"
                                             class="form-control form-control-sm"
+                                            :ref="`ruleLabelInput-${rule.localId}`"
                                             v-model="rule.label"
                                             @input="markRuleDirty(rule)"
+                                            @blur="handleRuleInputBlur(rule)"
                                             list="custom-category-options"
                                             placeholder="Category name"
                                         >
