@@ -1,3 +1,30 @@
+## [0.6.11] - 2025-01-07
+
+### Added
+- Dashboard overview pane with tabbed “Balances & Spending” and “Cash Flow” views, complete with collapsible summaries and category drill-downs.
+- Cash flow selector to analyze trailing 12-month net totals for all spending or individual categories.
+
+### Changed
+- Balance totals automatically group accounts by type and institution with dynamic roll-ups.
+- Spending report now pivots by year → month → category with quick year selection and default expansion of the latest month.
+- Dashboard visuals now round figures to whole dollars for faster scanning.
+
+### Fixed
+- Resolved budget form validation to discard incomplete draft rows when focus exits without valid input.
+
+## [0.6.10] - 2025-01-07
+
+### Added
+- Introduced Budgets dashboard pane with editable category, frequency, and amount columns plus auto-calculated 6-month averages and current-month totals.
+- Added income versus expense detection with color coding, along with a summary banner showing net (income - expenses).
+- Provided inline category helpers for budgets and transaction splits to quickly pick existing categories.
+
+### Changed
+- Reused transaction category suggestions across budgets and splits for a consistent selection experience.
+
+### Fixed
+- Budget calculations skip parent split transactions to prevent double counting and keep aggregates accurate.
+
 ## [0.6.9] - 2025-01-07
 
 ### Added

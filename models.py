@@ -43,6 +43,7 @@ class User(UserMixin, db.Model):
     # Relationship with Subscription
     subscriptions = db.relationship('Subscription', backref='owner', lazy=True)
     transactions = db.relationship('Transaction', backref='user', lazy=True)
+    budgets = db.relationship('Budget', backref='user', lazy=True)
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -141,6 +142,18 @@ class TransactionCategoryOverride(db.Model):
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
 
     transaction = db.relationship('Transaction', backref=db.backref('manual_override_record', uselist=False, cascade='all, delete-orphan'))
+
+
+class Budget(db.Model):
+    __tablename__ = 'budgets'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    category_label = db.Column(db.String(255), nullable=False)
+    frequency = db.Column(db.String(32), nullable=False, default='monthly')
+    amount = db.Column(db.Numeric(14, 2), nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
 class Subscription(db.Model):
     __tablename__ = 'subscription'

@@ -1,7 +1,7 @@
 # core_views.py
 from flask import Blueprint, jsonify, request, session, current_app
 from flask_login import login_required, current_user
-from models import db, Credential, Account, PlaidTransaction, Transaction, Category, TransactionCategoryOverride
+from models import db, Credential, Account, PlaidTransaction, Transaction, Category, TransactionCategoryOverride, Budget
 from plaid.model.item_remove_request import ItemRemoveRequest
 from plaid.model.accounts_get_request import AccountsGetRequest
 from plaid.model.item_webhook_update_request import ItemWebhookUpdateRequest
@@ -13,6 +13,8 @@ import plaid
 import json
 import re
 from datetime import datetime, date
+from collections import defaultdict
+import calendar
 from io import StringIO
 import csv
 from config import Config
@@ -393,6 +395,483 @@ def _collect_category_labels(user_id):
     return sorted(
         label for (label,) in labels if label
     )
+
+
+def _resolve_transaction_category_label(txn, override_map, allow_fallback=True):
+    label = None
+    if override_map:
+        override = override_map.get(txn.id)
+        if override:
+            label = override.label
+    if not label and getattr(txn, 'custom_category', None):
+        label = txn.custom_category.label
+    if not label and allow_fallback:
+        fallback = _extract_category_list(txn.category)
+        if fallback:
+            label = ' / '.join(fallback)
+    if label:
+        return label.strip()
+    return None
+
+
+_BUDGET_FREQUENCY_MAP = {
+    'weekly': 'Weekly',
+    'biweekly': 'Biweekly',
+    'semi-monthly': 'Semi-Monthly',
+    'monthly': 'Monthly',
+    'quarterly': 'Quarterly',
+    'yearly': 'Yearly'
+}
+
+
+def _normalize_budget_frequency(value):
+    if not value:
+        return 'monthly'
+    normalized = str(value).strip().lower()
+    if normalized in _BUDGET_FREQUENCY_MAP:
+        return normalized
+    raise ValueError('Invalid frequency value.')
+
+
+def _normalize_budget_amount(value):
+    if value is None or value == '':
+        raise ValueError('Amount is required.')
+    try:
+        decimal_value = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        raise ValueError('Invalid amount value.')
+    decimal_value = decimal_value.copy_abs().quantize(CENT, rounding=ROUND_HALF_UP)
+    if decimal_value <= Decimal('0.00'):
+        raise ValueError('Amount must be greater than zero.')
+    return decimal_value
+
+
+def _month_start_offset(reference_date, offset):
+    year = reference_date.year
+    month = reference_date.month - offset
+    while month <= 0:
+        month += 12
+        year -= 1
+    return date(year, month, 1)
+
+
+def _determine_budget_classification(avg_value, current_value):
+    if current_value > 0 or avg_value > 0:
+        return 'income'
+    if current_value < 0 or avg_value < 0:
+        return 'expense'
+    return 'expense'
+
+
+def _calculate_budget_metrics(user_id, category_labels):
+    normalized_labels = {
+        (label or '').strip().lower(): label
+        for label in category_labels if label and label.strip()
+    }
+    if not normalized_labels:
+        return {}
+
+    today = date.today()
+    month_starts = [_month_start_offset(today, offset) for offset in range(0, 6)]
+    earliest_start = month_starts[-1]
+    month_keys = [start.strftime('%Y-%m') for start in month_starts]
+    current_month_key = month_keys[0]
+
+    transactions = Transaction.query.options(
+        joinedload(Transaction.custom_category)
+    ).filter(
+        Transaction.user_id == user_id,
+        Transaction.is_removed.is_(False),
+        Transaction.date >= earliest_start
+    ).all()
+
+    override_map = _load_overrides([txn.id for txn in transactions])
+    monthly_totals = defaultdict(lambda: defaultdict(lambda: Decimal('0.00')))
+
+    for txn in transactions:
+        if txn.has_split_children and not txn.is_split_child:
+            continue
+        label = _resolve_transaction_category_label(txn, override_map)
+        if not label:
+            continue
+        label_key = label.lower()
+        if label_key not in normalized_labels:
+            continue
+        if not txn.date:
+            continue
+        month_key = txn.date.strftime('%Y-%m')
+        if month_key not in month_keys:
+            continue
+        amount = Decimal(txn.amount or 0).quantize(CENT, rounding=ROUND_HALF_UP)
+        monthly_totals[label_key][month_key] += amount
+
+    metrics = {}
+    for label_key in normalized_labels:
+        totals_by_month = monthly_totals.get(label_key, {})
+        month_values = [totals_by_month.get(key, Decimal('0.00')) for key in month_keys]
+        non_zero_values = [value for value in month_values if value != Decimal('0.00')]
+        if non_zero_values:
+            average_value = (sum(non_zero_values, Decimal('0.00')) / Decimal(len(non_zero_values))).quantize(CENT, rounding=ROUND_HALF_UP)
+        else:
+            average_value = Decimal('0.00')
+        current_value = totals_by_month.get(current_month_key, Decimal('0.00')).quantize(CENT, rounding=ROUND_HALF_UP)
+        classification = _determine_budget_classification(average_value, current_value)
+        metrics[label_key] = {
+            'six_month_average': average_value,
+            'current_month_total': current_value,
+            'classification': classification
+        }
+    return metrics
+
+
+def _serialize_budget(budget, metrics_map):
+    label_key = (budget.category_label or '').strip().lower()
+    metrics = metrics_map.get(label_key, {})
+    avg_value = metrics.get('six_month_average', Decimal('0.00'))
+    current_value = metrics.get('current_month_total', Decimal('0.00'))
+    classification = metrics.get('classification', _determine_budget_classification(Decimal('0.00'), Decimal('0.00')))
+
+    return {
+        'id': budget.id,
+        'category_label': budget.category_label,
+        'frequency': budget.frequency,
+        'amount': str(Decimal(budget.amount or 0).quantize(CENT, rounding=ROUND_HALF_UP)),
+        'six_month_average': float(avg_value),
+        'current_month_total': float(current_value),
+        'classification': classification,
+        'created_at': budget.created_at.isoformat() if budget.created_at else None,
+        'updated_at': budget.updated_at.isoformat() if budget.updated_at else None
+    }
+
+
+def _build_budget_summary(budgets, metrics_map):
+    income_total = Decimal('0.00')
+    expense_total = Decimal('0.00')
+    for budget in budgets:
+        amount = Decimal(budget.amount or 0).quantize(CENT, rounding=ROUND_HALF_UP)
+        label_key = (budget.category_label or '').strip().lower()
+        metrics = metrics_map.get(label_key, {})
+        classification = metrics.get('classification', 'expense')
+        if classification == 'income':
+            income_total += amount
+        else:
+            expense_total += amount
+    net_total = income_total - expense_total
+    return {
+        'income_total': float(income_total),
+        'expense_total': float(expense_total),
+        'net_total': float(net_total)
+    }
+
+
+_ACCOUNT_GROUP_LABELS = {
+    'banking': 'Banking',
+    'credit': 'Credit',
+    'investment': 'Investment',
+    'other': 'Other'
+}
+
+
+_INVESTMENT_TYPES = {
+    'investment', 'brokerage', '401k', 'ira', 'retirement', 'education'
+}
+
+
+def _classify_account_group(account):
+    type_value = (account.type or '').lower()
+    subtype_value = (account.subtype or '').lower()
+    if type_value in {'credit', 'loan'}:
+        return 'credit'
+    if type_value in {'depository', 'checking', 'savings'}:
+        return 'banking'
+    if type_value in _INVESTMENT_TYPES or subtype_value in _INVESTMENT_TYPES:
+        return 'investment'
+    return 'other'
+
+
+def _format_decimal(value):
+    if isinstance(value, Decimal):
+        return float(value.quantize(CENT, rounding=ROUND_HALF_UP))
+    return float(Decimal(value or 0).quantize(CENT, rounding=ROUND_HALF_UP))
+
+
+def _collect_balances_summary(user_id):
+    transaction_totals = db.session.query(
+        Transaction.account_id.label('account_id'),
+        func.coalesce(func.sum(Transaction.amount), Decimal('0.00')).label('balance')
+    ).filter(
+        Transaction.user_id == user_id,
+        Transaction.is_removed.is_(False)
+    ).group_by(Transaction.account_id).subquery()
+
+    accounts = (
+        db.session.query(
+            Account,
+            Credential.institution_name,
+            func.coalesce(transaction_totals.c.balance, Decimal('0.00')).label('balance')
+        )
+        .join(Credential, Account.credential_id == Credential.id)
+        .outerjoin(transaction_totals, transaction_totals.c.account_id == Account.id)
+        .filter(Credential.user_id == user_id, Account.is_enabled.is_(True))
+        .all()
+    )
+
+    groups = {}
+    grand_total = Decimal('0.00')
+
+    for account, institution_name, balance in accounts:
+        group_key = _classify_account_group(account)
+        if group_key not in groups:
+            groups[group_key] = {
+                'key': group_key,
+                'label': _ACCOUNT_GROUP_LABELS.get(group_key, group_key.title()),
+                'total': Decimal('0.00'),
+                'institutions': {}
+            }
+
+        account_balance = Decimal(balance or 0)
+        if (account.type or '').lower() in {'credit', 'loan'}:
+            account_balance = -account_balance
+        account_balance = account_balance.quantize(CENT, rounding=ROUND_HALF_UP)
+
+        institution_key = f"{group_key}:{institution_name or 'Unknown Institution'}"
+        institution_entry = groups[group_key]['institutions'].setdefault(institution_key, {
+            'id': institution_key,
+            'name': institution_name or 'Unknown Institution',
+            'total': Decimal('0.00'),
+            'accounts': []
+        })
+
+        account_entry = {
+            'id': account.id,
+            'name': account.name or 'Account',
+            'mask': account.mask,
+            'balance': float(account_balance)
+        }
+        institution_entry['accounts'].append(account_entry)
+        institution_entry['total'] += account_balance
+        groups[group_key]['total'] += account_balance
+        grand_total += account_balance
+
+    group_list = []
+    for group_key, group in groups.items():
+        institutions = []
+        for institution in group['institutions'].values():
+            institution['accounts'].sort(key=lambda acc: acc['name'])
+            institution['total'] = float(institution['total'].quantize(CENT, rounding=ROUND_HALF_UP))
+            institutions.append(institution)
+        institutions.sort(key=lambda inst: inst['name'])
+        group_list.append({
+            'key': group['key'],
+            'label': group['label'],
+            'total': float(group['total'].quantize(CENT, rounding=ROUND_HALF_UP)),
+            'institutions': institutions
+        })
+
+    group_list.sort(key=lambda item: item['label'])
+
+    return {
+        'groups': group_list,
+        'grand_total': float(grand_total.quantize(CENT, rounding=ROUND_HALF_UP))
+    }
+
+
+def _collect_spending_summary(user_id):
+    today = date.today()
+    current_year = today.year
+    current_month = today.month
+    start_date = _month_start_offset(today, 23)
+
+    transactions = Transaction.query.options(
+        joinedload(Transaction.custom_category)
+    ).filter(
+        Transaction.user_id == user_id,
+        Transaction.is_removed.is_(False),
+        Transaction.date >= start_date
+    ).order_by(Transaction.date.desc()).all()
+
+    override_map = _load_overrides([txn.id for txn in transactions])
+
+    category_entries = {}
+    for txn in transactions:
+        if txn.has_split_children and not txn.is_split_child:
+            continue
+        label = _resolve_transaction_category_label(txn, override_map)
+        if not label or not txn.date:
+            continue
+        label_key = label.lower()
+        info = category_entries.setdefault(label_key, {
+            'label': label,
+            'totals': defaultdict(lambda: defaultdict(lambda: Decimal('0.00'))),
+            'raw_sum': Decimal('0.00')
+        })
+        year = txn.date.year
+        month = txn.date.month
+        value = Decimal(txn.amount or 0).quantize(CENT, rounding=ROUND_HALF_UP)
+        spending_value = abs(value)
+        if spending_value == 0:
+            continue
+        info['totals'][year][month] += spending_value
+        info['raw_sum'] += value
+
+    metrics = _calculate_budget_metrics(user_id, [info['label'] for info in category_entries.values()])
+    budgets = Budget.query.filter_by(user_id=user_id).all()
+    budget_map = {
+        (budget.category_label or '').strip().lower(): Decimal(budget.amount or 0).quantize(CENT, rounding=ROUND_HALF_UP)
+        for budget in budgets
+    }
+
+    year_map = defaultdict(lambda: defaultdict(lambda: {
+        'month': None,
+        'label': None,
+        'total': Decimal('0.00'),
+        'categories': []
+    }))
+
+    for label_key, info in category_entries.items():
+        metrics_entry = metrics.get(label_key, {})
+        six_month_average = abs(metrics_entry.get('six_month_average', Decimal('0.00')))
+        classification = metrics_entry.get('classification')
+        if classification is None:
+            classification = 'income' if info['raw_sum'] > 0 else 'expense'
+        budget_amount = budget_map.get(label_key)
+
+        for year, months in info['totals'].items():
+            for month, value in months.items():
+                month_entry = year_map[year][month]
+                month_entry['month'] = month
+                month_entry['label'] = calendar.month_abbr[month]
+                month_entry['total'] += value
+                remainder = None
+                if budget_amount is not None:
+                    remainder = budget_amount - value
+                month_entry['categories'].append({
+                    'label': info['label'],
+                    'value': value,
+                    'six_month_average': six_month_average,
+                    'budget': budget_amount,
+                    'remainder': remainder,
+                    'classification': classification
+                })
+
+    years_output = []
+    for year in sorted(year_map.keys(), reverse=True):
+        months_output = []
+        for month in sorted(year_map[year].keys(), reverse=True):
+            month_entry = year_map[year][month]
+            categories = month_entry['categories']
+            categories.sort(key=lambda item: item['label'].lower())
+            months_output.append({
+                'year': year,
+                'month': month,
+                'label': month_entry['label'],
+                'total': float(month_entry['total'].quantize(CENT, rounding=ROUND_HALF_UP)),
+                'categories': [
+                    {
+                        'label': category['label'],
+                        'value': float(category['value'].quantize(CENT, rounding=ROUND_HALF_UP)),
+                        'six_month_average': float(category['six_month_average'].quantize(CENT, rounding=ROUND_HALF_UP)),
+                        'budget': float(category['budget'].quantize(CENT, rounding=ROUND_HALF_UP)) if category['budget'] is not None else None,
+                        'remainder': float(category['remainder'].quantize(CENT, rounding=ROUND_HALF_UP)) if category['remainder'] is not None else None,
+                        'classification': category['classification']
+                    }
+                    for category in categories
+                ]
+            })
+        years_output.append({
+            'year': year,
+            'months': months_output
+        })
+
+    return {
+        'years': years_output,
+        'current_year': current_year,
+        'current_month': current_month,
+        'generated_on': today.isoformat()
+    }
+
+
+def _collect_cashflow_summary(user_id):
+    today = date.today()
+    months = []
+    month_order = []
+    month_map = {}
+
+    for offset in range(11, -1, -1):
+        start = _month_start_offset(today, offset)
+        key = start.strftime('%Y-%m')
+        label = f"{calendar.month_abbr[start.month]} {start.year}"
+        month_order.append(key)
+        month_map[key] = {
+            'key': key,
+            'label': label,
+            'income': Decimal('0.00'),
+            'expense': Decimal('0.00')
+        }
+
+    start_date = _month_start_offset(today, 11)
+
+    transactions = Transaction.query.options(
+        joinedload(Transaction.custom_category)
+    ).filter(
+        Transaction.user_id == user_id,
+        Transaction.is_removed.is_(False),
+        Transaction.date >= start_date
+    ).order_by(Transaction.date).all()
+
+    override_map = _load_overrides([txn.id for txn in transactions])
+    category_series = defaultdict(lambda: defaultdict(lambda: Decimal('0.00')))
+    category_labels = {}
+
+    for txn in transactions:
+        if txn.has_split_children and not txn.is_split_child:
+            continue
+        if not txn.date:
+            continue
+        month_key = txn.date.strftime('%Y-%m')
+        if month_key not in month_map:
+            continue
+        amount = Decimal(txn.amount or 0).quantize(CENT, rounding=ROUND_HALF_UP)
+        if amount >= 0:
+            month_map[month_key]['income'] += amount
+        else:
+            month_map[month_key]['expense'] += amount
+
+        label = _resolve_transaction_category_label(txn, override_map)
+        if label:
+            label_key = label.lower()
+            category_series[label_key][month_key] += amount
+            category_labels[label_key] = label
+
+    months_output = []
+    for key in month_order:
+        entry = month_map[key]
+        net_total = entry['income'] + entry['expense']
+        months_output.append({
+            'key': key,
+            'label': entry['label'],
+            'income': float(entry['income'].quantize(CENT, rounding=ROUND_HALF_UP)),
+            'expense': float(entry['expense'].quantize(CENT, rounding=ROUND_HALF_UP)),
+            'total': float(net_total.quantize(CENT, rounding=ROUND_HALF_UP))
+        })
+
+    series_output = {}
+    for label_key, series in category_series.items():
+        series_output[label_key] = {
+            month_key: float(series.get(month_key, Decimal('0.00')).quantize(CENT, rounding=ROUND_HALF_UP))
+            for month_key in month_order
+        }
+
+    categories_output = [
+        {'key': key, 'label': label}
+        for key, label in sorted(category_labels.items(), key=lambda item: item[1].lower())
+    ]
+
+    return {
+        'months': months_output,
+        'categories': categories_output,
+        'series': series_output
+    }
 
 
 def _normalize_split_amount(value):
@@ -1462,6 +1941,111 @@ def delete_category_rule(category_id):
         })
 
     return _with_schema_retry(handler)
+
+
+@core.route('/api/dashboard', methods=['GET'])
+@login_required
+def dashboard_summary():
+    ensure_category_schema()
+    balances = _collect_balances_summary(current_user.id)
+    spending = _collect_spending_summary(current_user.id)
+    cashflow = _collect_cashflow_summary(current_user.id)
+    return jsonify({
+        'balances': balances,
+        'spending': spending,
+        'cashflow': cashflow
+    })
+
+
+@core.route('/api/budgets', methods=['GET'])
+@login_required
+def list_budgets():
+    budgets = Budget.query.filter_by(user_id=current_user.id).order_by(Budget.created_at.asc(), Budget.id.asc()).all()
+    metrics = _calculate_budget_metrics(current_user.id, [budget.category_label for budget in budgets])
+    response = [_serialize_budget(budget, metrics) for budget in budgets]
+    summary = _build_budget_summary(budgets, metrics)
+    return jsonify({'budgets': response, 'summary': summary})
+
+
+@core.route('/api/budgets', methods=['POST'])
+@login_required
+def create_budget():
+    payload = request.get_json() or {}
+    category_label = (payload.get('category_label') or '').strip()
+    if not category_label:
+        return jsonify({'error': 'Category is required.'}), 400
+
+    try:
+        frequency = _normalize_budget_frequency(payload.get('frequency'))
+        amount = _normalize_budget_amount(payload.get('amount'))
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+
+    budget = Budget(
+        user_id=current_user.id,
+        category_label=category_label,
+        frequency=frequency,
+        amount=amount
+    )
+    db.session.add(budget)
+    db.session.commit()
+
+    budgets = Budget.query.filter_by(user_id=current_user.id).order_by(Budget.created_at.asc(), Budget.id.asc()).all()
+    metrics = _calculate_budget_metrics(current_user.id, [item.category_label for item in budgets])
+    response_budget = _serialize_budget(budget, metrics)
+    summary = _build_budget_summary(budgets, metrics)
+
+    return jsonify({'budget': response_budget, 'summary': summary}), 201
+
+
+@core.route('/api/budgets/<int:budget_id>', methods=['PUT'])
+@login_required
+def update_budget(budget_id):
+    budget = Budget.query.filter_by(id=budget_id, user_id=current_user.id).first()
+    if not budget:
+        return jsonify({'error': 'Budget not found.'}), 404
+
+    payload = request.get_json() or {}
+    category_label = (payload.get('category_label') or '').strip()
+    if not category_label:
+        return jsonify({'error': 'Category is required.'}), 400
+
+    try:
+        frequency = _normalize_budget_frequency(payload.get('frequency'))
+        amount = _normalize_budget_amount(payload.get('amount'))
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+
+    budget.category_label = category_label
+    budget.frequency = frequency
+    budget.amount = amount
+    db.session.commit()
+
+    budgets = Budget.query.filter_by(user_id=current_user.id).order_by(Budget.created_at.asc(), Budget.id.asc()).all()
+    metrics = _calculate_budget_metrics(current_user.id, [item.category_label for item in budgets])
+    response_budget = _serialize_budget(budget, metrics)
+    summary = _build_budget_summary(budgets, metrics)
+
+    return jsonify({'budget': response_budget, 'summary': summary})
+
+
+@core.route('/api/budgets/<int:budget_id>', methods=['DELETE'])
+@login_required
+def delete_budget(budget_id):
+    budget = Budget.query.filter_by(id=budget_id, user_id=current_user.id).first()
+    if not budget:
+        return jsonify({'error': 'Budget not found.'}), 404
+
+    db.session.delete(budget)
+    db.session.commit()
+
+    budgets = Budget.query.filter_by(user_id=current_user.id).order_by(Budget.created_at.asc(), Budget.id.asc()).all()
+    metrics = _calculate_budget_metrics(current_user.id, [item.category_label for item in budgets])
+    summary = _build_budget_summary(budgets, metrics)
+    remaining = [_serialize_budget(item, metrics) for item in budgets]
+
+    return jsonify({'budgets': remaining, 'summary': summary})
+
 
 @core.route('/api/balance', methods=['POST'])
 @login_required
