@@ -699,7 +699,7 @@
                                                     </div>
                                                 </div>
                                                 <div v-else class="text-muted small pt-2">
-                                                    No categories with budgets recorded for this month yet.
+                                                    No spending recorded for this month yet.
                                                 </div>
                                             </div>
                                         </div>
@@ -727,33 +727,8 @@
                                 </select>
                             </div>
                             <div class="card-body">
-                                <div v-if="!(filteredCashflowMonths && filteredCashflowMonths.length)" class="text-muted small">
-                                    Cash flow data will appear after transactions have been synced.
-                                </div>
-                                <div v-else class="cashflow-list">
-                                    <div
-                                        v-for="month in filteredCashflowMonths"
-                                        :key="`cashflow-${month.key}`"
-                                        class="cashflow-row"
-                                    >
-                                        <span class="cashflow-label">[[ month.label ]]</span>
-                                        <div class="cashflow-bar-container">
-                                            <div class="cashflow-value" :class="{ 'text-success': month.total >= 0, 'text-danger': month.total < 0 }">
-                                                [[ formatDashboardAmount(month.total, null) ]]
-                                            </div>
-                                            <div class="cashflow-bar">
-                                                <div
-                                                    class="cashflow-bar-negative"
-                                                    :style="{ width: cashflowBarSplit(month.total).negative + '%' }"
-                                                ></div>
-                                                <div class="cashflow-bar-axis"></div>
-                                                <div
-                                                    class="cashflow-bar-positive"
-                                                    :style="{ width: cashflowBarSplit(month.total).positive + '%' }"
-                                                ></div>
-                                            </div>
-                                        </div>
-                                    </div>
+                                <div class="cashflow-chart-container">
+                                    <line-chart :chart-data="cashflowChartData" :options="cashflowChartOptions"></line-chart>
                                 </div>
                             </div>
                         </div>
@@ -1147,6 +1122,8 @@
 {% endblock %}
 
 {% block scripts %}
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@2.7.1/dist/Chart.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vue-chartjs@3.5.1/dist/vue-chartjs.min.js"></script>
     <script src="{{ url_for('static', filename='js/vuePlaid.js') }}"></script>
     <script type="text/javascript">
         $(document).ready(function() {

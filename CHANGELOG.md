@@ -1,3 +1,12 @@
+## [0.7.0] - 2025-10-13
+
+### Fixed
+- Cash Flow widget now displays a line chart instead of a bar chart.
+- Fixed an issue where the chart would not render due to incorrect CDN links.
+
+### Changed
+- Replaced the custom bar chart with a line chart from `vue-chartjs`.
+
 ## [0.6.11] - 2025-01-07
 
 ### Added
