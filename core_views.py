@@ -617,14 +617,19 @@ def _collect_balances_summary(user_id):
         .join(Credential, Account.credential_id == Credential.id)
         .outerjoin(transaction_totals, transaction_totals.c.account_id == Account.id)
         .filter(Credential.user_id == user_id, Account.is_enabled.is_(True))
-        .distinct()
         .all()
     )
 
     groups = {}
     grand_total = Decimal('0.00')
+    processed_accounts = set()
 
     for account, institution_name, balance in accounts:
+        account_key = (institution_name, account.name, account.mask)
+        if account_key in processed_accounts:
+            continue
+        processed_accounts.add(account_key)
+        
         group_key = _classify_account_group(account)
         if group_key not in groups:
             groups[group_key] = {
