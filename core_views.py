@@ -189,10 +189,406 @@ def _serialize_transaction(txn, override_map):
         'parent_transaction_id': txn.parent_transaction_id,
         'is_split_child': bool(getattr(txn, 'is_split_child', False)),
         'has_split_children': bool(getattr(txn, 'has_split_children', False)),
-        'split_children_count': txn.split_children.count() if getattr(txn, 'has_split_children', False) else 0
+        'split_children_count': txn.split_children.count() if getattr(txn, 'has_split_children', False) else 0,
+        'is_new': bool(txn.is_new),
+        'seen_by_user': bool(txn.seen_by_user)
     }
 
-_COLOR_RE = re.compile(r'^#([0-9a-fA-F]{6})$')
+_COLOR_RE = re.compile(r'^#([0-9a-fA-F]{6})
+            label = label[:255]
+
+        field_to_match = _resolve_rule_field(payload.get('field_to_match'))
+        transaction_type = _resolve_rule_type(payload.get('transaction_type'))
+
+        try:
+            amount_min = _parse_decimal_value(payload.get('amount_min'))
+            amount_max = _parse_decimal_value(payload.get('amount_max'))
+            color = _normalize_color(payload.get('color'))
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
+
+        if amount_min is not None and amount_max is not None and amount_min > amount_max:
+            return jsonify({'error': 'Amount >= cannot be greater than Amount <='}), 400
+
+        rule.text_to_match = text_to_match
+        rule.label = label
+        rule.field_to_match = field_to_match
+        rule.transaction_type = transaction_type
+        rule.amount_min = amount_min
+        rule.amount_max = amount_max
+        rule.color = color
+
+        db.session.flush()
+
+        summary = apply_category_rules(current_user.id)
+        db.session.commit()
+
+        return jsonify({
+            'category': _serialize_category(rule),
+            'summary': summary,
+            'labels': _collect_category_labels(current_user.id)
+        })
+
+    return _with_schema_retry(handler)
+
+
+@core.route('/api/categories/<int:category_id>', methods=['DELETE'])
+@login_required
+def delete_category_rule(category_id):
+    ensure_category_schema()
+    def handler():
+        rule = Category.query.filter_by(id=category_id, user_id=current_user.id).first()
+        if not rule:
+            return jsonify({'error': 'Category rule not found.'}), 404
+
+        db.session.delete(rule)
+        db.session.flush()
+
+        summary = apply_category_rules(current_user.id)
+        db.session.commit()
+
+        return jsonify({
+            'deleted': category_id,
+            'summary': summary,
+            'labels': _collect_category_labels(current_user.id)
+        })
+
+    return _with_schema_retry(handler)
+
+
+@core.route('/api/dashboard', methods=['GET'])
+@login_required
+def dashboard_summary():
+    ensure_category_schema()
+    balances = _collect_balances_summary(current_user.id)
+    spending = _collect_spending_summary(current_user.id)
+    cashflow = _collect_cashflow_summary(current_user.id)
+    return jsonify({
+        'balances': balances,
+        'spending': spending,
+        'cashflow': cashflow
+    })
+
+
+@core.route('/api/budgets', methods=['GET'])
+@login_required
+def list_budgets():
+    budgets = Budget.query.filter_by(user_id=current_user.id).order_by(Budget.created_at.asc(), Budget.id.asc()).all()
+    metrics = _calculate_budget_metrics(current_user.id, [budget.category_label for budget in budgets])
+    response = [_serialize_budget(budget, metrics) for budget in budgets]
+    summary = _build_budget_summary(budgets, metrics)
+    return jsonify({'budgets': response, 'summary': summary})
+
+
+@core.route('/api/budgets', methods=['POST'])
+@login_required
+def create_budget():
+    payload = request.get_json() or {}
+    category_label = (payload.get('category_label') or '').strip()
+    if not category_label:
+        return jsonify({'error': 'Category is required.'}), 400
+
+    try:
+        frequency = _normalize_budget_frequency(payload.get('frequency'))
+        amount = _normalize_budget_amount(payload.get('amount'))
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+
+    budget = Budget(
+        user_id=current_user.id,
+        category_label=category_label,
+        frequency=frequency,
+        amount=amount
+    )
+    db.session.add(budget)
+    db.session.commit()
+
+    budgets = Budget.query.filter_by(user_id=current_user.id).order_by(Budget.created_at.asc(), Budget.id.asc()).all()
+    metrics = _calculate_budget_metrics(current_user.id, [item.category_label for item in budgets])
+    response_budget = _serialize_budget(budget, metrics)
+    summary = _build_budget_summary(budgets, metrics)
+
+    return jsonify({'budget': response_budget, 'summary': summary}), 201
+
+
+@core.route('/api/budgets/<int:budget_id>', methods=['PUT'])
+@login_required
+def update_budget(budget_id):
+    budget = Budget.query.filter_by(id=budget_id, user_id=current_user.id).first()
+    if not budget:
+        return jsonify({'error': 'Budget not found.'}), 404
+
+    payload = request.get_json() or {}
+    category_label = (payload.get('category_label') or '').strip()
+    if not category_label:
+        return jsonify({'error': 'Category is required.'}), 400
+
+    try:
+        frequency = _normalize_budget_frequency(payload.get('frequency'))
+        amount = _normalize_budget_amount(payload.get('amount'))
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+
+    budget.category_label = category_label
+    budget.frequency = frequency
+    budget.amount = amount
+    db.session.commit()
+
+    budgets = Budget.query.filter_by(user_id=current_user.id).order_by(Budget.created_at.asc(), Budget.id.asc()).all()
+    metrics = _calculate_budget_metrics(current_user.id, [item.category_label for item in budgets])
+    response_budget = _serialize_budget(budget, metrics)
+    summary = _build_budget_summary(budgets, metrics)
+
+    return jsonify({'budget': response_budget, 'summary': summary})
+
+
+@core.route('/api/budgets/<int:budget_id>', methods=['DELETE'])
+@login_required
+def delete_budget(budget_id):
+    budget = Budget.query.filter_by(id=budget_id, user_id=current_user.id).first()
+    if not budget:
+        return jsonify({'error': 'Budget not found.'}), 404
+
+    db.session.delete(budget)
+    db.session.commit()
+
+    budgets = Budget.query.filter_by(user_id=current_user.id).order_by(Budget.created_at.asc(), Budget.id.asc()).all()
+    metrics = _calculate_budget_metrics(current_user.id, [item.category_label for item in budgets])
+    summary = _build_budget_summary(budgets, metrics)
+    remaining = [_serialize_budget(item, metrics) for item in budgets]
+
+    return jsonify({'budgets': remaining, 'summary': summary})
+
+
+@core.route('/api/balance', methods=['POST'])
+@login_required
+def fetch_balances():
+    data = request.json
+    access_token = data.get('access_token')
+    account_ids = data.get('account_ids', [])
+
+    # Use AccountsGetRequest instead of AccountsBalanceGetRequest
+    accounts_request = AccountsGetRequest(
+        access_token=access_token,
+        options={"account_ids": account_ids} if account_ids else None
+    )
+
+    try:
+        accounts_response = current_app.plaid_client.accounts_get(accounts_request)
+        accounts = accounts_response.to_dict().get('accounts', [])
+
+        # Extract the necessary balance information from the accounts data
+        balances = []
+        for account in accounts:
+            balance_info = {
+                "account_id": account.get('account_id'),
+                "balances": account.get('balances')
+            }
+            balances.append(balance_info)
+
+        return jsonify({"balances": balances})
+    except plaid.ApiException as e:
+        return jsonify(json.loads(e.body)), e.status
+
+@core.route('/api/remove_bank/<int:bank_id>', methods=['DELETE'])
+@login_required
+def remove_bank(bank_id):
+    credential = Credential.query.filter_by(id=bank_id, user_id=current_user.id).first()
+    
+    if credential:
+        success, plaid_response = deactivate_plaid_token(credential.access_token)
+        
+        if success:
+            credential.status = 'Revoked'
+
+            for account in credential.accounts:
+                account.status = 'Revoked'
+            
+            transaction = PlaidTransaction(
+                user_id=current_user.id,
+                user_ip=request.remote_addr,
+                credential_id=credential.id,
+                operation='Access token and associated accounts revoked',
+                response=str(plaid_response)
+            )
+            db.session.add(transaction)
+            db.session.commit()
+            session['connections_modal_open'] = True
+            return jsonify({'success': True, 'message': 'Bank connection removed'}), 200
+        else:
+            print(f"Failed to deactivate token: {plaid_response}")
+            session['connections_modal_open'] = True
+            return jsonify({'success': False, 'message': 'Failed to remove bank connection', 'error': plaid_response}), 400
+    else:
+        return jsonify({'success': False, 'message': 'Credential not found'}), 404
+
+@core.route('/api/get_access_token/<int:credential_id>', methods=['GET'])
+@login_required
+def get_access_token_for_bank(credential_id):
+    credential = Credential.query.filter_by(id=credential_id, user_id=current_user.id).first()
+
+    if not credential:
+        return jsonify({'error': 'Credential not found or does not belong to the current user'}), 404
+
+    try:
+        access_token = credential.access_token
+        return jsonify({'access_token': access_token})
+    except Exception as e:
+        return jsonify({'error': 'Failed to retrieve access token', 'message': str(e)}), 500
+
+# CANDIDATE FOR DELETION, THIS FUNCTION DOES NOT SEEM TO BE USED ANYWHERE:
+def refresh_accounts(credential_id, accounts_data):
+    existing_accounts = Account.query.filter_by(credential_id=credential_id).all()
+    existing_account_ids = {account.plaid_account_id for account in existing_accounts}
+
+    for account in accounts_data['accounts']:
+        if account['account_id'] in existing_account_ids:
+            existing_account = next((acc for acc in existing_accounts if acc.plaid_account_id == account['account_id']), None)
+            if existing_account:
+                existing_account.name = account['name']
+                existing_account.type = account['type']
+                existing_account.subtype = account['subtype']
+                existing_account.mask = account.get('mask', '')
+    else:
+                new_account = Account(
+                    credential_id=credential_id,
+                    plaid_account_id=account['account_id'],
+                    name=account['name'],
+                    type=account['type'],
+                    subtype=account['subtype'],
+                    mask=account.get('mask', ''),
+                    status='Active'
+                )
+                db.session.add(new_account)
+
+    current_account_ids = {account['account_id'] for account in accounts_data['accounts']}
+    for existing_account in existing_accounts:
+        if existing_account.plaid_account_id not in current_account_ids:
+            existing_account.status = 'Inactive'
+
+    db.session.commit()
+
+@core.route('/plaid_webhook', methods=['POST'])
+def plaid_webhook():
+    data = request.get_json()
+
+    # Extract relevant fields from the payload
+    timestamp = datetime.now()
+    environment = data.get('environment', 'Unknown')
+    error = data.get('error', {}) or {}  # Handle None by defaulting to an empty dictionary
+    error_code = error.get('error_code', 'None')
+    item_id = data.get('item_id', 'Unknown')
+    webhook_code = data.get('webhook_code', 'Unknown')
+    webhook_type = data.get('webhook_type', 'Unknown')
+    request_id = data.get('request_id', 'Unknown')
+    status = error.get('status', 'Unknown')
+
+    # Log the incoming webhook
+    print("***** INCOMING WEBHOOK *****")
+    print(f"Data: {data}")
+
+    # Handle ITEM_LOGIN_REQUIRED
+    if webhook_type == "ITEM" and webhook_code in ["ERROR", "NEW_ACCOUNTS_AVAILABLE"]:
+        try:
+            # Find the related Credential in the database
+            credential = Credential.query.filter_by(item_id=item_id).first()
+
+            if credential:
+                # Extract the user_id from the Credential
+                user_id = credential.user_id
+                if not user_id:
+                    print(f"Warning: No user_id found for Credential ID: {credential.id}")
+                    return jsonify({"status": "ok"}), 200
+
+                credential.requires_update = True
+                db.session.commit()
+                print(f"Updated Credential (ID: {credential.id}) with requires_update=True")
+
+                # Add a record to the PlaidTransaction table
+                plaid_transaction = PlaidTransaction(
+                    timestamp=timestamp,
+                    user_id=user_id,
+                    user_ip='3.171.22.34', 
+                    credential_id=credential.id,
+                    account_id=None,  # Not relevant for ITEM_LOGIN_REQUIRED or NEW_ACCOUNTS_AVAILABLE
+                    operation=error_code if webhook_code == "ERROR" else webhook_code,
+                    response=str(data),  # Store the entire webhook payload
+                    posted_transactions=None,
+                    pending_transactions=None
+                )
+                db.session.add(plaid_transaction)
+                db.session.commit()
+
+                print(f"Updated Credential (ID: {credential.id}) with requires_update=True")
+                print(f"Added PlaidTransaction record for Credential ID: {credential.id}")
+            else:
+                print(f"No Credential found for Item ID: {item_id}")
+        except Exception as e:
+            print(f"Error handling ITEM_LOGIN_REQUIRED: {str(e)}")
+            db.session.rollback()
+
+    return jsonify({"status": "ok"}), 200
+
+
+def json_csv(transactions, action):
+    si = StringIO()
+    cw = csv.writer(si)
+
+    for item in transactions:
+        row = [
+            item.get("date", ""),
+            item.get("name", ""),
+            item.get("amount", ""),
+            item.get("iso_currency_code", ""),
+            ", ".join(item.get("category", [])),
+            item.get("merchant_name", ""),
+            item.get("account_id", ""),
+            item.get("transaction_id", ""),
+            item.get("payment_channel", ""),
+            action,
+            item.get("pending", "")
+        ]
+        cw.writerow(row)
+
+    return si.getvalue()
+
+def filter_transactions(transactions, account_plaid_id):
+    return [transaction for transaction in transactions if transaction['account_id'] == account_plaid_id]
+
+def deactivate_plaid_token(access_token):
+    try:
+        print('Access Token to Remove: ', access_token)
+        request = ItemRemoveRequest(access_token=access_token)
+        response = current_app.plaid_client.item_remove(request)
+        
+        print("Plaid response:", response)
+        return True, response.to_dict()
+    except plaid.ApiException as e:
+        print("An error occurred while removing the item from Plaid:", e)
+        return False, e.body
+    
+def json_csv(transactions, action):
+    si = StringIO()
+    cw = csv.writer(si)
+
+    for item in transactions:
+        row = [
+            item.get("date", ""),
+            item.get("name", ""),
+            item.get("amount", ""),
+            item.get("iso_currency_code", ""),
+            ", ".join(item.get("category", [])),
+            item.get("merchant_name", ""),
+            item.get("account_id", ""),
+            item.get("transaction_id", ""),
+            item.get("payment_channel", ""),
+            action,
+            item.get("pending", "")
+        ]
+        cw.writerow(row)
+
+    return si.getvalue()
+)
 
 
 def _wildcard_to_regex(pattern):
@@ -1398,12 +1794,17 @@ def _persist_transactions_from_payload(user, credential, data):
                     user_id=user.id,
                     credential_id=credential.id,
                     account_id=account.id,
-                    created_at=datetime.utcnow()
+                    created_at=datetime.utcnow(),
+                    is_new=True,
+                    seen_by_user=False
                 )
                 db.session.add(transaction)
             else:
                 transaction.credential_id = credential.id
                 transaction.account_id = account.id
+                transaction.is_new = True
+                transaction.seen_by_user = False
+
             previous_amount = None
             if transaction.id is not None and transaction.amount is not None:
                 try:
@@ -1528,6 +1929,22 @@ def _sync_credential_transactions(user, credential):
 
     return counts, credential_error
 
+@core.route('/api/plaid/webhook', methods=['POST'])
+def plaid_webhook():
+    data = request.get_json()
+    webhook_type = data.get('webhook_type')
+    webhook_code = data.get('webhook_code')
+
+    if webhook_type == 'TRANSACTIONS' and webhook_code == 'SYNC_UPDATES_AVAILABLE':
+        item_id = data['item_id']
+        credential = Credential.query.filter_by(item_id=item_id).first()
+        if credential:
+            user = credential.user
+            _sync_credential_transactions(user, credential)
+            db.session.commit()
+
+    return jsonify({'status': 'success'})
+
 
 @core.route('/api/transactions/sync', methods=['POST'])
 @login_required
@@ -1607,6 +2024,26 @@ def sync_transactions():
         }), status_code
 
     return _with_schema_retry(handler)
+
+@core.route('/api/transactions/mark_as_seen', methods=['POST'])
+@login_required
+def mark_transactions_as_seen():
+    data = request.get_json()
+    transaction_ids = data.get('transaction_ids', [])
+
+    if not transaction_ids:
+        return jsonify({'error': 'No transaction_ids provided'}), 400
+
+    transactions = Transaction.query.filter(Transaction.id.in_(transaction_ids), Transaction.user_id == current_user.id).all()
+
+    for txn in transactions:
+        txn.seen_by_user = True
+        txn.is_new = False
+        txn.last_seen_by_user = datetime.utcnow()
+
+    db.session.commit()
+
+    return jsonify({'status': 'success'})
 
 @core.route('/api/accounts', methods=['GET'])
 @login_required

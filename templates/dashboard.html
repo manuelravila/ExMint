@@ -255,13 +255,14 @@
                                 v-for="transaction in displayedTransactions"
                                 :key="transaction.id"
                                 :class="{
-                                    'transaction-row-context': transactionMenu.visible && transactionMenu.transaction && transactionMenu.transaction.id === transaction.id
+                                    'transaction-row-context': transactionMenu.visible && transactionMenu.transaction && transactionMenu.transaction.id === transaction.id,
+                                    'new-transaction': transaction.is_new
                                 }"
                                 @contextmenu.prevent="openTransactionMenu($event, transaction)"
                                 :data-transaction-id="transaction.id"
                             >
                                 <td>[[ formatDate(transaction.date) ]]<span v-if="transaction.pending" class="badge badge-warning ml-2">Pending</span></td>
-                                <td>[[ transaction.name ]]</td>
+                                <td><span v-if="transaction.is_new" class="badge badge-success mr-2">New</span>[[ transaction.name ]]</td>
                                 <td>[[ transaction.merchant_name || '—' ]]</td>
                                 <td>
                                     <div>[[ transaction.account_name ]] <span class="text-muted" v-if="transaction.account_mask">••[[ transaction.account_mask ]]</span></div>
@@ -319,6 +320,9 @@
                             </tr>
                         </tbody>
                     </table>
+                </div>
+                <div v-if="hasNewTransactions" class="card-footer text-right">
+                    <button class="btn btn-sm btn-outline-primary" @click="markAllAsSeen">Mark all as seen</button>
                 </div>
                 <div
                     v-if="transactionMenu.visible"

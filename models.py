@@ -119,6 +119,9 @@ class Transaction(db.Model):
     parent_transaction_id = db.Column(db.Integer, db.ForeignKey('transactions.id'), nullable=True)
     is_split_child = db.Column(db.Boolean, nullable=False, default=False)
     has_split_children = db.Column(db.Boolean, nullable=False, default=False)
+    is_new = db.Column(db.Boolean, nullable=False, default=True)
+    seen_by_user = db.Column(db.Boolean, nullable=False, default=False)
+    last_seen_by_user = db.Column(db.DateTime, nullable=True)
 
     credential = db.relationship('Credential', backref=db.backref('transactions', lazy=True))
     custom_category = db.relationship('Category', back_populates='transactions', lazy=True)
