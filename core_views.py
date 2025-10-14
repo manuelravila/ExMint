@@ -1316,6 +1316,8 @@ def _persist_transactions_from_payload(user, credential, data):
         for action in ['added', 'modified', 'removed']
     }
 
+    processed_plaid_ids = set()
+
     transaction_ids = {
         payload.get('transaction_id')
         for payload_list in payload_by_action.values()
@@ -1368,8 +1370,10 @@ def _persist_transactions_from_payload(user, credential, data):
     for action in ['added', 'modified']:
         for payload in payload_by_action[action]:
             plaid_transaction_id = payload.get('transaction_id')
-            if not plaid_transaction_id:
+            if not plaid_transaction_id or plaid_transaction_id in processed_plaid_ids:
                 continue
+
+            processed_plaid_ids.add(plaid_transaction_id)
 
             account = account_map.get(payload.get('account_id'))
             if not account:
@@ -1380,7 +1384,8 @@ def _persist_transactions_from_payload(user, credential, data):
                 )
                 continue
 
-            transaction = existing_transactions.get(plaid_transaction_id)
+            transaction = Transaction.query.filter_by(plaid_transaction_id=plaid_transaction_id).first()
+
             if transaction is None:
                 transaction = Transaction(
                     plaid_transaction_id=plaid_transaction_id,
@@ -1390,7 +1395,6 @@ def _persist_transactions_from_payload(user, credential, data):
                     created_at=datetime.utcnow()
                 )
                 db.session.add(transaction)
-                existing_transactions[plaid_transaction_id] = transaction
             else:
                 transaction.credential_id = credential.id
                 transaction.account_id = account.id
