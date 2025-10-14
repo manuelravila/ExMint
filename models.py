@@ -143,7 +143,6 @@ class TransactionCategoryOverride(db.Model):
 
     transaction = db.relationship('Transaction', backref=db.backref('manual_override_record', uselist=False, cascade='all, delete-orphan'))
 
-
 class Budget(db.Model):
     __tablename__ = 'budgets'
 
