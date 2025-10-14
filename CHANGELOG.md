@@ -3,7 +3,7 @@
 ### Fixed
 
 - Cash Flow widget now displays a line chart instead of a bar chart.
-- Fixed an issue where the chart would not render due to incorrect CDN links.
+- Fixed an issue where the chart would not render due to incorrect CDN resource links.
 
 ### Changed
 
