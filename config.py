@@ -49,52 +49,8 @@ class Config:
     PLAID_WEBHOOK_URL = os.getenv('PLAID_WEBHOOK_URL')
     
     # Email configuration
-    MAIL_SERVER = 'mail.exmint.me'
-    MAIL_USERNAME = 'noreply@exmint.me'
-    MAIL_PASSWORD = get_secret('MAIL_PASSWORD')
-    MAIL_PORT = 587
-    MAIL_USE_TLS = True
-    MAIL_USE_SSL = False  
-
-    # Environment dependent configuration
-    if branch.strip() == 'main':
-        PLAID_ENV = 'production'
-        SUFFIX = ''
-        if os.getenv('FLASK_SYS', '').lower() == 'windows':
-            SSL_CONTEXT = ('/dev_exmint_me.crt', '/dev_exmint_me.key')  # SSL context for Windows environment
-            DEBUG = True
-        else:
-            SSL_CONTEXT = None  # No SSL context for non-Windows environments
-            DEBUG = False
-    elif branch.strip() == 'stag':
-        PLAID_ENV = 'sandbox'   
-        DEBUG = True  
-        SUFFIX = '-stg'
-        SSL_CONTEXT = None  # No SSL context needed for staging
-        SESSION_COOKIE_SECURE = False  # Staging served over HTTP during local testing
-        SESSION_COOKIE_SAMESITE = 'Lax'
-    else:
-        PLAID_ENV = 'sandbox' 
-        DEBUG = True
-        SUFFIX = '-dev'
-        SSL_CONTEXT = ('/app/dev_exmint_me.crt', '/app/dev_exmint_me.key')   # SSL context for development
-        SESSION_COOKIE_SECURE = False  # Allow cookies on http://localhost
-        SESSION_COOKIE_SAMESITE = 'Lax'
-
-    print(f"Current branch: {branch.strip()}")
-    print(f"SSL_CONTEXT: {SSL_CONTEXT}")
-
-    # Select the appropriate environment
-    @staticmethod
-    def get_plaid_environment():
-        if Config.PLAID_ENV == 'sandbox':
-            return plaid.Environment.Sandbox
-        elif Config.PLAID_ENV == 'development':
-            return plaid.Environment.Development
-        else:  # Assume production
-            return plaid.Environment.Production
-        
-    @staticmethod
-    def external_redirect(path=''):
-        base_url = 'https://exmint.me/app'
-        return f"{base_url}{Config.SUFFIX}/{path}"
+    # TODO: Update external_redirect method with the new base URL
+    # @staticmethod
+    # def external_redirect(path=''):
+    #     base_url = 'https://your_new_base_url/app'
+    #     return f"{base_url}{Config.SUFFIX}/{path}"
