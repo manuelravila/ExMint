@@ -37,10 +37,6 @@ RUN chmod 755 /app/start.sh
 RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy SSL certificates (only necessary if used in development)
-COPY dev_exmint_me.crt /app/
-COPY dev_exmint_me.key /app/
-
 # Make port 5000 available to the world outside this container
 EXPOSE 5000
 
