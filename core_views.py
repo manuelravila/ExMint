@@ -84,7 +84,11 @@ def _with_schema_retry(handler):
             db.session.rollback()
             ensure_category_schema(force=True)
             return handler()
-        raise
+        current_app.logger.error(f"An unhandled operational error occurred: {exc}", exc_info=True)
+        return jsonify({"error": "A database error occurred. Please try again later."}), 500
+    except Exception as e:
+        current_app.logger.error(f"An unhandled exception occurred: {e}", exc_info=True)
+        return jsonify({"error": "An unexpected error occurred. Please try again later."}), 500
 
 _FIELD_MAP = {
     'description': 'description',
