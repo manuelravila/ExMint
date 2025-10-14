@@ -617,6 +617,7 @@ def _collect_balances_summary(user_id):
         .join(Credential, Account.credential_id == Credential.id)
         .outerjoin(transaction_totals, transaction_totals.c.account_id == Account.id)
         .filter(Credential.user_id == user_id, Account.is_enabled.is_(True))
+        .distinct()
         .all()
     )
 
