@@ -259,6 +259,7 @@
                                     'new-transaction': transaction.is_new
                                 }"
                                 @contextmenu.prevent="openTransactionMenu($event, transaction)"
+                                @click="markAsSeen(transaction)"
                                 :data-transaction-id="transaction.id"
                             >
                                 <td>[[ formatDate(transaction.date) ]]<span v-if="transaction.pending" class="badge badge-warning ml-2">Pending</span></td>
@@ -320,9 +321,6 @@
                             </tr>
                         </tbody>
                     </table>
-                </div>
-                <div v-if="hasNewTransactions" class="card-footer text-right">
-                    <button class="btn btn-sm btn-outline-primary" @click="markAllAsSeen">Mark all as seen</button>
                 </div>
                 <div
                     v-if="transactionMenu.visible"

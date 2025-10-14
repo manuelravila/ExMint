@@ -1,3 +1,17 @@
+## [0.7.1] - 2025-10-20
+
+### Added
+
+- The "New" tag is now exclusively applied to transactions synced via background Plaid webhooks, distinguishing them from transactions fetched during a manual sync.
+
+### Changed
+
+- Clicking a transaction row with a "New" tag now automatically marks it as "seen," providing a more intuitive and seamless user experience.
+
+### Removed
+
+- The "Mark all as seen" button has been removed from the transactions pane, as its functionality is now handled by clicking individual new transactions.
+
 ## [0.7.0] - 2025-10-13
 
 ### Fixed
