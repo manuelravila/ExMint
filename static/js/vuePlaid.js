@@ -444,23 +444,28 @@ const app = new Vue({
         }
     },
     methods: {
-        markAllAsSeen: async function() {
-            const newTransactionIds = this.transactions.filter(txn => txn.is_new).map(txn => txn.id);
-            if (newTransactionIds.length === 0) {
+        markAsSeen: async function(transaction) {
+            if (!transaction || !transaction.is_new) {
                 return;
             }
-
+        
+            // Optimistically update the UI
+            transaction.is_new = false;
+        
             try {
                 const response = await fetch('/api/transactions/mark_as_seen', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ transaction_ids: newTransactionIds })
+                    body: JSON.stringify({ transaction_ids: [transaction.id] })
                 });
-                if (response.ok) {
-                    await this.fetchTransactions({ reset: false, skipLoadingState: true });
+                if (!response.ok) {
+                    // Revert on failure
+                    transaction.is_new = true;
                 }
             } catch (error) {
-                console.error('Error marking transactions as seen:', error);
+                console.error('Error marking transaction as seen:', error);
+                // Revert on failure
+                transaction.is_new = true;
             }
         },
         refreshData: async function() {

@@ -1,3 +1,0 @@
-@echo off
-echo Establishing SSH tunnel...
-start /B ssh -L 3307:127.0.0.1:3306 root@srv469975.hstgr.cloud -N

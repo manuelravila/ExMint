@@ -1400,14 +1400,14 @@ def _persist_transactions_from_payload(user, credential, data):
                     credential_id=credential.id,
                     account_id=account.id,
                     created_at=datetime.utcnow(),
-                    is_new=True,
+                    is_new=from_webhook,
                     seen_by_user=False
                 )
                 db.session.add(transaction)
             else:
                 transaction.credential_id = credential.id
                 transaction.account_id = account.id
-                transaction.is_new = True
+                transaction.is_new = from_webhook
                 transaction.seen_by_user = False
 
             previous_amount = None
@@ -1469,7 +1469,7 @@ def _persist_transactions_from_payload(user, credential, data):
     return counts
 
 
-def _sync_credential_transactions(user, credential):
+def _sync_credential_transactions(user, credential, from_webhook=False):
     counts = {'added': 0, 'modified': 0, 'removed': 0}
     cursor = credential.transactions_cursor
     has_more = True
@@ -1525,7 +1525,7 @@ def _sync_credential_transactions(user, credential):
         has_more = data.get('has_more', False)
         latest_cursor = cursor or latest_cursor
 
-        payload_counts = _persist_transactions_from_payload(user, credential, data)
+        payload_counts = _persist_transactions_from_payload(user, credential, data, from_webhook=from_webhook)
         for key in counts:
             counts[key] += payload_counts.get(key, 0)
 
@@ -1544,8 +1544,7 @@ def plaid_webhook():
         item_id = data['item_id']
         credential = Credential.query.filter_by(item_id=item_id).first()
         if credential:
-            user = credential.user
-            _sync_credential_transactions(user, credential)
+            _sync_credential_transactions(credential.user, credential, from_webhook=True)
             db.session.commit()
 
     return jsonify({'status': 'success'})
@@ -1565,7 +1564,7 @@ def sync_transactions():
 
         for credential in active_credentials:
             try:
-                counts, credential_error = _sync_credential_transactions(user, credential)
+                counts, credential_error = _sync_credential_transactions(user, credential, from_webhook=False)
                 db.session.commit()
 
                 summary.append({
