@@ -1,7 +1,7 @@
 # core_views.py
 from flask import Blueprint, jsonify, request, session, current_app
 from flask_login import login_required, current_user
-from models import db, Credential, Account, PlaidTransaction, Transaction, Category, TransactionCategoryOverride, Budget
+from models import db, Credential, Account, Transaction, Category, TransactionCategoryOverride, Budget
 from plaid.model.item_remove_request import ItemRemoveRequest
 from plaid.model.accounts_get_request import AccountsGetRequest
 from plaid.model.item_webhook_update_request import ItemWebhookUpdateRequest
@@ -1295,14 +1295,7 @@ def handle_token_and_accounts():
             'request_id': accounts_response['request_id']
         }
 
-        plaid_transaction = PlaidTransaction(
-            user_id=current_user.id,
-            user_ip=request.remote_addr,
-            credential_id=credential.id,
-            operation='Institution Refresh' if is_refresh else 'Token Creation',
-            response=str(filtered_response)
-        )
-        db.session.add(plaid_transaction)
+
 
         # Check if the requires_update flag is being set correctly
         credential.requires_update = False
@@ -1576,19 +1569,7 @@ def sync_transactions():
                     'requires_update': credential.requires_update
                 })
 
-                audit_payload = {
-                    'counts': counts,
-                    'cursor': credential.transactions_cursor,
-                    'requires_update': credential.requires_update
-                }
-                plaid_transaction = PlaidTransaction(
-                    user_id=user.id,
-                    user_ip=request.remote_addr,
-                    credential_id=credential.id,
-                    operation='Transactions sync',
-                    response=json.dumps(audit_payload)
-                )
-                db.session.add(plaid_transaction)
+
 
                 if credential_error:
                     errors.append({
@@ -2248,14 +2229,7 @@ def remove_bank(bank_id):
             for account in credential.accounts:
                 account.status = 'Revoked'
             
-            transaction = PlaidTransaction(
-                user_id=current_user.id,
-                user_ip=request.remote_addr,
-                credential_id=credential.id,
-                operation='Access token and associated accounts revoked',
-                response=str(plaid_response)
-            )
-            db.session.add(transaction)
+
             db.session.commit()
             session['connections_modal_open'] = True
             return jsonify({'success': True, 'message': 'Bank connection removed'}), 200
@@ -2345,23 +2319,7 @@ def plaid_webhook_item_error():
                 db.session.commit()
                 print(f"Updated Credential (ID: {credential.id}) with requires_update=True")
 
-                # Add a record to the PlaidTransaction table
-                plaid_transaction = PlaidTransaction(
-                    timestamp=timestamp,
-                    user_id=user_id,
-                    user_ip='webhook.service', 
-                    credential_id=credential.id,
-                    account_id=None,
-                    operation=error_code if webhook_code == "ERROR" else webhook_code,
-                    response=str(data),
-                    posted_transactions=None,
-                    pending_transactions=None
-                )
-                db.session.add(plaid_transaction)
-                db.session.commit()
 
-                print(f"Updated Credential (ID: {credential.id}) with requires_update=True")
-                print(f"Added PlaidTransaction record for Credential ID: {credential.id}")
             else:
                 print(f"No Credential found for Item ID: {item_id}")
         except Exception as e:

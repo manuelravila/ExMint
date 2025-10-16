@@ -1,3 +1,14 @@
+## [0.8.0] - 2025-10-16
+
+### Removed
+
+- Removed `PlaidTransaction` and `Subscription` models and all related functions from the application. This change reflects the move away from commercial features to a personal-use-only version of ExMint.
+- Deleted associated database migration files for `PlaidTransaction` and `Subscription` to clean up the project.
+
+### Changed
+
+- Updated `core_views.py` to remove all references and logic related to `PlaidTransaction`.
+
 ## [0.7.1] - 2025-10-20
 
 ### Added

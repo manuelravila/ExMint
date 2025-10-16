@@ -42,6 +42,7 @@ class Config:
     # Session cookie settings
     SESSION_COOKIE_SAMESITE = None
     SESSION_COOKIE_SECURE = True
+    PERMANENT_SESSION_LIFETIME = 900  # 15 minutes
 
     # Plaid credentials
     PLAID_CLIENT_ID = get_secret('PLAID_CLIENT_ID')
