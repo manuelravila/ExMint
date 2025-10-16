@@ -213,6 +213,13 @@ def handle_unsuccessful_login(error_message):
 @views.route('/logout', methods=['GET', 'POST'])
 @login_required
 def logout():
+    # Mark all transactions as seen before logging out
+    transactions = Transaction.query.filter_by(user_id=current_user.id).all()
+    for txn in transactions:
+        txn.seen_by_user = True
+        txn.is_new = False
+    db.session.commit()
+
     logout_user()
     if request.is_json or request.method == 'POST':
         response = jsonify({'message': 'Logged out successfully'})

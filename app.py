@@ -1,5 +1,5 @@
 # app.py
-from flask import Flask
+from flask import Flask, session
 from extensions import mail
 from config import Config
 from models import db
@@ -69,6 +69,10 @@ def create_app():
     from core_views import core as core_blueprint
     app.register_blueprint(views_blueprint)
     app.register_blueprint(core_blueprint)
+
+    @app.before_request
+    def before_request():
+        session.permanent = True
 
     # Inject version and year into templates
     @app.context_processor
