@@ -2,6 +2,19 @@
   "version": "2.0.0",
   "tasks": [
     {
+      "label": "Run Dev DB migrate",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "-lc",
+        "set -a; source .env.dev; set +a; FLASK_APP=app.py FLASK_SYS=linux FLASK_DEBUG=1 ${workspaceFolder}/.venv/bin/python -m flask db upgrade && FLASK_APP=app.py FLASK_SYS=linux FLASK_DEBUG=1 ${workspaceFolder}/.venv/bin/python -m flask db migrate"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
       "label": "Open Dev DB tunnel",
       "type": "shell",
       "command": "bash",
@@ -9,6 +22,47 @@
         "-lc",
         "if lsof -iTCP:3307 -sTCP:LISTEN -Pn 2>/dev/null | grep -q ssh; then exit 0; fi; ssh -f -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o StrictHostKeyChecking=accept-new -L 3307:127.0.0.1:3306 root@automatos.ca"
       ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Prepare Dev launch",
+      "dependsOn": [
+        "Run Dev DB migrate",
+        "Open Dev DB tunnel"
+      ],
+      "dependsOrder": "sequence"
+    },
+    {
+      "label": "Run Stag DB migrate",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "-lc",
+        "set -a; source .env.stag; set +a; FLASK_APP=app.py FLASK_SYS=linux ${workspaceFolder}/.venv/bin/python -m flask db upgrade && FLASK_APP=app.py FLASK_SYS=linux ${workspaceFolder}/.venv/bin/python -m flask db migrate"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Prepare Stag launch",
+      "dependsOn": [
+        "Run Stag DB migrate"
+      ],
+      "dependsOrder": "sequence"
+    },
+    {
+      "label": "Run Prod DB migrate",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "-lc",
+        "set -a; source .env.main; set +a; FLASK_APP=app.py FLASK_SYS=linux ${workspaceFolder}/.venv/bin/python -m flask db upgrade && FLASK_APP=app.py FLASK_SYS=linux ${workspaceFolder}/.venv/bin/python -m flask db migrate"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
       "problemMatcher": []
     },
     {
@@ -20,6 +74,14 @@
         "if lsof -iTCP:3308 -sTCP:LISTEN -Pn 2>/dev/null | grep -q ssh; then exit 0; fi; ssh -f -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o StrictHostKeyChecking=accept-new -L 3308:127.0.0.1:3306 root@automatos.ca"
       ],
       "problemMatcher": []
+    },
+    {
+      "label": "Prepare Prod launch",
+      "dependsOn": [
+        "Run Prod DB migrate",
+        "Open Prod DB tunnel"
+      ],
+      "dependsOrder": "sequence"
     }
   ]
 }
