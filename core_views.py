@@ -1309,7 +1309,7 @@ def handle_token_and_accounts():
         db.session.rollback()
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
-def _persist_transactions_from_payload(user, credential, data):
+def _persist_transactions_from_payload(user, credential, data, from_webhook=False):
     counts = {'added': 0, 'modified': 0, 'removed': 0}
     payload_by_action = {
         action: list(data.get(action, []) or [])
@@ -1374,6 +1374,7 @@ def _persist_transactions_from_payload(user, credential, data):
                 continue
 
             processed_plaid_ids.add(plaid_transaction_id)
+            is_new_transaction = from_webhook or action == 'added'
 
             account = account_map.get(payload.get('account_id'))
             if not account:
@@ -1393,14 +1394,15 @@ def _persist_transactions_from_payload(user, credential, data):
                     credential_id=credential.id,
                     account_id=account.id,
                     created_at=datetime.utcnow(),
-                    is_new=from_webhook,
+                    is_new=is_new_transaction,
                     seen_by_user=False
                 )
                 db.session.add(transaction)
             else:
                 transaction.credential_id = credential.id
                 transaction.account_id = account.id
-                transaction.is_new = from_webhook
+                if is_new_transaction:
+                    transaction.is_new = True
                 transaction.seen_by_user = False
 
             previous_amount = None

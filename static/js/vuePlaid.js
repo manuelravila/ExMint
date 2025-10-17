@@ -2143,6 +2143,12 @@ const app = new Vue({
                 this.syncing = false;
             }
         },
+        dismissSyncSummary: function() {
+            this.syncSummary = [];
+        },
+        dismissSyncErrors: function() {
+            this.syncErrors = [];
+        },
         startReconnect: function(bankId) {
             reconnectBank(bankId);
         },
