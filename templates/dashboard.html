@@ -212,12 +212,18 @@
                     </span>
                 </small>
             </div>
-            <div v-if="syncSummary.length" class="alert alert-info alert-sm py-2">
+            <div v-if="syncSummary.length" class="alert alert-info alert-sm alert-dismissible py-2" role="alert">
+                <button type="button" class="close" aria-label="Close" @click="dismissSyncSummary">
+                    <span aria-hidden="true">&times;</span>
+                </button>
                 <div v-for="item in syncSummary" :key="item.credential_id">
                     [[ item.institution_name ]]: [[ item.added ]] added, [[ item.modified ]] updated, [[ item.removed ]] removed.
                 </div>
             </div>
-            <div v-if="syncErrors.length" class="alert alert-warning py-2">
+            <div v-if="syncErrors.length" class="alert alert-warning alert-dismissible py-2" role="alert">
+                <button type="button" class="close" aria-label="Close" @click="dismissSyncErrors">
+                    <span aria-hidden="true">&times;</span>
+                </button>
                 <div v-for="error in syncErrors" :key="`${error.credential_id}-${error.error_code || error.error_message}`">
                     [[ error.institution_name || 'Institution' ]]: [[ error.error_message || 'An unknown error occurred.' ]]
                 </div>
