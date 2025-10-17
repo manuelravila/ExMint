@@ -22,12 +22,16 @@ def get_database_uri():
         if branch_trimmed == 'dev':
             return f'mysql+pymysql://mrar1995_xmnt_dev:{password}@127.0.0.1:3307/mrar1995_xmnt_dev_db'
         elif branch_trimmed == 'stag':
-            return f'mysql+pymysql://mrar1995_xmnt_stg:{password}@db-host:3306/mrar1995_xmnt_stg_db'
+            stag_host = os.getenv('DB_HOST', 'db-host')
+            stag_port = os.getenv('DB_PORT', '3306')
+            return f'mysql+pymysql://mrar1995_xmnt_stg:{password}@{stag_host}:{stag_port}/mrar1995_xmnt_stg_db'
         elif branch_trimmed == 'main':
             if os.getenv('FLASK_SYS', '').lower() == 'windows':
                 return f'mysql+pymysql://mrar1995_xmnt_prd:{password}@127.0.0.1:3307/mrar1995_xmnt_prd_db'
             else:
-                return f'mysql+pymysql://mrar1995_xmnt_prd:{password}@db-host:3306/mrar1995_xmnt_prd_db'
+                prod_host = os.getenv('DB_HOST', 'db-host')
+                prod_port = os.getenv('DB_PORT', '3306')
+                return f'mysql+pymysql://mrar1995_xmnt_prd:{password}@{prod_host}:{prod_port}/mrar1995_xmnt_prd_db'
         else:
             raise ValueError(f"Invalid branch: {branch_trimmed}")
     else:
