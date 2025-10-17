@@ -27,8 +27,8 @@
     {
       "label": "Prepare Dev launch",
       "dependsOn": [
-        "Run Dev DB migrate",
-        "Open Dev DB tunnel"
+        "Open Dev DB tunnel",
+        "Run Dev DB migrate"
       ],
       "dependsOrder": "sequence"
     },
@@ -38,7 +38,7 @@
       "command": "bash",
       "args": [
         "-lc",
-        "set -a; source .env.stag; set +a; FLASK_APP=app.py FLASK_SYS=linux ${workspaceFolder}/.venv/bin/python -m flask db upgrade && FLASK_APP=app.py FLASK_SYS=linux ${workspaceFolder}/.venv/bin/python -m flask db migrate"
+        "STAG_DB_HOST=${STAG_DB_HOST:-127.0.0.1}; STAG_DB_PORT=${STAG_DB_PORT:-3309}; set -a; source .env.stag; set +a; DB_HOST=$STAG_DB_HOST DB_PORT=$STAG_DB_PORT FLASK_APP=app.py FLASK_SYS=linux ${workspaceFolder}/.venv/bin/python -m flask db upgrade && DB_HOST=$STAG_DB_HOST DB_PORT=$STAG_DB_PORT FLASK_APP=app.py FLASK_SYS=linux ${workspaceFolder}/.venv/bin/python -m flask db migrate"
       ],
       "options": {
         "cwd": "${workspaceFolder}"
@@ -46,8 +46,19 @@
       "problemMatcher": []
     },
     {
+      "label": "Open Stag DB tunnel",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "-lc",
+        "if lsof -iTCP:3309 -sTCP:LISTEN -Pn 2>/dev/null | grep -q ssh; then exit 0; fi; ssh -f -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o StrictHostKeyChecking=accept-new -L 3309:127.0.0.1:3306 root@automatos.ca"
+      ],
+      "problemMatcher": []
+    },
+    {
       "label": "Prepare Stag launch",
       "dependsOn": [
+        "Open Stag DB tunnel",
         "Run Stag DB migrate"
       ],
       "dependsOrder": "sequence"
@@ -58,7 +69,7 @@
       "command": "bash",
       "args": [
         "-lc",
-        "set -a; source .env.main; set +a; FLASK_APP=app.py FLASK_SYS=linux ${workspaceFolder}/.venv/bin/python -m flask db upgrade && FLASK_APP=app.py FLASK_SYS=linux ${workspaceFolder}/.venv/bin/python -m flask db migrate"
+        "PROD_DB_HOST=${PROD_DB_HOST:-127.0.0.1}; PROD_DB_PORT=${PROD_DB_PORT:-3308}; set -a; source .env.main; set +a; DB_HOST=$PROD_DB_HOST DB_PORT=$PROD_DB_PORT FLASK_APP=app.py FLASK_SYS=linux ${workspaceFolder}/.venv/bin/python -m flask db upgrade && DB_HOST=$PROD_DB_HOST DB_PORT=$PROD_DB_PORT FLASK_APP=app.py FLASK_SYS=linux ${workspaceFolder}/.venv/bin/python -m flask db migrate"
       ],
       "options": {
         "cwd": "${workspaceFolder}"
@@ -78,8 +89,8 @@
     {
       "label": "Prepare Prod launch",
       "dependsOn": [
-        "Run Prod DB migrate",
-        "Open Prod DB tunnel"
+        "Open Prod DB tunnel",
+        "Run Prod DB migrate"
       ],
       "dependsOrder": "sequence"
     }
