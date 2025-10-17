@@ -8,6 +8,7 @@
 ### Changed
 
 - Updated `core_views.py` to remove all references and logic related to `PlaidTransaction`.
+- New minor version for new alembic count
 
 ## [0.7.1] - 2025-10-20
 
