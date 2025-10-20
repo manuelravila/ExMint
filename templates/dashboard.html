@@ -9,6 +9,17 @@
     <div id="vue-app">
     <header class="sticky-top">
         <nav class="navbar navbar-expand-lg navbar-light bg-light">
+            <button
+                v-if="isMobileView"
+                type="button"
+                class="btn btn-link mobile-sidebar-toggle p-0 mr-3"
+                @click="toggleMobileSidebar"
+                :aria-expanded="mobileSidebarVisible ? 'true' : 'false'"
+                aria-controls="accounts-navigation"
+            >
+                <span class="sr-only">Toggle accounts navigation</span>
+                <i class="fas fa-bars fa-lg"></i>
+            </button>
             <a class="navbar-brand" href="/dashboard">
                 <img src="{{ url_for('static', filename='images/logo.png') }}" alt="Logo" style="height: 30px;">
             </a>
@@ -27,7 +38,7 @@
                             aria-label="Search transactions"
                         >
                         <div class="input-group-append">
-                            <button class="btn btn-outline-secondary" type="button" @click="resetFilters" :disabled="!filters.search && filters.sortKey === 'date' && filters.sortDesc">
+                            <button class="btn btn-outline-secondary" type="button" @click="resetFilters" :disabled="!hasActiveTransactionFilters">
                                 Reset
                             </button>
                         </div>
@@ -55,15 +66,41 @@
         </nav>
     </header>
 
-    <div class="dashboard-shell">
+    <div
+        class="dashboard-shell"
+        :class="{ 'sidebar-collapsed': isSidebarCollapsed, 'dashboard-mobile': isMobileView }"
+    >
         <!-- Left Sidebar: Connected Banks and Accounts -->
-        <aside class="accounts-pane">
+        <aside
+            id="accounts-navigation"
+            :class="[
+                'accounts-pane',
+                {
+                    'is-collapsed': isSidebarCollapsed && !isMobileView,
+                    'is-mobile-view': isMobileView,
+                    'is-mobile-visible': mobileSidebarVisible
+                }
+            ]"
+            :aria-hidden="isMobileView && !mobileSidebarVisible ? 'true' : 'false'"
+        >
+            <div class="sidebar-toolbar" v-if="!isMobileView">
+                <button
+                    type="button"
+                    class="btn btn-outline-secondary btn-sm sidebar-toggle"
+                    @click.stop="toggleSidebarCollapse"
+                    :aria-expanded="!isSidebarCollapsed"
+                    :aria-label="isSidebarCollapsed ? 'Expand navigation sidebar' : 'Collapse navigation sidebar'"
+                >
+                    <i :class="[isSidebarCollapsed ? 'fas fa-angle-double-right' : 'fas fa-angle-double-left']"></i>
+                </button>
+            </div>
             <div class="accounts-top-level">
                 <button
                     type="button"
                     class="accounts-nav-btn"
                     :class="{ active: activePane === 'dashboard' }"
                     @click="setActivePane('dashboard')"
+                    :title="sidebarTooltip('Dashboard')"
                 >
                     <i class="fas fa-chart-line mr-2"></i>
                     <span>Dashboard</span>
@@ -73,6 +110,7 @@
                     class="accounts-nav-btn"
                     :class="{ active: activePane === 'categories' }"
                     @click="setActivePane('categories')"
+                    :title="sidebarTooltip('Categories')"
                 >
                     <i class="fas fa-tags mr-2"></i>
                     <span>Categories</span>
@@ -82,6 +120,7 @@
                     class="accounts-nav-btn"
                     :class="{ active: activePane === 'budgets' }"
                     @click="setActivePane('budgets')"
+                    :title="sidebarTooltip('Budgets')"
                 >
                     <i class="fas fa-wallet mr-2"></i>
                     <span>Budgets</span>
@@ -90,22 +129,26 @@
                     class="transactions-nav"
                     :class="{ active: activePane === 'transactions' }"
                     @click="setActivePane('transactions')"
+                    :title="sidebarTooltip('Transactions')"
                 >
                     <div class="transactions-nav-main">
-                        <div class="custom-control custom-checkbox all-accounts-toggle mb-0">
-                            <input
-                                type="checkbox"
-                                class="custom-control-input"
-                                id="all-accounts-toggle"
-                                :checked="areAllAccountsSelected"
-                                @change="toggleAllAccounts"
-                                @click.stop
-                                ref="allAccountsCheckbox"
-                                aria-label="Toggle all accounts"
-                            >
-                            <label class="custom-control-label" for="all-accounts-toggle">
-                                Transactions
-                            </label>
+                        <i class="fas fa-receipt transactions-nav-icon" aria-hidden="true"></i>
+                        <div class="transactions-nav-text">
+                            <div class="custom-control custom-checkbox all-accounts-toggle mb-0">
+                                <input
+                                    type="checkbox"
+                                    class="custom-control-input"
+                                    id="all-accounts-toggle"
+                                    :checked="areAllAccountsSelected"
+                                    @change="toggleAllAccounts"
+                                    @click.stop
+                                    ref="allAccountsCheckbox"
+                                    aria-label="Toggle all accounts"
+                                >
+                                <label class="custom-control-label" for="all-accounts-toggle">
+                                    Transactions
+                                </label>
+                            </div>
                         </div>
                     </div>
                     <button
@@ -122,7 +165,7 @@
             <div
                 class="institution-list"
                 id="transactions-accordion"
-                v-show="!transactionsCollapsed"
+                v-show="!transactionsCollapsed && !isSidebarCollapsed"
             >
                 <div class="institution-card" v-for="bank in banks" :key="bank.id">
                     <div class="institution-header">
@@ -189,6 +232,14 @@
             </div>
         </aside>
 
+        <div
+            v-if="isMobileView"
+            class="mobile-sidebar-backdrop"
+            :class="{ 'is-visible': mobileSidebarVisible }"
+            @click="closeMobileSidebar"
+            aria-hidden="true"
+        ></div>
+
         <!-- Main content: Transactions Table -->
         <main
             role="main"
@@ -229,6 +280,79 @@
                 </div>
             </div>
             <div class="card shadow-sm transactions-card">
+                <div class="card-body transactions-filter-bar border-bottom">
+                    <div class="form-row align-items-end">
+                        <div class="form-group col-sm-6 col-lg-2 mb-2">
+                            <label class="small text-muted text-uppercase font-weight-bold d-block mb-1" for="transactionsFilterStart">Start date</label>
+                            <input
+                                type="date"
+                                class="form-control form-control-sm"
+                                id="transactionsFilterStart"
+                                v-model="filters.startDate"
+                                @change="applyTransactionFilters"
+                            >
+                        </div>
+                        <div class="form-group col-sm-6 col-lg-2 mb-2">
+                            <label class="small text-muted text-uppercase font-weight-bold d-block mb-1" for="transactionsFilterEnd">End date</label>
+                            <input
+                                type="date"
+                                class="form-control form-control-sm"
+                                id="transactionsFilterEnd"
+                                v-model="filters.endDate"
+                                @change="applyTransactionFilters"
+                            >
+                        </div>
+                        <div class="form-group col-sm-6 col-lg-3 mb-2">
+                            <label class="small text-muted text-uppercase font-weight-bold d-block mb-1" for="transactionsFilterCategory">Custom category</label>
+                            <select
+                                id="transactionsFilterCategory"
+                                class="form-control form-control-sm"
+                                v-model="filters.customCategoryId"
+                                @change="applyTransactionFilters"
+                            >
+                                <option value="">All custom categories</option>
+                                <option value="__uncategorized__">Uncategorized</option>
+                                <option
+                                    v-for="option in customCategoryFilterOptions"
+                                    :key="`filter-cat-${option.id}`"
+                                    :value="option.id"
+                                >
+                                    [[ option.label ]]
+                                </option>
+                            </select>
+                        </div>
+                        <div class="form-group col-sm-6 col-lg-2 mb-2">
+                            <label class="small text-muted text-uppercase font-weight-bold d-block mb-1" for="transactionsFilterMin">Min amount</label>
+                            <input
+                                type="number"
+                                step="0.01"
+                                inputmode="decimal"
+                                class="form-control form-control-sm"
+                                id="transactionsFilterMin"
+                                v-model="filters.amountMin"
+                                placeholder="-200.00"
+                                title="Enter negative values for expenses"
+                                @change="applyTransactionFilters"
+                                @keyup.enter.prevent="applyTransactionFilters"
+                            >
+                        </div>
+                        <div class="form-group col-sm-6 col-lg-2 mb-2">
+                            <label class="small text-muted text-uppercase font-weight-bold d-block mb-1" for="transactionsFilterMax">Max amount</label>
+                            <input
+                                type="number"
+                                step="0.01"
+                                inputmode="decimal"
+                                class="form-control form-control-sm"
+                                id="transactionsFilterMax"
+                                v-model="filters.amountMax"
+                                placeholder="1000.00"
+                                title="Enter negative values for expenses"
+                                @change="applyTransactionFilters"
+                                @keyup.enter.prevent="applyTransactionFilters"
+                            >
+                        </div>
+                    </div>
+                </div>
                 <div v-if="loading" class="card-body text-center py-5">
                     <div class="spinner-border text-primary mb-3" role="status">
                         <span class="sr-only">Loading...</span>
@@ -536,10 +660,10 @@
             </div>
             </section>
             <section v-else-if="activePane === 'dashboard'" class="dashboard-section">
-                <div class="dashboard-tabs" role="tablist">
+                <div class="dashboard-tabs tab-switch" role="tablist">
                     <button
                         type="button"
-                        class="dashboard-tab-btn"
+                        class="dashboard-tab-btn tab-switch-btn"
                         :class="{ active: dashboardTab === 'summary' }"
                         @click="setDashboardTab('summary')"
                     >
@@ -548,7 +672,7 @@
                     </button>
                     <button
                         type="button"
-                        class="dashboard-tab-btn"
+                        class="dashboard-tab-btn tab-switch-btn"
                         :class="{ active: dashboardTab === 'cashflow' }"
                         @click="setDashboardTab('cashflow')"
                     >
@@ -571,11 +695,27 @@
                     <template v-if="dashboardTab === 'summary'">
                         <div class="dashboard-grid">
                             <div class="card shadow-sm balances-card">
-                                <div class="card-header d-flex justify-content-between align-items-center">
-                                    <h5 class="mb-0">Balances</h5>
-                                    <small class="text-muted">Totals by account group and institution</small>
+                                <div class="card-header d-flex justify-content-between align-items-start">
+                                    <div class="card-header-text">
+                                        <h5 class="mb-0">Balances</h5>
+                                        <small class="text-muted d-block">Totals by account group and institution</small>
+                                    </div>
+                                    <button
+                                        v-if="isMobileView"
+                                        type="button"
+                                        class="card-collapse-toggle"
+                                        @click.stop="toggleMobileCard('balances')"
+                                        :aria-expanded="!mobileCardCollapsed.balances"
+                                        aria-controls="balances-card-body"
+                                    >
+                                        <i :class="[mobileCardCollapsed.balances ? 'fas fa-chevron-down' : 'fas fa-chevron-up']"></i>
+                                    </button>
                                 </div>
-                                <div class="card-body">
+                                <div
+                                    class="card-body"
+                                    id="balances-card-body"
+                                    v-show="!isMobileView || !mobileCardCollapsed.balances"
+                                >
                                     <div v-if="!(dashboardData.balances.groups && dashboardData.balances.groups.length)" class="text-muted small">
                                         No balance data available yet. Connect accounts or sync transactions to populate this section.
                                     </div>
@@ -641,7 +781,7 @@
                             </div>
 
                             <div class="card shadow-sm spending-card">
-                                <div class="card-header d-flex justify-content-between align-items-center">
+                                <div class="card-header d-flex justify-content-between align-items-center flex-wrap">
                                     <h5 class="mb-0">Spending Report</h5>
                                     <div class="spending-controls">
                                         <label class="mb-0 mr-2" for="spendingYearSelect">Year</label>
@@ -657,8 +797,22 @@
                                             </option>
                                         </select>
                                     </div>
+                                    <button
+                                        v-if="isMobileView"
+                                        type="button"
+                                        class="card-collapse-toggle ml-auto"
+                                        @click.stop="toggleMobileCard('spending')"
+                                        :aria-expanded="!mobileCardCollapsed.spending"
+                                        aria-controls="spending-card-body"
+                                    >
+                                        <i :class="[mobileCardCollapsed.spending ? 'fas fa-chevron-down' : 'fas fa-chevron-up']"></i>
+                                    </button>
                                 </div>
-                                <div class="card-body">
+                                <div
+                                    class="card-body"
+                                    id="spending-card-body"
+                                    v-show="!isMobileView || !mobileCardCollapsed.spending"
+                                >
                                     <div v-if="!filteredSpendingMonths.length" class="text-muted small">
                                         No spending data available. Start syncing transactions to analyze your budget.
                                     </div>
@@ -681,30 +835,52 @@
                                                 <span class="spending-month-total">[[ formatDashboardAmount(month.total, null) ]]</span>
                                             </button>
                                             <div v-if="isSpendingMonthOpen(selectedSpendingYear, month.month)" class="spending-month-table">
-                                                <div v-if="getSpendingCategoriesForMonth(month).length" class="spending-table">
-                                                    <div class="spending-table-header">
-                                                        <span>Category</span>
-                                                        <span>This Month</span>
-                                                        <span>6M Average</span>
-                                                        <span>Budget</span>
-                                                        <span>Remainder</span>
-                                                    </div>
-                                                    <div
-                                                        v-for="category in getSpendingCategoriesForMonth(month)"
-                                                        :key="`spending-${selectedSpendingYear}-${month.month}-${category.label}`"
-                                                        class="spending-table-row"
-                                                    >
-                                                        <span class="category">[[ category.label ]]</span>
-                                                        <span class="value">[[ formatDashboardAmount(category.value, null) ]]</span>
-                                                        <span class="value">[[ formatDashboardAmount(category.six_month_average, null) ]]</span>
-                                                        <span class="value">[[ category.budget !== null ? formatDashboardAmount(category.budget, null) : '—' ]]</span>
-                                                        <span class="value" :class="{
-                                                            'text-success': category.remainder !== null && category.remainder >= 0,
-                                                            'text-danger': category.remainder !== null && category.remainder < 0
-                                                        }">
-                                                            [[ category.remainder !== null ? formatDashboardAmount(category.remainder, null) : '—' ]]
-                                                        </span>
-                                                    </div>
+                                                <div v-if="getSpendingCategoriesForMonth(month).length" class="table-responsive spending-table-wrapper">
+                                                    <table class="table table-sm table-hover table-striped mb-0 spending-table">
+                                                        <thead class="thead-light">
+                                                            <tr>
+                                                                <th scope="col">Category</th>
+                                                                <th scope="col">This Month</th>
+                                                                <th scope="col">6M Average</th>
+                                                                <th scope="col">Budget</th>
+                                                                <th scope="col">Remainder</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            <tr
+                                                                v-for="category in getSpendingCategoriesForMonth(month)"
+                                                                :key="`spending-${selectedSpendingYear}-${month.month}-${category.label}`"
+                                                            >
+                                                                <td class="align-middle">
+                                                                    <button
+                                                                        type="button"
+                                                                        class="btn btn-link p-0 spending-category-link"
+                                                                        @click="applySpendingCategoryFilter(category.label, month.month, selectedSpendingYear)"
+                                                                    >
+                                                                        [[ category.label ]]
+                                                                    </button>
+                                                                </td>
+                                                                <td class="align-middle">
+                                                                    [[ formatDashboardAmount(category.value, null) ]]
+                                                                </td>
+                                                                <td class="align-middle">
+                                                                    [[ formatDashboardAmount(category.six_month_average, null) ]]
+                                                                </td>
+                                                                <td class="align-middle">
+                                                                    [[ category.budget !== null ? formatDashboardAmount(category.budget, null) : '—' ]]
+                                                                </td>
+                                                                <td
+                                                                    class="align-middle"
+                                                                    :class="{
+                                                                        'text-success': category.remainder !== null && category.remainder >= 0,
+                                                                        'text-danger': category.remainder !== null && category.remainder < 0
+                                                                    }"
+                                                                >
+                                                                    [[ category.remainder !== null ? formatDashboardAmount(category.remainder, null) : '—' ]]
+                                                                </td>
+                                                            </tr>
+                                                        </tbody>
+                                                    </table>
                                                 </div>
                                                 <div v-else class="text-muted small pt-2">
                                                     No spending recorded for this month yet.
@@ -895,164 +1071,383 @@
             </section>
             <section v-else class="categories-section">
                 <div class="categories-header">
-                    <div>
-                        <h4 class="mb-0">Categories</h4>
-                        <small class="text-muted">Create rules to automatically categorize your transactions.</small>
-                    </div>
-                    <div class="d-flex align-items-center">
-                        <button class="btn btn-primary btn-sm" @click="addCategoryRule">
-                            <i class="fas fa-plus mr-1"></i> Add Rule
-                        </button>
-                    </div>
-                </div>
-                <div v-if="categoriesError" class="alert alert-warning py-2 px-3 mb-3">
-                    [[ categoriesError ]]
-                </div>
-                <div v-if="categoriesLoading" class="card shadow-sm categories-card">
-                    <div class="card-body text-center py-5">
-                        <div class="spinner-border text-primary mb-3" role="status">
-                            <span class="sr-only">Loading categories...</span>
+                    <div class="categories-controls d-flex align-items-center">
+                        <div class="categories-tabs tab-switch mr-3" role="tablist">
+                            <button
+                                type="button"
+                                class="categories-tab-btn tab-switch-btn"
+                                :class="{ active: categoryTab === 'manage' }"
+                                @click="setCategoryTab('manage')"
+                            >
+                                <i class="fas fa-layer-group mr-2"></i>
+                                Edit Categories
+                            </button>
+                            <button
+                                type="button"
+                                class="categories-tab-btn tab-switch-btn"
+                                :class="{ active: categoryTab === 'rules' }"
+                                @click="setCategoryTab('rules')"
+                            >
+                                <i class="fas fa-magic mr-2"></i>
+                                Automatic rules
+                            </button>
                         </div>
-                        <div class="text-muted">Loading your category rules...</div>
+                        <div class="ml-auto">
+                            <button
+                                v-if="categoryTab === 'manage'"
+                                class="btn btn-primary btn-sm"
+                                @click="addCustomCategory"
+                            >
+                                <i class="fas fa-plus mr-1"></i> Add Category
+                            </button>
+                            <button
+                                v-else
+                                class="btn btn-primary btn-sm"
+                                @click="addCategoryRule"
+                            >
+                                <i class="fas fa-plus mr-1"></i> Add Rule
+                            </button>
+                        </div>
                     </div>
                 </div>
-                <div v-else class="card shadow-sm categories-card">
-                    <div v-if="!categoryRules.length" class="card-body text-center text-muted py-5">
-                        No category rules yet. Add one to get started.
+
+                <div v-if="categoryTab === 'manage'">
+                    <div v-if="customCategoriesError" class="alert alert-warning py-2 px-3 mb-3">
+                        [[ customCategoriesError ]]
                     </div>
-                    <div v-else class="table-responsive categories-table">
-                        <table class="table table-sm mb-0">
-                            <thead class="thead-light">
-                                <tr>
-                                    <th scope="col">Text to match</th>
-                                <th scope="col">Field to match</th>
-                                <th scope="col">Type</th>
-                                <th scope="col">Color</th>
-                                <th scope="col">Amount &gt;=</th>
-                                <th scope="col">Amount &lt;=</th>
-                                <th scope="col">Custom Category</th>
-                                <th scope="col" class="text-right">Actions</th>
-                            </tr>
-                            </thead>
-                            <tbody>
-                                <tr
-                                    v-for="rule in categoryRules"
-                                    :key="rule.localId"
-                                    :ref="`categoryRuleRow-${rule.localId}`"
-                                    :class="{ 'highlighted-rule': highlightedRuleLocalId === rule.localId }"
-                                >
-                                    <td>
-                                        <input
-                                            type="text"
-                                            class="form-control form-control-sm"
-                                            :ref="`ruleTextInput-${rule.localId}`"
-                                            v-model="rule.text_to_match"
-                                            @input="markRuleDirty(rule)"
-                                            @blur="handleRuleInputBlur(rule)"
-                                            placeholder="Enter pattern (* ? # supported)"
-                                        >
-                                    </td>
-                                    <td>
-                                        <select class="form-control form-control-sm" v-model="rule.field_to_match" @change="markRuleDirty(rule)">
-                                            <option value="description">Description</option>
-                                            <option value="merchant">Merchant</option>
-                                            <option value="category">Category</option>
-                                        </select>
-                                    </td>
-                                    <td>
-                                        <select class="form-control form-control-sm" v-model="rule.transaction_type" @change="markRuleDirty(rule)">
-                                            <option value="">Any</option>
-                                            <option value="debit">Debit</option>
-                                            <option value="credit">Credit</option>
-                                        </select>
-                                    </td>
-                                    <td class="category-color-cell">
-                                        <button
-                                            type="button"
-                                            class="color-trigger"
-                                            :style="{ backgroundColor: normalizeColor(rule.color) }"
-                                            @click.stop="toggleRulePalette(rule)"
-                                            :aria-expanded="openColorRuleId === rule.localId ? 'true' : 'false'"
-                                            :aria-controls="`color-popover-${rule.localId}`"
-                                            :title="`Selected color ${normalizeColor(rule.color)}`"
-                                        ></button>
-                                        <div
-                                            v-if="openColorRuleId === rule.localId"
-                                            :id="`color-popover-${rule.localId}`"
-                                            class="color-swatch-popover"
-                                            role="menu"
-                                            @click.stop
-                                        >
-                                            <div class="color-swatch-grid">
-                                                <button
-                                                    v-for="colorOption in categoryPalette"
-                                                    :key="`${rule.localId}-${colorOption}`"
-                                                    type="button"
-                                                    class="color-swatch"
-                                                    :class="{ selected: normalizeColor(rule.color) === colorOption }"
-                                                    :style="{ backgroundColor: colorOption }"
-                                                    @click.stop="selectRuleColor(rule, colorOption)"
-                                                    :aria-label="`Select color ${colorOption}`"
-                                                    role="menuitemradio"
-                                                    :aria-checked="normalizeColor(rule.color) === colorOption ? 'true' : 'false'"
-                                                ></button>
+                    <div v-if="customCategoriesLoading" class="card shadow-sm categories-card">
+                        <div class="card-body text-center py-5">
+                            <div class="spinner-border text-primary mb-3" role="status">
+                                <span class="sr-only">Loading categories...</span>
+                            </div>
+                            <div class="text-muted">Loading your custom categories...</div>
+                        </div>
+                    </div>
+                    <div v-else class="card shadow-sm categories-card">
+                        <div v-if="!customCategories.length" class="card-body text-center text-muted py-5">
+                            No custom categories yet. Add one to get started.
+                        </div>
+                        <div v-else class="table-responsive categories-table">
+                            <table class="table table-sm mb-0 table-editable">
+                                <thead class="thead-light">
+                                    <tr>
+                                        <th scope="col">Name</th>
+                                        <th scope="col">Color</th>
+                                        <th scope="col" class="text-right">Rules</th>
+                                        <th scope="col" class="text-right">Transactions</th>
+                                        <th scope="col" class="text-right">Manual Overrides</th>
+                                        <th scope="col" class="text-right">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr
+                                        v-for="category in customCategories"
+                                        :key="category.localId"
+                                        :class="{
+                                            'table-warning': category.isDirty && !category.saving,
+                                            'table-active': category.isEditing
+                                        }"
+                                    >
+                                        <td>
+                                            <div
+                                                v-if="!category.isEditing"
+                                                class="table-cell-display"
+                                                role="button"
+                                                tabindex="0"
+                                                @click="startCustomCategoryEdit(category)"
+                                                @keydown.enter.prevent="startCustomCategoryEdit(category)"
+                                            >
+                                                <span v-if="category.name">[[ category.name ]]</span>
+                                                <span v-else class="text-muted">Tap to name</span>
                                             </div>
-                                        </div>
-                                    </td>
-                                    <td>
-                                        <input
-                                            type="number"
-                                            class="form-control form-control-sm"
-                                            v-model="rule.amount_min"
-                                            @input="markRuleDirty(rule)"
-                                            step="0.01"
-                                            placeholder="Min"
-                                        >
-                                    </td>
-                                    <td>
-                                        <input
-                                            type="number"
-                                            class="form-control form-control-sm"
-                                            v-model="rule.amount_max"
-                                            @input="markRuleDirty(rule)"
-                                            step="0.01"
-                                            placeholder="Max"
-                                        >
-                                    </td>
-                                    <td>
-                                        <input
-                                            type="text"
-                                            class="form-control form-control-sm"
-                                            :ref="`ruleLabelInput-${rule.localId}`"
-                                            v-model="rule.label"
-                                            @input="markRuleDirty(rule)"
-                                            @blur="handleRuleInputBlur(rule)"
-                                            list="custom-category-options"
-                                            placeholder="Category name"
-                                        >
-                                    </td>
-                                    <td class="text-right">
-                                        <div class="btn-group btn-group-sm" role="group">
-                                            <button
-                                                class="btn btn-outline-success"
-                                                :disabled="rule.saving || !rule.isDirty || !rule.text_to_match || !rule.label"
-                                                @click="saveCategoryRule(rule)"
+                                            <input
+                                                v-else
+                                                type="text"
+                                                class="form-control form-control-sm"
+                                                :ref="`categoryNameInput-${category.localId}`"
+                                                v-model="category.editableName"
+                                                @input="markCustomCategoryDirty(category)"
+                                                placeholder="Category name"
                                             >
-                                                <span v-if="!rule.saving"><i class="fas fa-save"></i></span>
-                                                <span v-else><i class="fas fa-spinner fa-spin"></i></span>
-                                            </button>
-                                            <button
-                                                class="btn btn-outline-danger"
-                                                :disabled="rule.saving"
-                                                @click="deleteCategoryRule(rule)"
+                                        </td>
+                                        <td class="category-color-cell">
+                                            <div
+                                                v-if="!category.isEditing"
+                                                class="category-color-chip"
+                                                :style="{ backgroundColor: normalizeColor(category.color) }"
+                                                :title="`Category color ${normalizeColor(category.color)}`"
+                                            ></div>
+                                            <div v-else>
+                                                <button
+                                                    type="button"
+                                                    class="color-trigger"
+                                                    :style="{ backgroundColor: normalizeColor(category.editableColor) }"
+                                                    @click.stop="toggleCategoryColorPalette(category)"
+                                                    :aria-expanded="openCategoryColorId === category.localId ? 'true' : 'false'"
+                                                    :aria-controls="`category-color-${category.localId}`"
+                                                    :title="`Selected color ${normalizeColor(category.editableColor)}`"
+                                                ></button>
+                                                <div
+                                                    v-if="openCategoryColorId === category.localId"
+                                                    :id="`category-color-${category.localId}`"
+                                                    class="color-swatch-popover"
+                                                    role="menu"
+                                                    @click.stop
+                                                >
+                                                    <div class="color-swatch-grid">
+                                                        <button
+                                                            v-for="paletteColor in categoryPalette"
+                                                            :key="`${category.localId}-${paletteColor}`"
+                                                            type="button"
+                                                            class="color-swatch"
+                                                        :class="{ selected: normalizeColor(category.editableColor) === paletteColor }"
+                                                            :style="{ backgroundColor: paletteColor }"
+                                                            @click.stop="selectCategoryColor(category, paletteColor)"
+                                                            :aria-label="`Select color ${paletteColor}`"
+                                                            role="menuitemradio"
+                                                        :aria-checked="normalizeColor(category.editableColor) === paletteColor ? 'true' : 'false'"
+                                                        ></button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td class="text-right">[[ category.rule_count ]]</td>
+                                        <td class="text-right">[[ category.transaction_count ]]</td>
+                                        <td class="text-right">[[ category.override_count ]]</td>
+                                        <td class="text-right">
+                                            <div class="btn-group btn-group-sm" role="group">
+                                                <button
+                                                    v-if="!category.isEditing"
+                                                    class="btn btn-outline-primary"
+                                                    :disabled="category.saving"
+                                                    @click="startCustomCategoryEdit(category)"
+                                                >
+                                                    <i class="fas fa-edit"></i>
+                                                </button>
+                                                <button
+                                                    v-else
+                                                    class="btn btn-outline-success"
+                                                    :disabled="category.saving || !category.isDirty || !(category.editableName && category.editableName.trim())"
+                                                    @click="saveCustomCategory(category)"
+                                                >
+                                                    <span v-if="!category.saving"><i class="fas fa-save"></i></span>
+                                                    <span v-else><i class="fas fa-spinner fa-spin"></i></span>
+                                                </button>
+                                                <button
+                                                    v-if="category.isEditing"
+                                                    class="btn btn-outline-secondary"
+                                                    :disabled="category.saving"
+                                                    @click="cancelCustomCategoryEdit(category)"
+                                                >
+                                                    <i class="fas fa-times"></i>
+                                                </button>
+                                                <button
+                                                    class="btn btn-outline-danger"
+                                                    :disabled="category.saving"
+                                                    @click="deleteCustomCategory(category)"
+                                                >
+                                                    <i class="fas fa-trash-alt"></i>
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <div v-else>
+                    <div v-if="categoriesError" class="alert alert-warning py-2 px-3 mb-3">
+                        [[ categoriesError ]]
+                    </div>
+                    <div v-if="categoriesLoading" class="card shadow-sm categories-card">
+                        <div class="card-body text-center py-5">
+                            <div class="spinner-border text-primary mb-3" role="status">
+                                <span class="sr-only">Loading rules...</span>
+                            </div>
+                            <div class="text-muted">Loading your category rules...</div>
+                        </div>
+                    </div>
+                    <div v-else class="card shadow-sm categories-card">
+                        <div v-if="!categoryRules.length" class="card-body text-center text-muted py-5">
+                            No category rules yet. Add one to get started.
+                        </div>
+                        <div v-else class="table-responsive categories-table">
+                            <table class="table table-sm mb-0 table-editable">
+                                <thead class="thead-light">
+                                    <tr>
+                                        <th scope="col">Text to match</th>
+                                        <th scope="col">Field to match</th>
+                                        <th scope="col">Type</th>
+                                        <th scope="col">Amount &gt;=</th>
+                                        <th scope="col">Amount &lt;=</th>
+                                        <th scope="col">Custom Category</th>
+                                        <th scope="col" class="text-right">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr
+                                        v-for="rule in categoryRules"
+                                        :key="rule.localId"
+                                        :ref="`categoryRuleRow-${rule.localId}`"
+                                        :class="{
+                                            'highlighted-rule': highlightedRuleLocalId === rule.localId,
+                                            'table-active': rule.isEditing,
+                                            'table-warning': rule.isDirty && !rule.saving
+                                        }"
+                                    >
+                                        <td @click="!rule.isEditing && startRuleEdit(rule)">
+                                            <div
+                                                v-if="!rule.isEditing"
+                                                class="table-cell-display"
+                                                role="button"
+                                                tabindex="0"
+                                                @keydown.enter.prevent="startRuleEdit(rule)"
                                             >
-                                                <i class="fas fa-trash-alt"></i>
-                                            </button>
-                                        </div>
-                                    </td>
-                                </tr>
-                            </tbody>
-                        </table>
+                                                <span v-if="rule.text_to_match">[[ rule.text_to_match ]]</span>
+                                                <span v-else class="text-muted">Tap to edit</span>
+                                            </div>
+                                            <input
+                                                v-else
+                                                type="text"
+                                                class="form-control form-control-sm"
+                                                :ref="`ruleTextInput-${rule.localId}`"
+                                                v-model="rule.draft.text_to_match"
+                                                @input="markRuleDraftDirty(rule)"
+                                                @blur="handleRuleInputBlur(rule)"
+                                                placeholder="Enter pattern (* ? # supported)"
+                                            >
+                                        </td>
+                                        <td @click="!rule.isEditing && startRuleEdit(rule)">
+                                            <div v-if="!rule.isEditing" class="table-cell-display">
+                                                [[ rule.field_to_match === 'merchant' ? 'Merchant' : (rule.field_to_match === 'category' ? 'Category' : 'Description') ]]
+                                            </div>
+                                            <select
+                                                v-else
+                                                class="form-control form-control-sm"
+                                                v-model="rule.draft.field_to_match"
+                                                @change="markRuleDraftDirty(rule)"
+                                            >
+                                                <option value="description">Description</option>
+                                                <option value="merchant">Merchant</option>
+                                                <option value="category">Category</option>
+                                            </select>
+                                        </td>
+                                        <td @click="!rule.isEditing && startRuleEdit(rule)">
+                                            <div v-if="!rule.isEditing" class="table-cell-display">
+                                                [[ rule.transaction_type ? (rule.transaction_type === 'credit' ? 'Credit' : 'Debit') : 'Any' ]]
+                                            </div>
+                                            <select
+                                                v-else
+                                                class="form-control form-control-sm"
+                                                v-model="rule.draft.transaction_type"
+                                                @change="markRuleDraftDirty(rule)"
+                                            >
+                                                <option value="">Any</option>
+                                                <option value="debit">Debit</option>
+                                                <option value="credit">Credit</option>
+                                            </select>
+                                        </td>
+                                        <td @click="!rule.isEditing && startRuleEdit(rule)">
+                                            <div v-if="!rule.isEditing" class="table-cell-display">
+                                                [[ rule.amount_min ? rule.amount_min : '—' ]]
+                                            </div>
+                                            <input
+                                                v-else
+                                                type="number"
+                                                class="form-control form-control-sm"
+                                                v-model="rule.draft.amount_min"
+                                                @input="markRuleDraftDirty(rule)"
+                                                step="0.01"
+                                                placeholder="Min"
+                                            >
+                                        </td>
+                                        <td @click="!rule.isEditing && startRuleEdit(rule)">
+                                            <div v-if="!rule.isEditing" class="table-cell-display">
+                                                [[ rule.amount_max ? rule.amount_max : '—' ]]
+                                            </div>
+                                            <input
+                                                v-else
+                                                type="number"
+                                                class="form-control form-control-sm"
+                                                v-model="rule.draft.amount_max"
+                                                @input="markRuleDraftDirty(rule)"
+                                                step="0.01"
+                                                placeholder="Max"
+                                            >
+                                        </td>
+                                        <td @click="!rule.isEditing && startRuleEdit(rule)">
+                                            <div v-if="!rule.isEditing" class="d-flex align-items-center table-cell-display">
+                                                <span v-if="rule.category_name">[[ rule.category_name ]]</span>
+                                                <span v-else class="text-muted">Tap to select</span>
+                                                <span
+                                                    v-if="rule.category_name"
+                                                    class="category-color-chip ml-2"
+                                                    :style="{ backgroundColor: normalizeColor(rule.category_color) }"
+                                                    :title="`Category color ${normalizeColor(rule.category_color)}`"
+                                                    aria-hidden="true"
+                                                ></span>
+                                            </div>
+                                            <div v-else class="d-flex align-items-center">
+                                                <input
+                                                    type="text"
+                                                    class="form-control form-control-sm"
+                                                    :ref="`ruleCategoryInput-${rule.localId}`"
+                                                    v-model="rule.draft.category_name"
+                                                    @input="handleRuleCategoryInput(rule)"
+                                                    @blur="handleRuleInputBlur(rule)"
+                                                    list="custom-category-options"
+                                                    placeholder="Select category"
+                                                >
+                                                <span
+                                                    class="category-color-chip ml-2"
+                                                    :style="{ backgroundColor: normalizeColor(rule.draft.category_color) }"
+                                                    :title="`Category color ${normalizeColor(rule.draft.category_color)}`"
+                                                    aria-hidden="true"
+                                                ></span>
+                                            </div>
+                                        </td>
+                                        <td class="text-right">
+                                            <div class="btn-group btn-group-sm" role="group">
+                                                <button
+                                                    v-if="!rule.isEditing"
+                                                    class="btn btn-outline-primary"
+                                                    :disabled="rule.saving"
+                                                    @click.stop="startRuleEdit(rule)"
+                                                >
+                                                    <i class="fas fa-edit"></i>
+                                                </button>
+                                                <button
+                                                    v-else
+                                                    class="btn btn-outline-success"
+                                                    :disabled="rule.saving || !rule.isDirty || !(rule.draft.text_to_match && rule.draft.text_to_match.trim()) || (!rule.draft.category_id && !(rule.draft.category_name && rule.draft.category_name.trim()))"
+                                                    @click.stop="saveCategoryRule(rule)"
+                                                >
+                                                    <span v-if="!rule.saving"><i class="fas fa-save"></i></span>
+                                                    <span v-else><i class="fas fa-spinner fa-spin"></i></span>
+                                                </button>
+                                                <button
+                                                    v-if="rule.isEditing"
+                                                    class="btn btn-outline-secondary"
+                                                    :disabled="rule.saving"
+                                                    @click.stop="cancelRuleEdit(rule)"
+                                                >
+                                                    <i class="fas fa-times"></i>
+                                                </button>
+                                                <button
+                                                    class="btn btn-outline-danger"
+                                                    :disabled="rule.saving"
+                                                    @click.stop="deleteCategoryRule(rule)"
+                                                >
+                                                    <i class="fas fa-trash-alt"></i>
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
                 <datalist id="custom-category-options">

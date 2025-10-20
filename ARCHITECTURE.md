@@ -6,7 +6,7 @@ This document provides an overview of the ExMint application's architecture, dat
 
 ExMint is a web-based personal finance dashboard that allows users to connect their bank accounts, track transactions, and manage their budgets. The application follows a traditional client-server architecture:
 
-- **Frontend:** A single-page application (SPA) built with **Vue.js** and **Bootstrap**. The frontend is responsible for rendering the user interface, handling user interactions, and communicating with the backend via a RESTful API.
+- **Frontend:** A single-page application (SPA) built with **Vue.js** and **Bootstrap**. The dashboard surface provides tabbed panes (Transactions, Categories, Budgets, Dashboard) with persistent filters, responsive breakpoints, and a mobile drawer for account selection.
 - **Backend:** A **Flask** (Python) application that serves the frontend, handles user authentication, and provides a RESTful API for accessing and managing financial data.
 - **Database:** A **SQLite** database (for development) and a **MySQL** database (for production) are used to store user data, including account information, transactions, and budgets.
 - **Plaid Integration:** The application uses **Plaid** to securely connect to users' bank accounts and retrieve financial data.
@@ -25,8 +25,8 @@ The application is composed of the following key components:
 
 ### Frontend (Vue.js)
 
-- **`dashboard.html`:** The main HTML template for the dashboard. It includes the basic layout of the page and loads the necessary CSS and JavaScript files.
-- **`vuePlaid.js`:** The main JavaScript file for the Vue.js application. It contains the Vue instance, computed properties, and methods for handling user interactions and communicating with the backend.
+- **`dashboard.html`:** The main HTML template for the dashboard. It defines the pane layout, responsive sidebar/drawer, and spending report markup (including clickable category drill-down links and responsive tables).
+- **`vuePlaid.js`:** The main JavaScript file for the Vue.js application. It drives account selection, transactions filters (date, custom category, amount), dashboard drill-downs, and sync flows while coordinating with Plaid Link.
 - **`LineChart.js`:** A Vue component that wraps the `vue-chartjs` library to create a reusable line chart component.
 
 ### Backend (Flask)
@@ -34,7 +34,7 @@ The application is composed of the following key components:
 - **`app.py`:** The main entry point for the Flask application. It initializes the Flask app, configures the database, and registers the blueprints for the different parts of the application.
 - **`views.py`:** This file contains the main views for the application, such as the login, registration, and dashboard pages.
 - **`core_views.py`:** This file contains the API endpoints for accessing and managing financial data.
-- **`models.py`:** This file defines the database models for the application, such as the `User`, `Credential`, `Account`, and `Transaction` models.
+- **`models.py`:** This file defines the database models for the application, such as the `User`, `Credential`, `Account`, and `Transaction` models, as well as the new `CustomCategory` and `CategoryRule` models that decouple reusable categories from automatic rule definitions.
 - **`config.py`:** This file contains the configuration for the application, such as the database URI and the Plaid API keys.
 
 ### Other Components

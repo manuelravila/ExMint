@@ -1,14 +1,23 @@
 # core_views.py
 from flask import Blueprint, jsonify, request, session, current_app
 from flask_login import login_required, current_user
-from models import db, Credential, Account, Transaction, Category, TransactionCategoryOverride, Budget
+from models import (
+    db,
+    Credential,
+    Account,
+    Transaction,
+    CustomCategory,
+    CategoryRule,
+    TransactionCategoryOverride,
+    Budget
+)
 from plaid.model.item_remove_request import ItemRemoveRequest
 from plaid.model.accounts_get_request import AccountsGetRequest
 from plaid.model.item_webhook_update_request import ItemWebhookUpdateRequest
 #from plaid.model.accounts_balance_get_request import AccountsBalanceGetRequest
 from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
 from sqlalchemy import and_, or_, func, asc, desc, inspect, text
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, aliased
 import plaid
 import json
 import re
@@ -20,7 +29,7 @@ import csv
 from config import Config
 from version import __version__ as VERSION
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, IntegrityError
 from uuid import uuid4
 
 core = Blueprint('core', __name__)
@@ -40,32 +49,29 @@ def ensure_category_schema(force=False):
         bind = db.engine
         inspector = inspect(bind)
         tables = inspector.get_table_names()
-        if 'categories' not in tables:
+        if 'custom_categories' not in tables or 'category_rules' not in tables:
+            current_app.logger.warning('Category schema missing required tables. Please run database migrations.')
             _CATEGORY_SCHEMA_CHECKED = True
             return
 
-        columns = {column['name'] for column in inspector.get_columns('categories')}
-        if 'color' not in columns:
-            with bind.connect() as conn:
-                conn.execute(text("ALTER TABLE categories ADD COLUMN color VARCHAR(7) NOT NULL DEFAULT '#2C6B4F'"))
-                conn.execute(text("UPDATE categories SET color = '#2C6B4F' WHERE color IS NULL OR color = ''"))
-
         if 'transaction_category_override' not in tables:
-            op = text(
+            stmt = text(
                 """
                 CREATE TABLE transaction_category_override (
-                    transaction_id INT NOT NULL PRIMARY KEY,
-                    label VARCHAR(255) NOT NULL,
-                    color VARCHAR(7),
+                    transaction_id INTEGER NOT NULL PRIMARY KEY,
+                    custom_category_id INTEGER NULL,
                     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     CONSTRAINT fk_transaction_override_transaction
                         FOREIGN KEY (transaction_id) REFERENCES transactions (id)
-                        ON DELETE CASCADE
+                        ON DELETE CASCADE,
+                    CONSTRAINT fk_transaction_override_category
+                        FOREIGN KEY (custom_category_id) REFERENCES custom_categories (id)
+                        ON DELETE SET NULL
                 )
                 """
             )
             with bind.connect() as conn:
-                conn.execute(op)
+                conn.execute(stmt)
 
         _CATEGORY_SCHEMA_CHECKED = True
     except Exception as exc:
@@ -131,16 +137,67 @@ def _derive_fallback_label_from_category(raw_value):
     return UNCATEGORIZED_LABEL
 
 
+def _parse_request_date(raw_value):
+    if not raw_value:
+        return None
+    value = str(raw_value).strip()
+    if not value:
+        return None
+    # Normalize common separators to hyphen for easier matching.
+    normalized = value.replace('/', '-').replace('.', '-')
+    # Attempt ISO parsing first.
+    try:
+        return date.fromisoformat(normalized)
+    except (ValueError, AttributeError):
+        pass
+    # Try a small set of alternative day/month orderings to accommodate locale-formatted values.
+    for fmt in ('%Y-%m-%d', '%m-%d-%Y', '%d-%m-%Y'):
+        try:
+            return datetime.strptime(normalized, fmt).date()
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
+def _parse_request_decimal(raw_value):
+    if raw_value is None:
+        return None
+    if isinstance(raw_value, (int, float, Decimal)):
+        try:
+            return Decimal(str(raw_value))
+        except (InvalidOperation, TypeError, ValueError):
+            return None
+    value = str(raw_value).strip()
+    if not value:
+        return None
+    # Remove grouping separators and normalize unicode minus signs.
+    normalized = (
+        value.replace(',', '')
+        .replace(' ', '')
+        .replace('\u2212', '-')
+        .replace('\u2013', '-')
+        .replace('\u2014', '-')
+    )
+    try:
+        return Decimal(normalized)
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+
+
 def _load_overrides(transaction_ids):
     if not transaction_ids:
         return {}
     try:
-        overrides = TransactionCategoryOverride.query.filter(
+        overrides = TransactionCategoryOverride.query.options(
+            joinedload(TransactionCategoryOverride.custom_category)
+        ).filter(
             TransactionCategoryOverride.transaction_id.in_(transaction_ids)
         ).all()
     except Exception:
         ensure_category_schema(force=True)
-        overrides = TransactionCategoryOverride.query.filter(
+        overrides = TransactionCategoryOverride.query.options(
+            joinedload(TransactionCategoryOverride.custom_category)
+        ).filter(
             TransactionCategoryOverride.transaction_id.in_(transaction_ids)
         ).all()
     return {override.transaction_id: override for override in overrides}
@@ -151,12 +208,12 @@ def _serialize_transaction(txn, override_map):
     fallback_label = ' / '.join(category_list) if category_list else UNCATEGORIZED_LABEL
 
     override = override_map.get(txn.id)
-    if override:
-        label = override.label
-        color = override.color or DEFAULT_MANUAL_COLOR
+    if override and override.custom_category:
+        label = override.custom_category.name or fallback_label
+        color = override.custom_category.color or DEFAULT_MANUAL_COLOR
         source = 'manual'
     elif txn.custom_category is not None:
-        label = txn.custom_category.label or fallback_label
+        label = txn.custom_category.name or fallback_label
         color = txn.custom_category.color or DEFAULT_MANUAL_COLOR
         source = 'rule'
     else:
@@ -265,26 +322,32 @@ def _normalize_color(value):
 
 def _compile_category_rules(user_id):
     ensure_category_schema()
-    rules = Category.query.filter_by(user_id=user_id).order_by(Category.created_at.asc(), Category.id.asc()).all()
+    rules = CategoryRule.query.options(
+        joinedload(CategoryRule.category)
+    ).filter_by(user_id=user_id).order_by(CategoryRule.created_at.asc(), CategoryRule.id.asc()).all()
     compiled = []
     for rule in rules:
+        category = rule.category
         pattern = (rule.text_to_match or '').strip()
-        label = (rule.label or '').strip()
-        if not pattern or not label:
+        if not pattern or category is None:
             continue
         try:
             regex = _wildcard_to_regex(pattern)
         except re.error:
             continue
+        label = (category.name or '').strip()
+        if not label:
+            continue
         compiled.append({
-            'id': rule.id,
+            'rule_id': rule.id,
+            'category_id': category.id,
             'regex': regex,
             'field': _resolve_rule_field(rule.field_to_match),
             'type': _resolve_rule_type(rule.transaction_type),
             'amount_min': Decimal(str(rule.amount_min)) if rule.amount_min is not None else None,
             'amount_max': Decimal(str(rule.amount_max)) if rule.amount_max is not None else None,
             'label': label,
-            'color': rule.color or DEFAULT_MANUAL_COLOR
+            'color': category.color or DEFAULT_MANUAL_COLOR
         })
     return compiled
 
@@ -334,8 +397,9 @@ def apply_rules_to_transactions(user_id, transaction_ids=None, include_removed=F
                 chosen_rule = compiled
 
         if chosen_rule is not None:
-            if txn.custom_category_id != chosen_rule['id']:
-                txn.custom_category_id = chosen_rule['id']
+            category_id = chosen_rule['category_id']
+            if txn.custom_category_id != category_id:
+                txn.custom_category_id = category_id
                 updated += 1
             matched += 1
         else:
@@ -357,7 +421,23 @@ def apply_category_rules(user_id, include_removed=False):
     return apply_rules_to_transactions(user_id, transaction_ids=None, include_removed=include_removed)
 
 
+def _serialize_custom_category(category, extras=None):
+    if not category:
+        return None
+    data = {
+        'id': category.id,
+        'name': category.name,
+        'color': category.color,
+        'created_at': category.created_at.isoformat() if category.created_at else None,
+        'updated_at': category.updated_at.isoformat() if category.updated_at else None,
+    }
+    if extras:
+        data.update(extras)
+    return data
+
+
 def _serialize_category(rule):
+    category = getattr(rule, 'category', None)
     return {
         'id': rule.id,
         'text_to_match': rule.text_to_match,
@@ -365,8 +445,8 @@ def _serialize_category(rule):
         'transaction_type': rule.transaction_type,
         'amount_min': str(rule.amount_min) if rule.amount_min is not None else None,
         'amount_max': str(rule.amount_max) if rule.amount_max is not None else None,
-        'label': rule.label,
-        'color': rule.color,
+        'category_id': category.id if category else None,
+        'category': _serialize_custom_category(category),
         'created_at': rule.created_at.isoformat() if rule.created_at else None,
         'updated_at': rule.updated_at.isoformat() if rule.updated_at else None
     }
@@ -392,8 +472,8 @@ def _extract_label(payload):
 def _collect_category_labels(user_id):
     ensure_category_schema()
     labels = (
-        db.session.query(Category.label)
-        .filter(Category.user_id == user_id, Category.label.isnot(None))
+        db.session.query(CustomCategory.name)
+        .filter(CustomCategory.user_id == user_id, CustomCategory.name.isnot(None))
         .distinct()
         .all()
     )
@@ -402,14 +482,52 @@ def _collect_category_labels(user_id):
     )
 
 
+def _collect_custom_category_stats(user_id, category_ids):
+    if not category_ids:
+        return {}, {}, {}
+
+    rule_counts = dict(
+        db.session.query(CategoryRule.category_id, func.count(CategoryRule.id))
+        .filter(
+            CategoryRule.user_id == user_id,
+            CategoryRule.category_id.in_(category_ids)
+        )
+        .group_by(CategoryRule.category_id)
+        .all()
+    )
+
+    transaction_counts = dict(
+        db.session.query(Transaction.custom_category_id, func.count(Transaction.id))
+        .filter(
+            Transaction.user_id == user_id,
+            Transaction.custom_category_id.in_(category_ids)
+        )
+        .group_by(Transaction.custom_category_id)
+        .all()
+    )
+
+    override_counts = dict(
+        db.session.query(TransactionCategoryOverride.custom_category_id, func.count(TransactionCategoryOverride.transaction_id))
+        .join(Transaction, Transaction.id == TransactionCategoryOverride.transaction_id)
+        .filter(
+            Transaction.user_id == user_id,
+            TransactionCategoryOverride.custom_category_id.in_(category_ids)
+        )
+        .group_by(TransactionCategoryOverride.custom_category_id)
+        .all()
+    )
+
+    return rule_counts, transaction_counts, override_counts
+
+
 def _resolve_transaction_category_label(txn, override_map, allow_fallback=True):
     label = None
     if override_map:
         override = override_map.get(txn.id)
-        if override:
-            label = override.label
+        if override and override.custom_category:
+            label = override.custom_category.name
     if not label and getattr(txn, 'custom_category', None):
-        label = txn.custom_category.label
+        label = txn.custom_category.name
     if not label and allow_fallback:
         fallback = _extract_category_list(txn.category)
         if fallback:
@@ -496,7 +614,7 @@ def _calculate_budget_metrics(user_id, category_labels):
     for txn in transactions:
         if txn.has_split_children and not txn.is_split_child:
             continue
-        label = _resolve_transaction_category_label(txn, override_map)
+        label = _resolve_transaction_category_label(txn, override_map, allow_fallback=False)
         if not label:
             continue
         label_key = label.lower()
@@ -720,7 +838,7 @@ def _calculate_spending_metrics(user_id, category_labels):
     for txn in transactions:
         if txn.has_split_children and not txn.is_split_child:
             continue
-        label = _resolve_transaction_category_label(txn, override_map)
+        label = _resolve_transaction_category_label(txn, override_map, allow_fallback=False)
         if not label:
             continue
         label_key = label.lower()
@@ -775,7 +893,7 @@ def _collect_spending_summary(user_id):
     # First, find all unique category labels from the transaction set
     all_category_labels = set()
     for txn in transactions:
-        label = _resolve_transaction_category_label(txn, override_map)
+        label = _resolve_transaction_category_label(txn, override_map, allow_fallback=False)
         if label:
             all_category_labels.add(label)
 
@@ -788,11 +906,20 @@ def _collect_spending_summary(user_id):
             'raw_sum': Decimal('0.00')
         }
 
+    uncategorized_totals = defaultdict(lambda: defaultdict(lambda: Decimal('0.00')))
+
     for txn in transactions:
         if txn.has_split_children and not txn.is_split_child:
             continue
-        label = _resolve_transaction_category_label(txn, override_map)
-        if not label or not txn.date:
+        if not txn.date:
+            continue
+        label = _resolve_transaction_category_label(txn, override_map, allow_fallback=False)
+        year = txn.date.year
+        month = txn.date.month
+        value = Decimal(txn.amount or 0).quantize(CENT, rounding=ROUND_HALF_UP)
+        if not label:
+            if value < 0:
+                uncategorized_totals[year][month] += abs(value)
             continue
         label_key = label.lower()
         info = category_entries.setdefault(label_key, {
@@ -800,9 +927,6 @@ def _collect_spending_summary(user_id):
             'totals': defaultdict(lambda: defaultdict(lambda: Decimal('0.00'))),
             'raw_sum': Decimal('0.00')
         })
-        year = txn.date.year
-        month = txn.date.month
-        value = Decimal(txn.amount or 0).quantize(CENT, rounding=ROUND_HALF_UP)
         if value < 0:
             spending_value = abs(value)
             info['totals'][year][month] += spending_value
@@ -852,6 +976,24 @@ def _collect_spending_summary(user_id):
                     'remainder': remainder,
                     'classification': classification
                 })
+
+    # Add uncategorized totals as a synthetic category per month
+    for year, months in uncategorized_totals.items():
+        for month, value in months.items():
+            if value <= Decimal('0.00'):
+                continue
+            month_entry = year_map[year][month]
+            month_entry['month'] = month
+            month_entry['label'] = calendar.month_abbr[month]
+            month_entry['total'] += value
+            month_entry['categories'].append({
+                'label': UNCATEGORIZED_LABEL,
+                'value': value,
+                'six_month_average': Decimal('0.00'),
+                'budget': None,
+                'remainder': None,
+                'classification': 'expense'
+            })
 
     years_output = []
     for year in sorted(year_map.keys(), reverse=True):
@@ -936,7 +1078,7 @@ def _collect_cashflow_summary(user_id):
         else:
             month_map[month_key]['expense'] += amount
 
-        label = _resolve_transaction_category_label(txn, override_map)
+        label = _resolve_transaction_category_label(txn, override_map, allow_fallback=False)
         if label:
             label_key = label.lower()
             category_series[label_key][month_key] += amount
@@ -1091,9 +1233,9 @@ def _create_split_children(parent_txn, split_specs):
     db.session.flush()
 
     label_map = {
-        (category.label or '').strip().lower(): category
-        for category in Category.query.filter_by(user_id=parent_txn.user_id).all()
-        if category.label
+        (category.name or '').strip().lower(): category
+        for category in CustomCategory.query.filter_by(user_id=parent_txn.user_id).all()
+        if category.name
     }
 
     parent_sign = -1 if (parent_txn.amount or Decimal('0')) < 0 else 1
@@ -1129,24 +1271,25 @@ def _create_split_children(parent_txn, split_specs):
             has_split_children=False
         )
 
-        matching_category = label_map.get(category_label.lower())
-        if matching_category:
-            child.custom_category_id = matching_category.id
+        normalized_label = category_label.strip().lower()
+        matching_category = label_map.get(normalized_label)
+        if not matching_category:
+            new_category = CustomCategory(
+                user_id=parent_txn.user_id,
+                name=category_label.strip(),
+                color=DEFAULT_MANUAL_COLOR
+            )
+            db.session.add(new_category)
+            db.session.flush()
+            label_map[normalized_label] = new_category
+            matching_category = new_category
+
+        child.custom_category_id = matching_category.id
 
         db.session.add(child)
-        new_children.append((child, matching_category, category_label))
+        new_children.append(child)
 
     db.session.flush()
-
-    for child, matching_category, category_label in new_children:
-        if matching_category:
-            continue
-        override = TransactionCategoryOverride(
-            transaction_id=child.id,
-            label=category_label,
-            color=DEFAULT_MANUAL_COLOR
-        )
-        db.session.add(override)
 
     parent_txn.has_split_children = True
     parent_txn.is_split_child = False
@@ -1158,7 +1301,7 @@ def _create_split_children(parent_txn, split_specs):
     if parent_override:
         db.session.delete(parent_override)
 
-    return [child for child, _, _ in new_children]
+    return new_children
 
 @core.route('/create_link_token', methods=['POST'])
 @login_required
@@ -1295,14 +1438,58 @@ def handle_token_and_accounts():
             'request_id': accounts_response['request_id']
         }
 
+        db.session.refresh(credential)
 
-
-        # Check if the requires_update flag is being set correctly
+        # Clear any update flags and run an initial sync so that Plaid webhooks can begin firing.
         credential.requires_update = False
-        db.session.commit()
-        db.session.refresh(credential)  # Refresh the instance to get the latest state from the DB
 
-        return jsonify({'status': 'success', 'message': 'Bank connection added successfully'})
+        ensure_category_schema()
+        sync_summary = {'added': 0, 'modified': 0, 'removed': 0}
+        sync_errors = []
+
+        try:
+            sync_counts, credential_error = _sync_credential_transactions(credential.user, credential, from_webhook=False)
+            for key in sync_summary:
+                sync_summary[key] = sync_counts.get(key, 0)
+            if credential_error:
+                sync_errors.append(credential_error)
+        except plaid.ApiException as exc:
+            current_app.logger.exception("Initial Plaid sync failed for credential %s: %s", credential.id, exc)
+            db.session.rollback()
+            return jsonify({
+                'status': 'error',
+                'message': 'Bank connection created but failed to sync transactions.',
+                'error': str(exc)
+            }), 502
+        except Exception as exc:
+            current_app.logger.exception("Unexpected error during initial Plaid sync for credential %s: %s", credential.id, exc)
+            db.session.rollback()
+            return jsonify({
+                'status': 'error',
+                'message': 'Bank connection created but failed to sync transactions.',
+                'error': str(exc)
+            }), 500
+
+        category_summary = None
+        has_category_rules = CategoryRule.query.filter_by(user_id=credential.user_id).first() is not None
+        if has_category_rules:
+            category_summary = apply_category_rules(credential.user_id)
+
+        db.session.commit()
+        db.session.refresh(credential)  # Ensure we have the latest cursor state
+
+        response_payload = {
+            'status': 'success',
+            'message': 'Bank connection added successfully',
+            'sync_summary': sync_summary,
+            'sync_errors': sync_errors,
+            'requires_update': credential.requires_update
+        }
+
+        if category_summary is not None:
+            response_payload['categories'] = category_summary
+
+        return jsonify(response_payload)
 
     except Exception as e:
         print(f"Error in handle_token_and_accounts: {str(e)}")
@@ -1539,8 +1726,26 @@ def plaid_webhook():
         item_id = data['item_id']
         credential = Credential.query.filter_by(item_id=item_id).first()
         if credential:
-            _sync_credential_transactions(credential.user, credential, from_webhook=True)
-            db.session.commit()
+            ensure_category_schema()
+            try:
+                sync_counts, credential_error = _sync_credential_transactions(credential.user, credential, from_webhook=True)
+                if credential_error:
+                    current_app.logger.warning(
+                        "Credential %s reported error after webhook sync: %s",
+                        credential.id,
+                        credential_error
+                    )
+                has_category_rules = CategoryRule.query.filter_by(user_id=credential.user_id).first() is not None
+                if has_category_rules:
+                    apply_category_rules(credential.user_id)
+                db.session.commit()
+            except Exception as exc:
+                current_app.logger.exception(
+                    "Failed to process Plaid webhook for credential %s: %s",
+                    credential.id,
+                    exc
+                )
+                db.session.rollback()
 
     return jsonify({'status': 'success'})
 
@@ -1596,7 +1801,7 @@ def sync_transactions():
                 })
                 db.session.rollback()
 
-        has_category_rules = Category.query.filter_by(user_id=user.id).first() is not None
+        has_category_rules = CategoryRule.query.filter_by(user_id=user.id).first() is not None
         if has_category_rules:
             category_summary = apply_category_rules(user.id)
 
@@ -1712,11 +1917,29 @@ def get_transactions():
         sort_desc = str(sort_desc_value).lower() in ('true', '1', 'yes', 'y', 'desc')
         search_term = (request.args.get('search') or '').strip()
 
+        start_date_str = (request.args.get('start_date') or '').strip()
+        end_date_str = (request.args.get('end_date') or '').strip()
+        min_amount_str = (request.args.get('min_amount') or '').strip()
+        max_amount_str = (request.args.get('max_amount') or '').strip()
+        custom_category_param = (request.args.get('custom_category_id') or '').strip()
+
+        start_date = _parse_request_date(start_date_str)
+        end_date = _parse_request_date(end_date_str)
+        if start_date and end_date and start_date > end_date:
+            start_date, end_date = end_date, start_date
+
+        min_amount = _parse_request_decimal(min_amount_str)
+        max_amount = _parse_request_decimal(max_amount_str)
+
+        override_alias = aliased(TransactionCategoryOverride)
+
         query = Transaction.query.options(
             joinedload(Transaction.account),
             joinedload(Transaction.credential),
             joinedload(Transaction.custom_category)
-        ).join(Account).join(Credential).filter(
+        ).join(Account).join(Credential).outerjoin(
+            override_alias, override_alias.transaction_id == Transaction.id
+        ).filter(
             Transaction.user_id == current_user.id,
             Transaction.is_removed.is_(False)
         )
@@ -1734,8 +1957,35 @@ def get_transactions():
                 Account.name.ilike(token),
                 func.coalesce(Account.mask, '').ilike(token),
                 Credential.institution_name.ilike(token),
-                Transaction.custom_category.has(Category.label.ilike(token))
+                Transaction.custom_category.has(CustomCategory.name.ilike(token))
             ))
+
+        if start_date:
+            query = query.filter(Transaction.date >= start_date)
+        if end_date:
+            query = query.filter(Transaction.date <= end_date)
+        if min_amount is not None:
+            query = query.filter(Transaction.amount >= min_amount)
+        if max_amount is not None:
+            query = query.filter(Transaction.amount <= max_amount)
+
+        if custom_category_param:
+            normalized = custom_category_param.lower()
+            if normalized in ('none', 'null', 'uncategorized'):
+                query = query.filter(
+                    Transaction.custom_category_id.is_(None),
+                    override_alias.custom_category_id.is_(None)
+                )
+            else:
+                try:
+                    custom_category_id = int(custom_category_param)
+                except (TypeError, ValueError):
+                    custom_category_id = None
+                if custom_category_id is not None:
+                    query = query.filter(or_(
+                        Transaction.custom_category_id == custom_category_id,
+                        override_alias.custom_category_id == custom_category_id
+                    ))
 
         total_count = query.count()
 
@@ -1755,6 +2005,24 @@ def get_transactions():
         offset = (page - 1) * page_size
         transactions = ordered_query.offset(offset).limit(page_size).all()
 
+        current_app.logger.info(
+            'Transaction fetch filters start=%s end=%s min=%s max=%s custom=%s page=%s size=%s total=%s',
+            start_date.isoformat() if start_date else None,
+            end_date.isoformat() if end_date else None,
+            str(min_amount) if min_amount is not None else None,
+            str(max_amount) if max_amount is not None else None,
+            custom_category_param or None,
+            page,
+            page_size,
+            total_count
+        )
+        if transactions:
+            current_app.logger.info(
+                'Transaction fetch sample first_date=%s last_date=%s',
+                transactions[0].date.isoformat() if transactions[0].date else None,
+                transactions[-1].date.isoformat() if transactions[-1].date else None
+            )
+
         override_map = _load_overrides([txn.id for txn in transactions])
         response = [_serialize_transaction(txn, override_map) for txn in transactions]
 
@@ -1768,7 +2036,14 @@ def get_transactions():
             has_more=has_more,
             sort_key=sort_key,
             sort_desc=sort_desc,
-            search=search_term
+            search=search_term,
+            filters={
+                'start_date': start_date.isoformat() if start_date else None,
+                'end_date': end_date.isoformat() if end_date else None,
+                'min_amount': str(min_amount) if isinstance(min_amount, Decimal) else (str(min_amount) if min_amount not in (None, '') else None),
+                'max_amount': str(max_amount) if isinstance(max_amount, Decimal) else (str(max_amount) if max_amount not in (None, '') else None),
+                'custom_category_id': custom_category_param or None
+            }
         )
 
     return _with_schema_retry(handler)
@@ -1901,34 +2176,233 @@ def update_transaction_category(transaction_id):
             override_map = _load_overrides([txn.id])
             return jsonify({'transaction': _serialize_transaction(txn, override_map)})
 
-        color = None
+        normalized_color = None
         if explicit_color:
             try:
-                color = _normalize_color(explicit_color)
+                normalized_color = _normalize_color(explicit_color)
             except ValueError:
-                color = None
+                normalized_color = None
 
-        if color is None:
-            matching_rule = Category.query.filter_by(user_id=current_user.id, label=label).order_by(Category.created_at.desc(), Category.id.desc()).first()
-            if matching_rule:
-                color = matching_rule.color or DEFAULT_MANUAL_COLOR
-            else:
-                color = DEFAULT_MANUAL_COLOR
+        category = CustomCategory.query.filter_by(user_id=current_user.id, name=label).first()
+        if not category:
+            category = CustomCategory(
+                user_id=current_user.id,
+                name=label,
+                color=normalized_color or DEFAULT_MANUAL_COLOR
+            )
+            db.session.add(category)
+            db.session.flush()
+        elif normalized_color and category.color != normalized_color:
+            category.color = normalized_color
 
         if override is None:
-            override = TransactionCategoryOverride(transaction_id=txn.id, label=label, color=color)
+            override = TransactionCategoryOverride(transaction_id=txn.id, custom_category_id=category.id)
             db.session.add(override)
         else:
-            override.label = label
-            override.color = color
+            override.custom_category_id = category.id
 
         txn.custom_category_id = None
 
         db.session.flush()
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            current_app.logger.warning('Failed to assign custom category "%s" for user %s due to integrity error', label, current_user.id, exc_info=True)
+            return jsonify({'error': 'Could not save the category. Please try again or choose a different name.'}), 400
+
+        override_map = _load_overrides([txn.id])
+        return jsonify({'transaction': _serialize_transaction(txn, override_map)})
+
+    return _with_schema_retry(handler)
+
+
+@core.route('/api/custom-categories', methods=['GET'])
+@login_required
+def list_custom_categories():
+    ensure_category_schema()
+
+    def handler():
+        categories = CustomCategory.query.filter_by(user_id=current_user.id).order_by(
+            CustomCategory.created_at.desc(),
+            CustomCategory.id.desc()
+        ).all()
+        category_ids = [category.id for category in categories]
+        rule_counts, transaction_counts, override_counts = _collect_custom_category_stats(current_user.id, category_ids)
+        response = [
+            _serialize_custom_category(
+                category,
+                {
+                    'rule_count': int(rule_counts.get(category.id, 0)),
+                    'transaction_count': int(transaction_counts.get(category.id, 0)),
+                    'override_count': int(override_counts.get(category.id, 0))
+                }
+            )
+            for category in categories
+        ]
+        return jsonify({
+            'categories': response,
+            'labels': _collect_category_labels(current_user.id)
+        })
+
+    return _with_schema_retry(handler)
+
+
+@core.route('/api/custom-categories', methods=['POST'])
+@login_required
+def create_custom_category():
+    ensure_category_schema()
+
+    def handler():
+        payload = request.get_json() or {}
+        name = (payload.get('name') or payload.get('label') or '').strip()
+        if not name:
+            return jsonify({'error': 'Name is required.'}), 400
+        if len(name) > 255:
+            name = name[:255]
+
+        color_value = payload.get('color') or DEFAULT_MANUAL_COLOR
+        try:
+            color = _normalize_color(color_value)
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
+
+        normalized_name = name.lower()
+        existing = CustomCategory.query.filter(
+            CustomCategory.user_id == current_user.id,
+            func.lower(CustomCategory.name) == normalized_name
+        ).first()
+        if existing:
+            return jsonify({'error': 'A category with this name already exists.'}), 400
+
+        category = CustomCategory(
+            user_id=current_user.id,
+            name=name,
+            color=color
+        )
+        db.session.add(category)
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            current_app.logger.warning('Duplicate custom category creation attempt for user %s and name "%s"', current_user.id, name)
+            return jsonify({'error': 'A category with this name already exists.'}), 409
+
+        payload_category = _serialize_custom_category(category, {
+            'rule_count': 0,
+            'transaction_count': 0,
+            'override_count': 0
+        })
+        return jsonify({
+            'category': payload_category,
+            'labels': _collect_category_labels(current_user.id)
+        }), 201
+
+    return _with_schema_retry(handler)
+
+
+@core.route('/api/custom-categories/<int:category_id>', methods=['PUT'])
+@login_required
+def update_custom_category(category_id):
+    ensure_category_schema()
+
+    def handler():
+        category = CustomCategory.query.filter_by(id=category_id, user_id=current_user.id).first()
+        if not category:
+            return jsonify({'error': 'Custom category not found.'}), 404
+
+        payload = request.get_json() or {}
+        name = payload.get('name')
+        color_value = payload.get('color')
+        updated = False
+
+        if name is not None:
+            trimmed = name.strip()
+            if not trimmed:
+                return jsonify({'error': 'Name cannot be empty.'}), 400
+            if len(trimmed) > 255:
+                trimmed = trimmed[:255]
+            if trimmed.lower() != (category.name or '').lower():
+                duplicate = CustomCategory.query.filter(
+                    CustomCategory.user_id == current_user.id,
+                    func.lower(CustomCategory.name) == trimmed.lower(),
+                    CustomCategory.id != category.id
+                ).first()
+                if duplicate:
+                    return jsonify({'error': 'Another category with this name already exists.'}), 400
+                category.name = trimmed
+                updated = True
+
+        if color_value is not None:
+            try:
+                normalized_color = _normalize_color(color_value)
+            except ValueError as exc:
+                return jsonify({'error': str(exc)}), 400
+            if category.color != normalized_color:
+                category.color = normalized_color
+                updated = True
+
+        if updated:
+            db.session.flush()
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            current_app.logger.warning('Duplicate custom category update attempt for user %s and name "%s"', current_user.id, name)
+            return jsonify({'error': 'Another category with this name already exists.'}), 409
+
+        rule_counts, transaction_counts, override_counts = _collect_custom_category_stats(current_user.id, [category.id])
+        payload_category = _serialize_custom_category(
+            category,
+            {
+                'rule_count': int(rule_counts.get(category.id, 0)),
+                'transaction_count': int(transaction_counts.get(category.id, 0)),
+                'override_count': int(override_counts.get(category.id, 0))
+            }
+        )
+        return jsonify({
+            'category': payload_category,
+            'labels': _collect_category_labels(current_user.id)
+        })
+
+    return _with_schema_retry(handler)
+
+
+@core.route('/api/custom-categories/<int:category_id>', methods=['DELETE'])
+@login_required
+def delete_custom_category(category_id):
+    ensure_category_schema()
+
+    def handler():
+        category = CustomCategory.query.filter_by(id=category_id, user_id=current_user.id).first()
+        if not category:
+            return jsonify({'error': 'Custom category not found.'}), 404
+
+        overrides = TransactionCategoryOverride.query.join(Transaction).filter(
+            TransactionCategoryOverride.custom_category_id == category.id,
+            Transaction.user_id == current_user.id
+        ).all()
+        for override in overrides:
+            db.session.delete(override)
+
+        Transaction.query.filter(
+            Transaction.user_id == current_user.id,
+            Transaction.custom_category_id == category.id
+        ).update({Transaction.custom_category_id: None}, synchronize_session=False)
+
+        CategoryRule.query.filter_by(user_id=current_user.id, category_id=category.id).delete(synchronize_session=False)
+
+        db.session.delete(category)
+        db.session.flush()
+
+        summary = apply_category_rules(current_user.id)
         db.session.commit()
 
-        override_map = {txn.id: override}
-        return jsonify({'transaction': _serialize_transaction(txn, override_map)})
+        return jsonify({
+            'deleted': category_id,
+            'summary': summary,
+            'labels': _collect_category_labels(current_user.id)
+        })
 
     return _with_schema_retry(handler)
 
@@ -1939,7 +2413,9 @@ def list_categories():
     ensure_category_schema()
 
     def handler():
-        rules = Category.query.filter_by(user_id=current_user.id).order_by(Category.created_at.desc(), Category.id.desc()).all()
+        rules = CategoryRule.query.options(
+            joinedload(CategoryRule.category)
+        ).filter_by(user_id=current_user.id).order_by(CategoryRule.created_at.desc(), CategoryRule.id.desc()).all()
         return jsonify({
             'categories': [_serialize_category(rule) for rule in rules],
             'labels': _collect_category_labels(current_user.id)
@@ -1955,15 +2431,18 @@ def create_category_rule():
     def handler():
         payload = request.get_json() or {}
         text_to_match = (payload.get('text_to_match') or '').strip()
-        label = (_extract_label(payload) or '').strip()
+        category_id = payload.get('category_id')
+        category_name = (_extract_label(payload) or '').strip()
 
-        if not text_to_match or not label:
-            return jsonify({'error': 'Both text_to_match and label are required.'}), 400
+        if not text_to_match:
+            return jsonify({'error': 'Text to match is required.'}), 400
+        if not category_id and not category_name:
+            return jsonify({'error': 'A category selection is required.'}), 400
 
         if len(text_to_match) > 512:
             text_to_match = text_to_match[:512]
-        if len(label) > 255:
-            label = label[:255]
+        if category_name and len(category_name) > 255:
+            category_name = category_name[:255]
 
         field_to_match = _resolve_rule_field(payload.get('field_to_match'))
         transaction_type = _resolve_rule_type(payload.get('transaction_type'))
@@ -1971,23 +2450,47 @@ def create_category_rule():
         try:
             amount_min = _parse_decimal_value(payload.get('amount_min'))
             amount_max = _parse_decimal_value(payload.get('amount_max'))
-            color = _normalize_color(payload.get('color'))
         except ValueError as exc:
             return jsonify({'error': str(exc)}), 400
 
         if amount_min is not None and amount_max is not None and amount_min > amount_max:
             return jsonify({'error': 'Amount >= cannot be greater than Amount <='}), 400
 
-        rule = Category(
+        category = None
+        if category_id:
+            try:
+                category_id = int(category_id)
+            except (TypeError, ValueError):
+                return jsonify({'error': 'Invalid category id.'}), 400
+            category = CustomCategory.query.filter_by(id=category_id, user_id=current_user.id).first()
+            if not category:
+                return jsonify({'error': 'Selected category was not found.'}), 404
+        else:
+            color_value = payload.get('color')
+            try:
+                normalized_color = _normalize_color(color_value) if color_value else DEFAULT_MANUAL_COLOR
+            except ValueError as exc:
+                return jsonify({'error': str(exc)}), 400
+            category = CustomCategory.query.filter_by(user_id=current_user.id, name=category_name).first()
+            if not category:
+                category = CustomCategory(
+                    user_id=current_user.id,
+                    name=category_name,
+                    color=normalized_color
+                )
+                db.session.add(category)
+                db.session.flush()
+
+        rule = CategoryRule(
             user_id=current_user.id,
+            category_id=category.id,
             text_to_match=text_to_match,
-            label=label,
             field_to_match=field_to_match,
             transaction_type=transaction_type,
             amount_min=amount_min,
-            amount_max=amount_max,
-            color=color
+            amount_max=amount_max
         )
+        rule.category = category
         db.session.add(rule)
         db.session.flush()
 
@@ -2008,21 +2511,26 @@ def create_category_rule():
 def update_category_rule(category_id):
     ensure_category_schema()
     def handler():
-        rule = Category.query.filter_by(id=category_id, user_id=current_user.id).first()
+        rule = CategoryRule.query.options(
+            joinedload(CategoryRule.category)
+        ).filter_by(id=category_id, user_id=current_user.id).first()
         if not rule:
             return jsonify({'error': 'Category rule not found.'}), 404
 
         payload = request.get_json() or {}
         text_to_match = (payload.get('text_to_match') or '').strip()
-        label = (_extract_label(payload) or '').strip()
+        category_id_payload = payload.get('category_id')
+        category_name = (_extract_label(payload) or '').strip()
 
-        if not text_to_match or not label:
-            return jsonify({'error': 'Both text_to_match and label are required.'}), 400
+        if not text_to_match:
+            return jsonify({'error': 'Text to match is required.'}), 400
+        if not category_id_payload and not category_name:
+            return jsonify({'error': 'A category selection is required.'}), 400
 
         if len(text_to_match) > 512:
             text_to_match = text_to_match[:512]
-        if len(label) > 255:
-            label = label[:255]
+        if category_name and len(category_name) > 255:
+            category_name = category_name[:255]
 
         field_to_match = _resolve_rule_field(payload.get('field_to_match'))
         transaction_type = _resolve_rule_type(payload.get('transaction_type'))
@@ -2030,20 +2538,39 @@ def update_category_rule(category_id):
         try:
             amount_min = _parse_decimal_value(payload.get('amount_min'))
             amount_max = _parse_decimal_value(payload.get('amount_max'))
-            color = _normalize_color(payload.get('color'))
         except ValueError as exc:
             return jsonify({'error': str(exc)}), 400
 
         if amount_min is not None and amount_max is not None and amount_min > amount_max:
             return jsonify({'error': 'Amount >= cannot be greater than Amount <='}), 400
 
+        category = None
+        if category_id_payload:
+            try:
+                category_id_value = int(category_id_payload)
+            except (TypeError, ValueError):
+                return jsonify({'error': 'Invalid category id.'}), 400
+            category = CustomCategory.query.filter_by(id=category_id_value, user_id=current_user.id).first()
+            if not category:
+                return jsonify({'error': 'Selected category was not found.'}), 404
+        else:
+            category = CustomCategory.query.filter_by(user_id=current_user.id, name=category_name).first()
+            if not category:
+                category = CustomCategory(
+                    user_id=current_user.id,
+                    name=category_name,
+                    color=DEFAULT_MANUAL_COLOR
+                )
+                db.session.add(category)
+                db.session.flush()
+
         rule.text_to_match = text_to_match
-        rule.label = label
         rule.field_to_match = field_to_match
         rule.transaction_type = transaction_type
         rule.amount_min = amount_min
         rule.amount_max = amount_max
-        rule.color = color
+        rule.category_id = category.id
+        rule.category = category
 
         db.session.flush()
 
@@ -2064,7 +2591,7 @@ def update_category_rule(category_id):
 def delete_category_rule(category_id):
     ensure_category_schema()
     def handler():
-        rule = Category.query.filter_by(id=category_id, user_id=current_user.id).first()
+        rule = CategoryRule.query.filter_by(id=category_id, user_id=current_user.id).first()
         if not rule:
             return jsonify({'error': 'Category rule not found.'}), 404
 

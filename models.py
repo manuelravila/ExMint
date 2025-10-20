@@ -9,27 +9,50 @@ from config import Config
 db = SQLAlchemy()
 key = Config.ENCRYPTION_KEY
 
-class Category(db.Model):
-    __tablename__ = 'categories'
+class CustomCategory(db.Model):
+    __tablename__ = 'custom_categories'
+    __table_args__ = (
+        db.UniqueConstraint('user_id', 'name', name='uq_custom_categories_user_name'),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    label = db.Column(db.String(255), nullable=False)
+    name = db.Column(db.String(255), nullable=False)
+    color = db.Column(db.String(7), nullable=False, default='#2C6B4F')
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    user = db.relationship('User', backref=db.backref('custom_categories', lazy=True))
+    transactions = db.relationship('Transaction', back_populates='custom_category', lazy=True)
+    overrides = db.relationship('TransactionCategoryOverride', back_populates='custom_category', lazy=True)
+    rules = db.relationship('CategoryRule', back_populates='category', lazy=True)
+
+    def __repr__(self):
+        return f'<CustomCategory {self.name}>'
+
+
+class CategoryRule(db.Model):
+    __tablename__ = 'category_rules'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    category_id = db.Column(db.Integer, db.ForeignKey('custom_categories.id', ondelete='CASCADE'), nullable=False)
     text_to_match = db.Column(db.String(512), nullable=False)
     field_to_match = db.Column(db.String(50), nullable=False, default='description')
     transaction_type = db.Column(db.String(20), nullable=True)
     amount_min = db.Column(db.Numeric(14, 2), nullable=True)
     amount_max = db.Column(db.Numeric(14, 2), nullable=True)
-    color = db.Column(db.String(7), nullable=False, default='#2C6B4F')
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
-    # Relationship to user and transactions
-    user = db.relationship('User', backref=db.backref('categories', lazy=True))
-    transactions = db.relationship('Transaction', back_populates='custom_category', lazy=True)
+    user = db.relationship('User', backref=db.backref('category_rules', lazy=True))
+    category = db.relationship('CustomCategory', back_populates='rules', lazy=True)
 
     def __repr__(self):
-        return f'<Category {self.label}>'
+        return f'<CategoryRule {self.text_to_match} -> {self.category_id}>'
+
+# Backwards compatibility alias. Remove once callers are updated.
+Category = CategoryRule
 
 class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -39,7 +62,6 @@ class User(UserMixin, db.Model):
     credentials = db.relationship('Credential', backref='user', lazy=True)
     status = db.Column(db.String(20), nullable=False, default='Active')
     role = db.Column(db.String(20), nullable=False, default='User')
-
 
     transactions = db.relationship('Transaction', backref='user', lazy=True)
     budgets = db.relationship('Budget', backref='user', lazy=True)
@@ -97,7 +119,7 @@ class Transaction(db.Model):
     last_action = db.Column(db.String(20), nullable=False, default='added')
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
-    custom_category_id = db.Column(db.Integer, db.ForeignKey('categories.id'), nullable=True)
+    custom_category_id = db.Column(db.Integer, db.ForeignKey('custom_categories.id'), nullable=True)
     parent_transaction_id = db.Column(db.Integer, db.ForeignKey('transactions.id'), nullable=True)
     is_split_child = db.Column(db.Boolean, nullable=False, default=False)
     has_split_children = db.Column(db.Boolean, nullable=False, default=False)
@@ -106,7 +128,7 @@ class Transaction(db.Model):
     last_seen_by_user = db.Column(db.DateTime, nullable=True)
 
     credential = db.relationship('Credential', backref=db.backref('transactions', lazy=True))
-    custom_category = db.relationship('Category', back_populates='transactions', lazy=True)
+    custom_category = db.relationship('CustomCategory', back_populates='transactions', lazy=True)
     parent_transaction = db.relationship(
         'Transaction',
         remote_side=[id],
@@ -122,11 +144,11 @@ class TransactionCategoryOverride(db.Model):
     __tablename__ = 'transaction_category_override'
 
     transaction_id = db.Column(db.Integer, db.ForeignKey('transactions.id'), primary_key=True)
-    label = db.Column(db.String(255), nullable=False)
-    color = db.Column(db.String(7), nullable=True)
+    custom_category_id = db.Column(db.Integer, db.ForeignKey('custom_categories.id'), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
 
     transaction = db.relationship('Transaction', backref=db.backref('manual_override_record', uselist=False, cascade='all, delete-orphan'))
+    custom_category = db.relationship('CustomCategory', back_populates='overrides', lazy=True)
 
 class Budget(db.Model):
     __tablename__ = 'budgets'
@@ -138,5 +160,3 @@ class Budget(db.Model):
     amount = db.Column(db.Numeric(14, 2), nullable=False)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
-
-

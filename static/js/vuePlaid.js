@@ -176,12 +176,19 @@ const app = new Vue({
         selectedAccountIds: [],
         transactions: [],
         categoryRules: [],
+        customCategories: [],
         categoryLabels: [],
         categoriesError: null,
+        customCategoriesError: null,
         filters: {
             search: '',
             sortKey: 'date',
-            sortDesc: true
+            sortDesc: true,
+            startDate: '',
+            endDate: '',
+            customCategoryId: '',
+            amountMin: '',
+            amountMax: ''
         },
         syncing: false,
         loading: true,
@@ -199,8 +206,12 @@ const app = new Vue({
         transactionsCollapsed: false,
         categoriesLoading: false,
         categoriesLoaded: false,
+        customCategoriesLoading: false,
+        customCategoriesLoaded: false,
+        categoryTab: 'manage',
         nextCategoryTempId: 0,
-        openColorRuleId: null,
+        nextCustomCategoryTempId: 0,
+        openCategoryColorId: null,
         categoryPalette: [
             '#2C6B4F', '#F94144', '#F3722C', '#F8961E',
             '#F9844A', '#F9C74F', '#90BE6D', '#43AA8B',
@@ -270,7 +281,15 @@ const app = new Vue({
         selectedSpendingYear: null,
         openSpendingMonths: {},
         dashboardTab: 'summary',
-        nextSplitRowId: 0
+        nextSplitRowId: 0,
+        isSidebarCollapsed: false,
+        isMobileView: false,
+        mobileCardCollapsed: {
+            balances: false,
+            spending: false
+        },
+        lastDesktopSidebarPreference: null,
+        mobileSidebarVisible: false
     },
     computed: {
         totalAccountCount: function() {
@@ -304,9 +323,9 @@ const app = new Vue({
         },
         transactionCategoryOptions: function() {
             const values = new Set();
-            this.categoryRules.forEach(rule => {
-                if (rule.label) {
-                    values.add(rule.label);
+            this.customCategories.forEach(category => {
+                if (category.name) {
+                    values.add(category.name);
                 }
             });
             this.budgets.forEach(budget => {
@@ -327,6 +346,28 @@ const app = new Vue({
                 }
             });
             return Array.from(values).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+        },
+        customCategoryFilterOptions: function() {
+            return this.customCategories
+                .filter(category => category && category.id && category.name)
+                .map(category => ({
+                    id: String(category.id),
+                    label: category.name
+                }))
+                .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }));
+        },
+        hasActiveTransactionFilters: function() {
+            const defaults = {
+                search: '',
+                sortKey: 'date',
+                sortDesc: true,
+                startDate: '',
+                endDate: '',
+                customCategoryId: '',
+                amountMin: '',
+                amountMax: ''
+            };
+            return Object.keys(defaults).some(key => this.filters[key] !== defaults[key]);
         },
         filteredTransactionSuggestions: function() {
             if (this.editingTransactionCategoryId === null) {
@@ -472,6 +513,7 @@ const app = new Vue({
             this.loading = true;
             try {
                 await this.fetchBanks();
+                await this.fetchCustomCategories({ suppressLoader: true });
                 await this.fetchTransactions({ reset: true, skipLoadingState: true });
                 if (this.activePane === 'categories') {
                     await this.fetchCategories({ refresh: true, suppressLoader: true });
@@ -495,6 +537,9 @@ const app = new Vue({
                 return;
             }
             this.activePane = pane;
+            if (this.isMobileView && this.mobileSidebarVisible) {
+                this.closeMobileSidebar();
+            }
             if (pane !== 'transactions') {
                 this.cancelTransactionCategoryEdit();
             }
@@ -525,11 +570,111 @@ const app = new Vue({
                 this.updateStickyPositions();
             });
         },
+        setCategoryTab: async function(tab) {
+            if (this.categoryTab === tab) {
+                return;
+            }
+            this.categoryTab = tab;
+            if (tab !== 'manage' && this.openCategoryColorId !== null) {
+                this.openCategoryColorId = null;
+            }
+            if (tab === 'manage') {
+                if (!this.customCategoriesLoaded) {
+                    await this.fetchCustomCategories();
+                }
+            } else if (tab === 'rules') {
+                if (!this.categoriesLoaded) {
+                    await this.fetchCategoryRules();
+                }
+            }
+        },
         toggleTransactionsCollapse: function() {
             this.transactionsCollapsed = !this.transactionsCollapsed;
             this.$nextTick(() => {
                 this.updateStickyPositions();
             });
+        },
+        toggleSidebarCollapse: function() {
+            if (this.isMobileView) {
+                return;
+            }
+            this.isSidebarCollapsed = !this.isSidebarCollapsed;
+            this.lastDesktopSidebarPreference = this.isSidebarCollapsed;
+            this.persistSidebarState();
+            this.$nextTick(() => {
+                this.updateStickyPositions();
+            });
+        },
+        toggleMobileSidebar: function() {
+            if (!this.isMobileView) {
+                return;
+            }
+            this.mobileSidebarVisible = !this.mobileSidebarVisible;
+            if (this.mobileSidebarVisible) {
+                this.transactionsCollapsed = false;
+            }
+        },
+        closeMobileSidebar: function() {
+            if (!this.mobileSidebarVisible) {
+                return;
+            }
+            this.mobileSidebarVisible = false;
+        },
+        sidebarTooltip: function(label) {
+            if (this.isMobileView) {
+                return null;
+            }
+            return this.isSidebarCollapsed ? label : null;
+        },
+        initializeSidebarState: function() {
+            try {
+                const stored = window.localStorage.getItem('exmintSidebarCollapsed');
+                if (stored !== null) {
+                    this.isSidebarCollapsed = stored === 'true';
+                }
+                this.lastDesktopSidebarPreference = this.isSidebarCollapsed;
+            } catch (error) {
+                // Silently ignore storage issues to avoid degrading UX.
+            }
+        },
+        persistSidebarState: function() {
+            try {
+                window.localStorage.setItem('exmintSidebarCollapsed', this.isSidebarCollapsed ? 'true' : 'false');
+            } catch (error) {
+                // Silently ignore storage issues to avoid degrading UX.
+            }
+        },
+        evaluateViewportState: function() {
+            if (typeof window === 'undefined') {
+                return;
+            }
+            const isMobile = window.innerWidth < 992;
+            if (isMobile && !this.isMobileView) {
+                this.lastDesktopSidebarPreference = this.isSidebarCollapsed;
+                if (this.isSidebarCollapsed) {
+                    this.isSidebarCollapsed = false;
+                }
+                this.mobileCardCollapsed.balances = false;
+                this.mobileCardCollapsed.spending = false;
+            } else if (!isMobile && this.isMobileView) {
+                if (this.lastDesktopSidebarPreference !== null) {
+                    this.isSidebarCollapsed = this.lastDesktopSidebarPreference;
+                }
+            }
+            this.isMobileView = isMobile;
+            if (!isMobile) {
+                this.mobileSidebarVisible = false;
+                this.mobileCardCollapsed.balances = false;
+                this.mobileCardCollapsed.spending = false;
+            } else {
+                this.mobileSidebarVisible = false;
+            }
+        },
+        toggleMobileCard: function(card) {
+            if (!this.isMobileView || !this.mobileCardCollapsed.hasOwnProperty(card)) {
+                return;
+            }
+            this.$set(this.mobileCardCollapsed, card, !this.mobileCardCollapsed[card]);
         },
         fetchDashboard: async function(options = {}) {
             const { suppressLoader = false, force = false } = options;
@@ -732,9 +877,9 @@ const app = new Vue({
 
             const payload = { label: trimmed };
             if (trimmed) {
-                const matchingRule = this.categoryRules.find(rule => rule.label === trimmed);
-                if (matchingRule && matchingRule.color) {
-                    payload.color = matchingRule.color;
+                const match = this.customCategories.find(cat => cat.name && cat.name.toLowerCase() === trimmed.toLowerCase());
+                if (match && match.color) {
+                    payload.color = match.color;
                 }
             }
 
@@ -752,6 +897,7 @@ const app = new Vue({
                 if (data.transaction) {
                     Object.assign(transaction, data.transaction);
                 }
+                await this.fetchCustomCategories({ force: true, suppressLoader: true, refresh: true });
                 this.cancelTransactionCategoryEdit();
             } catch (error) {
                 console.error('Error updating transaction category:', error);
@@ -840,14 +986,15 @@ const app = new Vue({
             }
 
             await this.ensureCategoriesPane();
+            await this.setCategoryTab('rules');
             const description = transaction.name || '';
             const newRule = this.addCategoryRule({
                 text_to_match: description,
                 field_to_match: 'description',
                 transaction_type: '',
-                label: ''
+                category_name: ''
             });
-            this.highlightRuleRow(newRule.localId, { focusField: 'label' });
+            this.highlightRuleRow(newRule.localId, { focusField: 'category' });
         },
         handleTransactionMenuManualOverride: function() {
             const contextTransaction = this.transactionMenu.transaction;
@@ -1225,8 +1372,13 @@ const app = new Vue({
         ensureCategoriesPane: async function() {
             if (this.activePane !== 'categories') {
                 await this.setActivePane('categories');
-            } else if (!this.categoriesLoaded && !this.categoriesLoading) {
-                await this.fetchCategories();
+            } else {
+                if (!this.customCategoriesLoaded && !this.customCategoriesLoading) {
+                    await this.fetchCustomCategories();
+                }
+                if (!this.categoriesLoaded && !this.categoriesLoading) {
+                    await this.fetchCategoryRules();
+                }
             }
         },
         focusRuleById: async function(ruleId) {
@@ -1234,6 +1386,7 @@ const app = new Vue({
                 return;
             }
             await this.ensureCategoriesPane();
+            await this.setCategoryTab('rules');
             const rule = this.categoryRules.find(item => item.id === ruleId);
             if (rule) {
                 this.highlightRuleRow(rule.localId);
@@ -1271,7 +1424,7 @@ const app = new Vue({
             if (!localId || !target) {
                 return;
             }
-            const refName = target === 'label' ? `ruleLabelInput-${localId}` : `ruleTextInput-${localId}`;
+            const refName = target === 'category' ? `ruleCategoryInput-${localId}` : `ruleTextInput-${localId}`;
             const refs = this.$refs[refName];
             const input = Array.isArray(refs) ? refs[0] : refs;
             if (input && typeof input.focus === 'function') {
@@ -1300,9 +1453,11 @@ const app = new Vue({
             if (!rule) {
                 return;
             }
-            const text = (rule.text_to_match || '').trim();
-            const label = (rule.label || '').trim();
-            if (text && label) {
+            const draftText = rule.draft ? (rule.draft.text_to_match || '').trim() : '';
+            const draftCategory = rule.draft ? (rule.draft.category_name || '').trim() : '';
+            const text = (rule.text_to_match || '').trim() || draftText;
+            const categoryName = (rule.category_name || '').trim() || draftCategory;
+            if (text && categoryName) {
                 return;
             }
             if (rule.isNew) {
@@ -1586,8 +1741,41 @@ const app = new Vue({
                 this.closeBudgetCategoryDropdown();
             }
         },
-        fetchCategories: async function(options = {}) {
+        fetchCustomCategories: async function(options = {}) {
             const { force = false, suppressLoader = false } = options;
+            if (this.customCategoriesLoading) {
+                return;
+            }
+            if (!force && this.customCategoriesLoaded && !options.refresh) {
+                return;
+            }
+
+            if (!suppressLoader) {
+                this.customCategoriesLoading = true;
+            }
+            this.customCategoriesError = null;
+
+            try {
+                const response = await fetch('/api/custom-categories');
+                if (!response.ok) {
+                    throw new Error('Failed to load custom categories.');
+                }
+                const data = await response.json();
+                this.customCategories = (data.categories || []).map(cat => this.prepareCustomCategory(cat));
+                this.customCategoriesLoaded = true;
+                this.updateCategoryLabels(data.labels);
+            } catch (error) {
+                console.error('Error fetching custom categories:', error);
+                this.customCategoriesError = error.message || 'Failed to load custom categories.';
+            } finally {
+                this.customCategoriesLoading = false;
+            }
+        },
+        fetchCategoryRules: async function(options = {}) {
+            const { force = false, suppressLoader = false } = options;
+            if (this.categoriesLoading) {
+                return;
+            }
             if (!force && this.categoriesLoaded) {
                 const hasDirty = this.categoryRules.some(rule => rule.isDirty && !rule.saving);
                 if (hasDirty) {
@@ -1606,22 +1794,53 @@ const app = new Vue({
             try {
                 const response = await fetch('/api/categories');
                 if (!response.ok) {
-                    throw new Error('Failed to load categories.');
+                    throw new Error('Failed to load category rules.');
                 }
                 const data = await response.json();
                 this.categoryRules = (data.categories || []).map(rule => this.prepareCategoryRule(rule));
                 this.categoriesLoaded = true;
-                this.updateCategoryLabels(data.labels);
+                if (data.labels) {
+                    this.updateCategoryLabels(data.labels);
+                } else {
+                    this.updateCategoryLabels();
+                }
+                this.categoryRules.forEach(rule => this.resetRuleDraft(rule));
             } catch (error) {
-                console.error('Error fetching categories:', error);
-                this.categoriesError = error.message || 'Failed to load categories.';
+                console.error('Error fetching category rules:', error);
+                this.categoriesError = error.message || 'Failed to load category rules.';
             } finally {
                 this.categoriesLoading = false;
             }
         },
+        fetchCategories: async function(options = {}) {
+            await this.fetchCustomCategories(options);
+            await this.fetchCategoryRules(options);
+        },
+        prepareCustomCategory: function(raw) {
+            const categoryId = raw.id || null;
+            const normalizedColor = this.normalizeColor(raw.color);
+            return {
+                id: categoryId,
+                localId: categoryId ? `cat-${categoryId}` : `local-cat-${Date.now()}-${++this.nextCustomCategoryTempId}`,
+                name: raw.name || '',
+                color: normalizedColor,
+                rule_count: Number.isFinite(raw.rule_count) ? raw.rule_count : 0,
+                transaction_count: Number.isFinite(raw.transaction_count) ? raw.transaction_count : 0,
+                override_count: Number.isFinite(raw.override_count) ? raw.override_count : 0,
+                isDirty: false,
+                isNew: !categoryId,
+                saving: false,
+                isEditing: false,
+                editableName: raw.name || '',
+                editableColor: normalizedColor
+            };
+        },
         prepareCategoryRule: function(raw) {
             const ruleId = raw.id || null;
-            const normalizedColor = this.normalizeColor(raw.color);
+            const categoryInfo = raw.category || {};
+            const categoryId = raw.category_id || categoryInfo.id || null;
+            const categoryName = categoryInfo.name || '';
+            const categoryColor = this.normalizeColor(categoryInfo.color);
             return {
                 id: ruleId,
                 localId: ruleId ? `rule-${ruleId}` : `local-${Date.now()}-${++this.nextCategoryTempId}`,
@@ -1630,16 +1849,19 @@ const app = new Vue({
                 transaction_type: raw.transaction_type || '',
                 amount_min: raw.amount_min !== null && raw.amount_min !== undefined ? String(raw.amount_min) : '',
                 amount_max: raw.amount_max !== null && raw.amount_max !== undefined ? String(raw.amount_max) : '',
-                color: normalizedColor,
-                label: raw.label || '',
+                category_id: categoryId,
+                category_name: categoryName,
+                category_color: categoryColor,
                 isDirty: false,
                 isNew: false,
-                saving: false
+                saving: false,
+                isEditing: false,
+                draft: null
             };
         },
         addCategoryRule: function(initial = {}) {
             const tempId = `new-${Date.now()}-${++this.nextCategoryTempId}`;
-            const defaultColor = initial.color ? this.normalizeColor(initial.color) : this.categoryPalette[0];
+            const initialColor = initial.category_color ? this.normalizeColor(initial.category_color) : this.categoryPalette[0];
             const newRule = {
                 id: null,
                 localId: tempId,
@@ -1648,45 +1870,331 @@ const app = new Vue({
                 transaction_type: initial.transaction_type || '',
                 amount_min: initial.amount_min || '',
                 amount_max: initial.amount_max || '',
-                color: defaultColor,
-                label: initial.label || '',
+                category_id: initial.category_id || null,
+                category_name: initial.category_name || '',
+                category_color: initialColor,
                 isDirty: initial.isDirty !== undefined ? initial.isDirty : true,
                 isNew: true,
-                saving: false
+                saving: false,
+                isEditing: true,
+                draft: null
             };
             this.categoryRules.unshift(newRule);
             this.categoriesLoaded = true;
             this.categoriesError = null;
             this.updateCategoryLabels();
+            this.resetRuleDraft(newRule);
+            if (newRule.isNew && newRule.draft) {
+                const hasText = (newRule.draft.text_to_match || '').trim().length > 0;
+                newRule.isDirty = hasText;
+            }
+            this.highlightRuleRow(newRule.localId, { focusField: 'text' });
             return newRule;
         },
-        markRuleDirty: function(rule) {
+        addCustomCategory: function(initial = {}) {
+            const tempId = `cat-new-${Date.now()}-${++this.nextCustomCategoryTempId}`;
+            const newCategory = {
+                id: null,
+                localId: tempId,
+                name: initial.name || '',
+                color: initial.color ? this.normalizeColor(initial.color) : this.categoryPalette[0],
+                rule_count: 0,
+                transaction_count: 0,
+                override_count: 0,
+                isDirty: initial.isDirty !== undefined ? initial.isDirty : true,
+                isNew: true,
+                saving: false,
+                isEditing: true,
+                editableName: initial.name || '',
+                editableColor: initial.color ? this.normalizeColor(initial.color) : this.categoryPalette[0]
+            };
+            this.customCategories.unshift(newCategory);
+            this.customCategoriesLoaded = true;
+            this.customCategoriesError = null;
+            this.updateCategoryLabels();
+            this.$nextTick(() => {
+                const ref = this.$refs[`categoryNameInput-${newCategory.localId}`];
+                const input = Array.isArray(ref) ? ref[0] : ref;
+                if (input && typeof input.focus === 'function') {
+                    input.focus();
+                }
+            });
+            return newCategory;
+        },
+        markCustomCategoryDirty: function(category) {
+            if (!category) {
+                return;
+            }
+            category.isDirty = true;
+            this.customCategoriesError = null;
+        },
+        saveCustomCategory: async function(category) {
+            if (!category || category.saving) {
+                return;
+            }
+            const name = (category.editableName || category.name || '').trim();
+            if (!name) {
+                this.customCategoriesError = 'Category name is required.';
+                return;
+            }
+            const payload = {
+                name,
+                color: this.normalizeColor(category.editableColor || category.color)
+            };
+
+            const url = category.id ? `/api/custom-categories/${category.id}` : '/api/custom-categories';
+            const method = category.id ? 'PUT' : 'POST';
+
+            category.saving = true;
+            try {
+                const response = await fetch(url, {
+                    method,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to save category.');
+                }
+                const updated = data.category || {};
+                const prepared = this.prepareCustomCategory(updated);
+                category.id = prepared.id;
+                category.localId = prepared.localId;
+                category.name = prepared.name;
+                category.color = prepared.color;
+                category.editableName = prepared.name;
+                category.editableColor = prepared.color;
+                category.rule_count = prepared.rule_count;
+                category.transaction_count = prepared.transaction_count;
+                category.override_count = prepared.override_count;
+                category.isDirty = false;
+                category.isNew = false;
+                category.isEditing = false;
+                if (this.openCategoryColorId === category.localId) {
+                    this.openCategoryColorId = null;
+                }
+                this.customCategoriesError = null;
+                this.updateCategoryLabels(data.labels);
+                this.categoryRules.forEach(rule => {
+                    if (rule.category_id === category.id) {
+                        rule.category_name = category.name;
+                        rule.category_color = category.color;
+                        rule.isDirty = false;
+                        this.resetRuleDraft(rule);
+                    }
+                });
+                await this.fetchTransactions({ reset: false, skipLoadingState: true });
+                await this.fetchCategoryRules({ force: true, suppressLoader: true, refresh: true });
+            } catch (error) {
+                console.error('Error saving custom category:', error);
+                this.customCategoriesError = error.message || 'Failed to save category.';
+            } finally {
+                category.saving = false;
+            }
+        },
+        deleteCustomCategory: async function(category) {
+            if (!category || category.saving) {
+                return;
+            }
+
+            if (!category.id) {
+                if (this.openCategoryColorId === category.localId) {
+                    this.openCategoryColorId = null;
+                }
+                this.customCategories = this.customCategories.filter(item => item.localId !== category.localId);
+                this.updateCategoryLabels();
+                this.customCategoriesError = null;
+                return;
+            }
+
+            if (!window.confirm('Delete this custom category and associated rules?')) {
+                return;
+            }
+
+            category.saving = true;
+            try {
+                const response = await fetch(`/api/custom-categories/${category.id}`, { method: 'DELETE' });
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to delete category.');
+                }
+                if (this.openCategoryColorId === category.localId) {
+                    this.openCategoryColorId = null;
+                }
+                this.customCategories = this.customCategories.filter(item => item.localId !== category.localId);
+                this.customCategoriesError = null;
+                this.updateCategoryLabels(data.labels);
+                await this.fetchCategoryRules({ force: true, suppressLoader: true, refresh: true });
+                await this.fetchTransactions({ reset: true, skipLoadingState: true });
+            } catch (error) {
+                console.error('Error deleting custom category:', error);
+                this.customCategoriesError = error.message || 'Failed to delete category.';
+            } finally {
+                category.saving = false;
+            }
+        },
+        startCustomCategoryEdit: function(category) {
+            if (!category || category.saving) {
+                return;
+            }
+            category.editableName = category.name || '';
+            category.editableColor = this.normalizeColor(category.color);
+            category.isEditing = true;
+            category.isDirty = false;
+            this.customCategoriesError = null;
+            this.$nextTick(() => {
+                const ref = this.$refs[`categoryNameInput-${category.localId}`];
+                const input = Array.isArray(ref) ? ref[0] : ref;
+                if (input && typeof input.focus === 'function') {
+                    input.focus();
+                    input.select();
+                }
+            });
+        },
+        cancelCustomCategoryEdit: function(category) {
+            if (!category) {
+                return;
+            }
+            if (!category.id && category.isNew) {
+                this.customCategories = this.customCategories.filter(item => item.localId !== category.localId);
+                return;
+            }
+            category.editableName = category.name || '';
+            category.editableColor = this.normalizeColor(category.color);
+            category.isEditing = false;
+            category.isDirty = false;
+            this.customCategoriesError = null;
+            if (this.openCategoryColorId === category.localId) {
+                this.openCategoryColorId = null;
+            }
+        },
+        createRuleDraft: function(rule) {
+            return {
+                text_to_match: rule.text_to_match || '',
+                field_to_match: rule.field_to_match || 'description',
+                transaction_type: rule.transaction_type || '',
+                amount_min: rule.amount_min !== null && rule.amount_min !== undefined ? String(rule.amount_min) : '',
+                amount_max: rule.amount_max !== null && rule.amount_max !== undefined ? String(rule.amount_max) : '',
+                category_id: rule.category_id || null,
+                category_name: rule.category_name || '',
+                category_color: this.normalizeColor(rule.category_color)
+            };
+        },
+        resetRuleDraft: function(rule) {
             if (!rule) {
+                return;
+            }
+            rule.draft = this.createRuleDraft(rule);
+            rule.isDirty = false;
+        },
+        startRuleEdit: function(rule) {
+            if (!rule || rule.saving) {
+                return;
+            }
+            this.resetRuleDraft(rule);
+            rule.isEditing = true;
+            this.categoriesError = null;
+            this.highlightRuleRow(rule.localId);
+            this.$nextTick(() => {
+                const ref = this.$refs[`ruleTextInput-${rule.localId}`];
+                const input = Array.isArray(ref) ? ref[0] : ref;
+                if (input && typeof input.focus === 'function') {
+                    input.focus();
+                    input.select();
+                }
+            });
+        },
+        cancelRuleEdit: function(rule) {
+            if (!rule) {
+                return;
+            }
+            if (!rule.id && rule.isNew) {
+                this.categoryRules = this.categoryRules.filter(item => item.localId !== rule.localId);
+                this.updateCategoryLabels();
+                return;
+            }
+            this.resetRuleDraft(rule);
+            rule.isEditing = false;
+            this.categoriesError = null;
+        },
+        markRuleDraftDirty: function(rule) {
+            if (!rule) {
+                return;
+            }
+            if (!rule.isEditing && !rule.isNew) {
                 return;
             }
             rule.isDirty = true;
             this.categoriesError = null;
         },
+        markRuleDirty: function(rule) {
+            this.markRuleDraftDirty(rule);
+        },
+        handleRuleCategoryInput: function(rule) {
+            if (!rule) {
+                return;
+            }
+            const draft = rule.draft || this.createRuleDraft(rule);
+            const name = (draft.category_name || '').trim().toLowerCase();
+            if (name) {
+                const match = this.customCategories.find(cat => cat.name && cat.name.toLowerCase() === name);
+                if (match) {
+                    draft.category_id = match.id;
+                    draft.category_name = match.name;
+                    draft.category_color = match.color;
+                } else {
+                    draft.category_id = null;
+                    draft.category_color = this.normalizeColor(this.categoryPalette[0]);
+                }
+            } else {
+                draft.category_id = null;
+                draft.category_color = this.normalizeColor(this.categoryPalette[0]);
+            }
+            this.markRuleDraftDirty(rule);
+        },
         saveCategoryRule: async function(rule) {
             if (!rule || rule.saving) {
                 return;
             }
-            const text = (rule.text_to_match || '').trim();
-            const label = (rule.label || '').trim();
-            if (!text || !label) {
-                this.categoriesError = 'Both "Text to match" and "Custom Category" are required.';
+            if (!rule.isEditing && !rule.isNew) {
+                this.startRuleEdit(rule);
+                return;
+            }
+            const draft = rule.draft || this.createRuleDraft(rule);
+            const text = (draft.text_to_match || '').trim();
+            let categoryName = (draft.category_name || '').trim();
+            let categoryId = draft.category_id;
+            if (!categoryId && categoryName) {
+                const match = this.customCategories.find(cat => cat.name && cat.name.toLowerCase() === categoryName.toLowerCase());
+                if (match) {
+                    categoryId = match.id;
+                    draft.category_id = match.id;
+                    draft.category_color = match.color;
+                    categoryName = match.name;
+                }
+            }
+            if (!text) {
+                this.categoriesError = '"Text to match" is required.';
+                return;
+            }
+            if (!categoryId && !categoryName) {
+                this.categoriesError = 'Select or enter a custom category.';
                 return;
             }
 
             const payload = {
                 text_to_match: text,
-                field_to_match: rule.field_to_match || 'description',
-                transaction_type: rule.transaction_type || null,
-                amount_min: rule.amount_min === '' || rule.amount_min === null ? null : rule.amount_min,
-                amount_max: rule.amount_max === '' || rule.amount_max === null ? null : rule.amount_max,
-                label: label,
-                color: this.normalizeColor(rule.color)
+                field_to_match: draft.field_to_match || 'description',
+                transaction_type: draft.transaction_type || null,
+                amount_min: draft.amount_min === '' || draft.amount_min === null ? null : draft.amount_min,
+                amount_max: draft.amount_max === '' || draft.amount_max === null ? null : draft.amount_max
             };
+
+            if (categoryId) {
+                payload.category_id = categoryId;
+            } else {
+                payload.custom_category = categoryName;
+            }
 
             const url = rule.id ? `/api/categories/${rule.id}` : '/api/categories';
             const method = rule.id ? 'PUT' : 'POST';
@@ -1705,18 +2213,22 @@ const app = new Vue({
                 const updated = data.category || {};
                 rule.id = updated.id;
                 rule.localId = updated.id ? `rule-${updated.id}` : rule.localId;
-                rule.text_to_match = updated.text_to_match || '';
-                rule.field_to_match = updated.field_to_match || 'description';
-                rule.transaction_type = updated.transaction_type || '';
-                rule.amount_min = updated.amount_min !== null && updated.amount_min !== undefined ? String(updated.amount_min) : '';
-                rule.amount_max = updated.amount_max !== null && updated.amount_max !== undefined ? String(updated.amount_max) : '';
-                rule.color = this.normalizeColor(updated.color);
-                rule.label = updated.label || '';
+                rule.text_to_match = updated.text_to_match || draft.text_to_match || '';
+                rule.field_to_match = updated.field_to_match || draft.field_to_match || 'description';
+                rule.transaction_type = updated.transaction_type || draft.transaction_type || '';
+                rule.amount_min = updated.amount_min !== null && updated.amount_min !== undefined ? String(updated.amount_min) : (draft.amount_min || '');
+                rule.amount_max = updated.amount_max !== null && updated.amount_max !== undefined ? String(updated.amount_max) : (draft.amount_max || '');
+                const updatedCategory = updated.category || {};
+                rule.category_id = updated.category_id || updatedCategory.id || draft.category_id || null;
+                rule.category_name = updatedCategory.name || draft.category_name || '';
+                rule.category_color = this.normalizeColor(updatedCategory.color || draft.category_color || rule.category_color);
                 rule.isDirty = false;
                 rule.isNew = false;
+                rule.isEditing = false;
                 this.categoriesError = null;
+                this.resetRuleDraft(rule);
                 this.updateCategoryLabels(data.labels);
-                this.openColorRuleId = null;
+                await this.fetchCustomCategories({ force: true, suppressLoader: true, refresh: true });
                 await this.fetchTransactions({ reset: true, skipLoadingState: true });
             } catch (error) {
                 console.error('Error saving category rule:', error);
@@ -1751,6 +2263,7 @@ const app = new Vue({
                 this.categoryRules = this.categoryRules.filter(item => item.localId !== rule.localId);
                 this.categoriesError = null;
                 this.updateCategoryLabels(data.labels);
+                await this.fetchCustomCategories({ force: true, suppressLoader: true, refresh: true });
                 await this.fetchTransactions({ reset: true, skipLoadingState: true });
             } catch (error) {
                 console.error('Error deleting category rule:', error);
@@ -1760,12 +2273,17 @@ const app = new Vue({
             }
         },
         updateCategoryLabels: function(labels) {
-            let values = Array.isArray(labels) ? labels.slice() : null;
+            let values = Array.isArray(labels) ? labels.filter(label => !!label) : null;
             if (!values || !values.length) {
                 const unique = new Set();
+                this.customCategories.forEach(category => {
+                    if (category.name) {
+                        unique.add(category.name);
+                    }
+                });
                 this.categoryRules.forEach(rule => {
-                    if (rule.label) {
-                        unique.add(rule.label);
+                    if (rule.category_name) {
+                        unique.add(rule.category_name);
                     }
                 });
                 values = Array.from(unique);
@@ -1788,26 +2306,29 @@ const app = new Vue({
             }
             return value;
         },
-        toggleRulePalette: function(rule) {
-            if (!rule) {
+        toggleCategoryColorPalette: function(category) {
+            if (!category) {
                 return;
             }
-            const targetId = rule.localId;
-            if (this.openColorRuleId === targetId) {
-                this.openColorRuleId = null;
+            if (!category.isEditing) {
+                return;
+            }
+            const targetId = category.localId;
+            if (this.openCategoryColorId === targetId) {
+                this.openCategoryColorId = null;
             } else {
-                this.openColorRuleId = targetId;
+                this.openCategoryColorId = targetId;
             }
         },
-        selectRuleColor: function(rule, color) {
+        selectCategoryColor: function(category, color) {
             const normalized = this.normalizeColor(color);
-            if (rule.color === normalized) {
-                this.openColorRuleId = null;
+            if (category.editableColor === normalized) {
+                this.openCategoryColorId = null;
                 return;
             }
-            rule.color = normalized;
-            this.markRuleDirty(rule);
-            this.openColorRuleId = null;
+            category.editableColor = normalized;
+            category.isDirty = true;
+            this.openCategoryColorId = null;
         },
         categoryTagStyle: function(transaction) {
             if (!transaction) {
@@ -1826,10 +2347,10 @@ const app = new Vue({
             };
         },
         handleDocumentClick: function(event) {
-            if (this.openColorRuleId) {
+            if (this.openCategoryColorId) {
                 const cell = event.target.closest('.category-color-cell');
                 if (!cell) {
-                    this.openColorRuleId = null;
+                    this.openCategoryColorId = null;
                 }
             }
             if (this.splitCategoryDropdown.rowId !== null) {
@@ -1870,11 +2391,15 @@ const app = new Vue({
                 this.closeSplitModal();
                 return;
             }
-            if (this.openColorRuleId) {
-                this.openColorRuleId = null;
+            if (this.openCategoryColorId) {
+                this.openCategoryColorId = null;
             }
             if (this.transactionMenu.visible) {
                 this.closeTransactionMenu();
+            }
+            if (this.mobileSidebarVisible) {
+                event.preventDefault();
+                this.closeMobileSidebar();
             }
         },
         fetchBanks: async function() {
@@ -1950,6 +2475,25 @@ const app = new Vue({
                 const trimmedSearch = (this.filters.search || '').trim();
                 if (trimmedSearch) {
                     params.append('search', trimmedSearch);
+                }
+
+                if (this.filters.startDate) {
+                    params.append('start_date', this.filters.startDate);
+                }
+                if (this.filters.endDate) {
+                    params.append('end_date', this.filters.endDate);
+                }
+
+                if (this.filters.amountMin !== '' && this.filters.amountMin !== null && this.filters.amountMin !== undefined) {
+                    params.append('min_amount', this.filters.amountMin);
+                }
+                if (this.filters.amountMax !== '' && this.filters.amountMax !== null && this.filters.amountMax !== undefined) {
+                    params.append('max_amount', this.filters.amountMax);
+                }
+
+                const customCategoryValue = (this.filters.customCategoryId || '').trim();
+                if (customCategoryValue) {
+                    params.append('custom_category_id', customCategoryValue === '__uncategorized__' ? 'none' : customCategoryValue);
                 }
 
                 if (this.selectedAccountIds.length) {
@@ -2100,8 +2644,79 @@ const app = new Vue({
             }
             return parsed.toLocaleDateString();
         },
+        applyTransactionFilters: function() {
+            const start = this.filters.startDate;
+            const end = this.filters.endDate;
+            if (start && end && start > end) {
+                this.filters.startDate = end;
+                this.filters.endDate = start;
+            }
+            if (this.searchDebounce) {
+                window.clearTimeout(this.searchDebounce);
+                this.searchDebounce = null;
+            }
+            this.transactionsPage = 1;
+            this.fetchTransactions({ reset: true });
+        },
+        applySpendingCategoryFilter: async function(label, month, year) {
+            if (!label) {
+                return;
+            }
+
+            const normalized = label.trim().toLowerCase();
+            let nextCategoryId = '';
+            let nextSearch = '';
+
+            const matchedCategory = this.customCategories.find(category => {
+                const name = (category.name || '').trim().toLowerCase();
+                return name === normalized && category.id;
+            });
+
+            if (matchedCategory) {
+                nextCategoryId = String(matchedCategory.id);
+                nextSearch = '';
+            } else if (normalized === 'uncategorized') {
+                nextCategoryId = '__uncategorized__';
+                nextSearch = '';
+            } else {
+                nextCategoryId = '';
+                nextSearch = label;
+            }
+
+            await this.setActivePane('transactions');
+            this.transactionsCollapsed = false;
+            if (this.isMobileView && this.mobileSidebarVisible) {
+                this.closeMobileSidebar();
+            }
+
+            this.filters.customCategoryId = nextCategoryId;
+            this.filters.search = nextSearch;
+            if (typeof year === 'number' && typeof month === 'number') {
+                const parsedYear = Number(year);
+                const parsedMonth = Number(month);
+                if (!Number.isNaN(parsedYear) && !Number.isNaN(parsedMonth)) {
+                    const monthIndex = parsedMonth - 1;
+                    const start = new Date(parsedYear, monthIndex, 1);
+                    const end = new Date(parsedYear, monthIndex + 1, 0);
+                    const startMonth = String(start.getMonth() + 1).padStart(2, '0');
+                    const endMonth = String(end.getMonth() + 1).padStart(2, '0');
+                    const startDay = String(start.getDate()).padStart(2, '0');
+                    const endDay = String(end.getDate()).padStart(2, '0');
+                    this.filters.startDate = `${parsedYear}-${startMonth}-${startDay}`;
+                    this.filters.endDate = `${parsedYear}-${endMonth}-${endDay}`;
+                }
+            }
+            this.applyTransactionFilters();
+
+            this.$nextTick(() => {
+                const section = document.querySelector('.transactions-section');
+                if (section) {
+                    section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+            });
+        },
         resetFilters: function() {
-            if (!this.filters.search && this.filters.sortKey === 'date' && this.filters.sortDesc) {
+            if (!this.hasActiveTransactionFilters) {
                 return;
             }
 
@@ -2110,9 +2725,17 @@ const app = new Vue({
                 this.searchDebounce = null;
             }
 
-            this.filters.search = '';
-            this.filters.sortKey = 'date';
-            this.filters.sortDesc = true;
+            const defaultFilters = {
+                search: '',
+                sortKey: 'date',
+                sortDesc: true,
+                startDate: '',
+                endDate: '',
+                customCategoryId: '',
+                amountMin: '',
+                amountMax: ''
+            };
+            Object.assign(this.filters, defaultFilters);
             this.transactionsPage = 1;
             this.fetchTransactions({ reset: true });
         },
@@ -2219,6 +2842,7 @@ const app = new Vue({
             }
         },
         handleResize: function() {
+            this.evaluateViewportState();
             this.updateStickyPositions();
         },
         removeBank: async function(bank) {
@@ -2246,9 +2870,22 @@ const app = new Vue({
     watch: {
         selectedSpendingYear: function() {
             this.resetOpenSpendingMonths();
+        },
+        isMobileView: function(newValue) {
+            if (!newValue && this.mobileSidebarVisible) {
+                this.mobileSidebarVisible = false;
+            }
+        },
+        mobileSidebarVisible: function(visible) {
+            if (typeof document === 'undefined') {
+                return;
+            }
+            document.body.classList.toggle('mobile-sidebar-open', visible);
         }
     },
     mounted: async function() {
+        this.initializeSidebarState();
+        this.evaluateViewportState();
         await this.refreshData();
         if (this.activePane === 'dashboard') {
             await this.fetchDashboard();
@@ -2284,5 +2921,6 @@ const app = new Vue({
             this.budgetCategoryBlurTimeout = null;
         }
         document.body.classList.remove('modal-open');
+        document.body.classList.remove('mobile-sidebar-open');
     }
 });
