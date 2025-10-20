@@ -1,3 +1,35 @@
+## [0.9.1] - 2025-10-19
+
+### Added
+
+- Transactions table now includes quick filters for date range, custom category (or uncategorized), and amount range to narrow large ledgers in-place.
+- Spending report category rows are clickable shortcuts that jump to the transactions pane with the selected category and month pre-filtered.
+- Each spending month now rolls up an explicit “Uncategorized” line summarizing activity without a custom category.
+
+### Changed
+
+- Spending report styling aligns with the transactions table (striped rows, left-aligned columns) for easier scanning.
+- Backend transactions API supports the new filters, normalizing user input and ensuring manual overrides/custom categories are respected.
+
+### Fixed
+
+- Dashboard spending calculations ignore fallback Plaid labels so only custom categories (plus the new uncategorized bucket) drive the report.
+
+## [0.9.0] - 2025-10-20
+
+### Added
+
+- Dedicated "Edit Categories" management tab with CRUD support for custom categories and color selection.
+- REST API endpoints and Alembic migration to persist custom categories separately from automation rules.
+- Categories tab styling now matches dashboard tabs for a consistent look and feel.
+- Added defensive error handling for custom category updates/overrides to surface friendly messages when duplicates are attempted.
+
+### Changed
+
+- Category rules now reference shared custom category records; colors are determined by the category instead of the rule.
+- Transaction manual overrides align with custom categories so renames and color changes propagate automatically.
+- Category management tables now use click-to-edit interactions, matching the transactions table for better responsiveness.
+
 ## [0.8.0] - 2025-10-16
 
 ### Removed
