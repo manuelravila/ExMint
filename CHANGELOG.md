@@ -1,3 +1,24 @@
+## [0.9.2] - 2025-10-21
+
+### Added
+
+- CSV and Excel exports that honor the current transactions filters, plus a "Clear All" shortcut beside the filter bar for one-click resets.
+- Long-press gesture on touch devices to open the transaction context menu without a mouse.
+- Category rule entries link back to their custom category in the management tab for quicker edits.
+
+### Changed
+
+- Transaction category suggestions now only surface custom categories, enforce a three-character minimum, and sort the management table alphabetically while reusing colors when available.
+- Split transactions now refresh the table immediately, hide the original row, persist user-selected categories for each child, and trigger dashboard refreshes after changes.
+- Spending report totals display net monthly cash flow, rows stay left aligned, and dashboard metrics refresh right after transaction/category updates.
+- Logging out or returning after a session timeout clears the "New" badge on transactions.
+- Split modal category suggestion dropdown now floats above the table so every child row can access the helper list.
+
+### Fixed
+
+- Blocked accidental creation of custom categories that duplicate Plaid-provided labels or existing user categories.
+- "Uncategorized" spending row now reflects the true signed total of uncategorized transactions.
+
 ## [0.9.1] - 2025-10-19
 
 ### Added

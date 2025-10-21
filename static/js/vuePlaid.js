@@ -229,8 +229,13 @@ const app = new Vue({
             y: 0,
             transaction: null
         },
+        touchContextMenuTimer: null,
+        touchContextMenuTriggered: false,
+        touchContextMenuStart: null,
         highlightedRuleLocalId: null,
         highlightedRuleTimeout: null,
+        highlightedCategoryLocalId: null,
+        highlightedCategoryTimeout: null,
         splitModal: {
             visible: false,
             transaction: null,
@@ -322,30 +327,17 @@ const app = new Vue({
             return this.transactionsTotal > this.transactionsPageSize;
         },
         transactionCategoryOptions: function() {
-            const values = new Set();
+            const unique = new Map();
             this.customCategories.forEach(category => {
-                if (category.name) {
-                    values.add(category.name);
+                if (!category || !category.name) {
+                    return;
+                }
+                const key = category.name.trim().toLowerCase();
+                if (!unique.has(key)) {
+                    unique.set(key, category.name.trim());
                 }
             });
-            this.budgets.forEach(budget => {
-                if (budget.category_label) {
-                    values.add(budget.category_label);
-                }
-            });
-            this.transactions.forEach(txn => {
-                if (txn.custom_category) {
-                    values.add(txn.custom_category);
-                }
-                if (Array.isArray(txn.category)) {
-                    txn.category.forEach(cat => {
-                        if (cat) {
-                            values.add(cat);
-                        }
-                    });
-                }
-            });
-            return Array.from(values).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+            return Array.from(unique.values()).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
         },
         customCategoryFilterOptions: function() {
             return this.customCategories
@@ -857,6 +849,11 @@ const app = new Vue({
             const currentLabel = transaction.custom_category || '';
             const isManual = transaction.custom_category_source === 'manual';
             const isFallback = transaction.custom_category_is_fallback;
+            const fallbackSegments = Array.isArray(transaction.category) ? transaction.category.filter(item => !!item) : [];
+            const fallbackLabel = fallbackSegments.length ? fallbackSegments.join(' / ') : '';
+            const trimmedLower = trimmed.toLowerCase();
+            const fallbackLabelLower = fallbackLabel.toLowerCase();
+            const fallbackSegmentSet = new Set(fallbackSegments.map(item => item.toLowerCase()));
 
             if (!trimmed && !isManual) {
                 if (isFallback) {
@@ -872,6 +869,22 @@ const app = new Vue({
 
             if (trimmed === currentLabel && !isManual && !isFallback) {
                 this.cancelTransactionCategoryEdit();
+                return;
+            }
+
+            if (trimmed && trimmed.length < 3) {
+                alert('Category names must be at least 3 characters.');
+                return;
+            }
+
+            const matchesPlaid = trimmed
+                && (fallbackSegmentSet.has(trimmedLower) || (!!fallbackLabel && trimmedLower === fallbackLabelLower));
+            if (matchesPlaid) {
+                if (isFallback && trimmedLower === fallbackLabelLower) {
+                    this.cancelTransactionCategoryEdit();
+                    return;
+                }
+                alert('Please choose a different category name than the original Plaid category.');
                 return;
             }
 
@@ -898,6 +911,9 @@ const app = new Vue({
                     Object.assign(transaction, data.transaction);
                 }
                 await this.fetchCustomCategories({ force: true, suppressLoader: true, refresh: true });
+                if (this.dashboardLoaded) {
+                    await this.fetchDashboard({ suppressLoader: true, force: true });
+                }
                 this.cancelTransactionCategoryEdit();
             } catch (error) {
                 console.error('Error updating transaction category:', error);
@@ -941,6 +957,103 @@ const app = new Vue({
             }
             this.saveTransactionCategoryEdit(transaction);
         },
+        buildTransactionExportUrl: function(format) {
+            const params = new URLSearchParams();
+            params.append('format', format);
+            params.append('sort_key', this.filters.sortKey);
+            params.append('sort_desc', this.filters.sortDesc ? 'true' : 'false');
+            const trimmedSearch = (this.filters.search || '').trim();
+            if (trimmedSearch) {
+                params.append('search', trimmedSearch);
+            }
+            if (this.filters.startDate) {
+                params.append('start_date', this.filters.startDate);
+            }
+            if (this.filters.endDate) {
+                params.append('end_date', this.filters.endDate);
+            }
+            if (this.filters.amountMin !== '' && this.filters.amountMin !== null && this.filters.amountMin !== undefined) {
+                params.append('min_amount', this.filters.amountMin);
+            }
+            if (this.filters.amountMax !== '' && this.filters.amountMax !== null && this.filters.amountMax !== undefined) {
+                params.append('max_amount', this.filters.amountMax);
+            }
+            const customCategoryValue = (this.filters.customCategoryId || '').trim();
+            if (customCategoryValue) {
+                params.append('custom_category_id', customCategoryValue === '__uncategorized__' ? 'none' : customCategoryValue);
+            }
+            if (this.selectedAccountIds.length) {
+                params.append('account_ids', this.selectedAccountIds.join(','));
+            }
+            return `/api/transactions/export?${params.toString()}`;
+        },
+        triggerTransactionExport: function(format) {
+            const url = this.buildTransactionExportUrl(format);
+            window.open(url, '_blank');
+        },
+        handleTransactionClick: function(transaction) {
+            if (this.touchContextMenuTriggered) {
+                this.touchContextMenuTriggered = false;
+                return;
+            }
+            this.markAsSeen(transaction);
+        },
+        handleTransactionTouchStart: function(event, transaction) {
+            if (!event || !transaction) {
+                return;
+            }
+            if (!event.touches || event.touches.length !== 1) {
+                return;
+            }
+            const touch = event.touches[0];
+            const initialX = touch.clientX;
+            const initialY = touch.clientY;
+            this.touchContextMenuTriggered = false;
+            this.touchContextMenuStart = {
+                x: initialX,
+                y: initialY,
+                transactionId: transaction.id
+            };
+            if (this.touchContextMenuTimer) {
+                window.clearTimeout(this.touchContextMenuTimer);
+            }
+            this.touchContextMenuTimer = window.setTimeout(() => {
+                this.touchContextMenuTimer = null;
+                const start = this.touchContextMenuStart;
+                if (!start || start.transactionId !== transaction.id) {
+                    return;
+                }
+                this.touchContextMenuTriggered = true;
+                this.touchContextMenuStart = null;
+                this.openTransactionMenu({ clientX: initialX, clientY: initialY }, transaction);
+            }, 500);
+        },
+        handleTransactionTouchMove: function(event) {
+            if (!this.touchContextMenuTimer || !this.touchContextMenuStart) {
+                return;
+            }
+            if (!event.touches || event.touches.length !== 1) {
+                this.handleTransactionTouchEnd();
+                return;
+            }
+            const touch = event.touches[0];
+            const dx = Math.abs(touch.clientX - this.touchContextMenuStart.x);
+            const dy = Math.abs(touch.clientY - this.touchContextMenuStart.y);
+            if (dx > 10 || dy > 10) {
+                this.handleTransactionTouchEnd();
+            }
+        },
+        handleTransactionTouchEnd: function() {
+            if (this.touchContextMenuTimer) {
+                window.clearTimeout(this.touchContextMenuTimer);
+                this.touchContextMenuTimer = null;
+            }
+            this.touchContextMenuStart = null;
+        },
+        handleTransactionTouchCancel: function() {
+            this.handleTransactionTouchEnd();
+            this.touchContextMenuTriggered = false;
+        },
         openTransactionMenu: function(event, transaction) {
             if (!transaction) {
                 return;
@@ -972,6 +1085,7 @@ const app = new Vue({
         closeTransactionMenu: function() {
             this.transactionMenu.visible = false;
             this.transactionMenu.transaction = null;
+            this.touchContextMenuTriggered = false;
         },
         handleTransactionMenuAutoCategorize: async function() {
             const contextTransaction = this.transactionMenu.transaction;
@@ -1013,32 +1127,54 @@ const app = new Vue({
         handleTransactionMenuSplit: function() {
             const contextTransaction = this.transactionMenu.transaction;
             this.closeTransactionMenu();
-            if (!contextTransaction || contextTransaction.is_split_child) {
+            if (!contextTransaction) {
                 return;
             }
-            const transaction = this.transactions.find(txn => txn.id === contextTransaction.id) || contextTransaction;
+            let targetId = contextTransaction.id;
+            if (contextTransaction.is_split_child) {
+                if (!contextTransaction.parent_transaction_id) {
+                    return;
+                }
+                targetId = contextTransaction.parent_transaction_id;
+            }
+            const transaction = this.transactions.find(txn => txn.id === targetId) || {
+                id: targetId,
+                parent_transaction_id: null,
+                is_split_child: false
+            };
             this.openSplitModal(transaction);
         },
         openSplitModal: async function(transaction) {
             if (!transaction) {
                 return;
             }
-            let parentSnapshot = transaction;
+            const targetId = transaction.is_split_child && transaction.parent_transaction_id
+                ? transaction.parent_transaction_id
+                : transaction.id;
+            if (!targetId) {
+                return;
+            }
+            let parentSnapshot = null;
             let fetchedChildren = [];
-            if (transaction.has_split_children) {
-                try {
-                    const response = await fetch(`/api/transactions/${transaction.id}/split`);
-                    if (response.ok) {
-                        const data = await response.json();
-                        const childPayload = Array.isArray(data.children) ? data.children : [];
-                        fetchedChildren = childPayload;
-                        if (data.parent) {
-                            parentSnapshot = data.parent;
-                        }
+            try {
+                const response = await fetch(`/api/transactions/${targetId}/split`);
+                if (response.ok) {
+                    const data = await response.json();
+                    fetchedChildren = Array.isArray(data.children) ? data.children : [];
+                    if (data.parent) {
+                        parentSnapshot = data.parent;
                     }
-                } catch (error) {
-                    console.error('Error fetching split details:', error);
+                } else if (response.status === 404) {
+                    alert('This transaction could not be found for splitting. It may have been removed.');
+                    return;
+                } else if (response.status && response.status !== 404) {
+                    console.error('Failed to load split details:', response.statusText);
                 }
+            } catch (error) {
+                console.error('Error fetching split details:', error);
+            }
+            if (!parentSnapshot) {
+                parentSnapshot = transaction;
             }
             const parentCents = this.parseAmountToCents(parentSnapshot.amount);
             if (!Number.isFinite(parentCents) || parentCents <= 0) {
@@ -1185,6 +1321,13 @@ const app = new Vue({
             const errors = [];
             const rows = this.splitModal.rows;
             const parentCents = this.splitModal.parentAmountCents || 0;
+            const parentTransaction = this.splitModal.transaction || {};
+            const fallbackSegments = Array.isArray(parentTransaction.category)
+                ? parentTransaction.category.filter(item => !!item)
+                : [];
+            const fallbackLabel = fallbackSegments.length ? fallbackSegments.join(' / ') : '';
+            const fallbackLabelLower = fallbackLabel.toLowerCase();
+            const fallbackSegmentSet = new Set(fallbackSegments.map(item => item.toLowerCase()));
             if (rows.length < 2) {
                 errors.push('Provide at least two split rows.');
             }
@@ -1199,11 +1342,17 @@ const app = new Vue({
                 if (!category) {
                     errors.push(`Row ${index + 1}: Category is required.`);
                 } else {
+                    if (category.length < 3) {
+                        errors.push(`Row ${index + 1}: Category must be at least 3 characters.`);
+                    }
                     const key = category.toLowerCase();
                     if (categorySet.has(key)) {
                         errors.push('Split categories must be unique.');
                     } else {
                         categorySet.add(key);
+                    }
+                    if (fallbackSegmentSet.has(key) || (!!fallbackLabel && key === fallbackLabelLower)) {
+                        errors.push(`Row ${index + 1}: Category cannot match the original Plaid category.`);
                     }
                 }
                 const cents = this.parseAmountToCents(row.amount);
@@ -1362,6 +1511,10 @@ const app = new Vue({
                 }
                 this.closeSplitModal();
                 await this.fetchTransactions({ reset: false, skipLoadingState: true });
+                await this.fetchCustomCategories({ force: true, suppressLoader: true, refresh: true });
+                if (this.dashboardLoaded) {
+                    await this.fetchDashboard({ suppressLoader: true, force: true });
+                }
             } catch (error) {
                 console.error('Error splitting transaction:', error);
                 this.splitModal.errors = [error.message || 'Failed to split transaction.'];
@@ -1419,6 +1572,59 @@ const app = new Vue({
                     this.highlightedRuleTimeout = null;
                 }, duration);
             }
+        },
+        highlightCategoryRow: function(localId, options = {}) {
+            if (!localId) {
+                return;
+            }
+            if (this.highlightedCategoryTimeout) {
+                window.clearTimeout(this.highlightedCategoryTimeout);
+                this.highlightedCategoryTimeout = null;
+            }
+            this.highlightedCategoryLocalId = localId;
+            const duration = typeof options.duration === 'number' ? options.duration : 2600;
+            this.$nextTick(() => {
+                const refName = `customCategoryRow-${localId}`;
+                const refs = this.$refs[refName];
+                const row = Array.isArray(refs) ? refs[0] : refs;
+                if (row && typeof row.scrollIntoView === 'function') {
+                    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+            });
+            if (duration > 0) {
+                this.highlightedCategoryTimeout = window.setTimeout(() => {
+                    this.highlightedCategoryLocalId = null;
+                    this.highlightedCategoryTimeout = null;
+                }, duration);
+            }
+        },
+        highlightCustomCategory: function(name) {
+            const target = (name || '').trim().toLowerCase();
+            if (!target) {
+                return;
+            }
+            const match = this.customCategories.find(category => category && category.name && category.name.trim().toLowerCase() === target);
+            if (!match) {
+                return;
+            }
+            const localId = match.localId;
+            this.$nextTick(() => {
+                this.highlightCategoryRow(localId);
+            });
+        },
+        focusCustomCategoryByName: async function(name) {
+            const trimmed = (name || '').trim();
+            if (!trimmed) {
+                return;
+            }
+            if (this.categoryTab !== 'manage') {
+                await this.setCategoryTab('manage');
+            }
+            if (!this.customCategoriesLoaded && !this.customCategoriesLoading) {
+                await this.fetchCustomCategories({ force: true, suppressLoader: true });
+            }
+            await this.$nextTick();
+            this.highlightCustomCategory(trimmed);
         },
         focusRuleInput: function(localId, target) {
             if (!localId || !target) {
@@ -1741,6 +1947,24 @@ const app = new Vue({
                 this.closeBudgetCategoryDropdown();
             }
         },
+        sortCustomCategories: function() {
+            this.customCategories.sort((a, b) => {
+                const nameA = (a && a.name ? a.name : '').trim().toLowerCase();
+                const nameB = (b && b.name ? b.name : '').trim().toLowerCase();
+                if (nameA === nameB) {
+                    const idA = a && (a.id || a.localId) ? String(a.id || a.localId) : '';
+                    const idB = b && (b.id || b.localId) ? String(b.id || b.localId) : '';
+                    return idA.localeCompare(idB);
+                }
+                if (!nameA) {
+                    return 1;
+                }
+                if (!nameB) {
+                    return -1;
+                }
+                return nameA.localeCompare(nameB);
+            });
+        },
         fetchCustomCategories: async function(options = {}) {
             const { force = false, suppressLoader = false } = options;
             if (this.customCategoriesLoading) {
@@ -1762,6 +1986,7 @@ const app = new Vue({
                 }
                 const data = await response.json();
                 this.customCategories = (data.categories || []).map(cat => this.prepareCustomCategory(cat));
+                this.sortCustomCategories();
                 this.customCategoriesLoaded = true;
                 this.updateCategoryLabels(data.labels);
             } catch (error) {
@@ -1937,6 +2162,10 @@ const app = new Vue({
                 this.customCategoriesError = 'Category name is required.';
                 return;
             }
+            if (name.length < 3) {
+                this.customCategoriesError = 'Category name must be at least 3 characters.';
+                return;
+            }
             const payload = {
                 name,
                 color: this.normalizeColor(category.editableColor || category.color)
@@ -1973,6 +2202,7 @@ const app = new Vue({
                 if (this.openCategoryColorId === category.localId) {
                     this.openCategoryColorId = null;
                 }
+                this.sortCustomCategories();
                 this.customCategoriesError = null;
                 this.updateCategoryLabels(data.labels);
                 this.categoryRules.forEach(rule => {
@@ -2002,6 +2232,7 @@ const app = new Vue({
                     this.openCategoryColorId = null;
                 }
                 this.customCategories = this.customCategories.filter(item => item.localId !== category.localId);
+                this.sortCustomCategories();
                 this.updateCategoryLabels();
                 this.customCategoriesError = null;
                 return;
@@ -2022,10 +2253,14 @@ const app = new Vue({
                     this.openCategoryColorId = null;
                 }
                 this.customCategories = this.customCategories.filter(item => item.localId !== category.localId);
+                this.sortCustomCategories();
                 this.customCategoriesError = null;
                 this.updateCategoryLabels(data.labels);
                 await this.fetchCategoryRules({ force: true, suppressLoader: true, refresh: true });
                 await this.fetchTransactions({ reset: true, skipLoadingState: true });
+                if (this.dashboardLoaded) {
+                    await this.fetchDashboard({ suppressLoader: true, force: true });
+                }
             } catch (error) {
                 console.error('Error deleting custom category:', error);
                 this.customCategoriesError = error.message || 'Failed to delete category.';
@@ -2912,6 +3147,10 @@ const app = new Vue({
             window.clearTimeout(this.highlightedRuleTimeout);
             this.highlightedRuleTimeout = null;
         }
+        if (this.highlightedCategoryTimeout) {
+            window.clearTimeout(this.highlightedCategoryTimeout);
+            this.highlightedCategoryTimeout = null;
+        }
         if (this.splitCategoryBlurTimeout) {
             window.clearTimeout(this.splitCategoryBlurTimeout);
             this.splitCategoryBlurTimeout = null;
@@ -2919,6 +3158,10 @@ const app = new Vue({
         if (this.budgetCategoryBlurTimeout) {
             window.clearTimeout(this.budgetCategoryBlurTimeout);
             this.budgetCategoryBlurTimeout = null;
+        }
+        if (this.touchContextMenuTimer) {
+            window.clearTimeout(this.touchContextMenuTimer);
+            this.touchContextMenuTimer = null;
         }
         document.body.classList.remove('modal-open');
         document.body.classList.remove('mobile-sidebar-open');

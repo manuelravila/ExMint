@@ -5,9 +5,10 @@ from extensions import mail
 from flask_mail import Message
 from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadSignature
 from forms import LoginForm, RegistrationForm, ProfileForm
-from models import User, db, Credential, Account
+from models import User, db, Credential, Account, Transaction
 from werkzeug.security import generate_password_hash, check_password_hash
 from config import Config
+from datetime import datetime
 
 views = Blueprint('views', __name__)
 
@@ -179,6 +180,7 @@ def handle_login_request():
                 return handle_unsuccessful_login(error_message)
             
             login_user(user, remember=False)
+            reset_new_transaction_flags(user)
             return handle_successful_login(user)
         else:
             error_message = 'Login Unsuccessful. Please check email and password'
@@ -193,6 +195,26 @@ def handle_authenticated_user():
     if request.is_json:
         return jsonify({'message': 'User already logged in'}), 200
     return redirect(url_for('views.dashboard'))
+
+
+def reset_new_transaction_flags(user):
+    if not user or not user.id:
+        return
+    now = datetime.utcnow()
+    try:
+        updated = Transaction.query.filter(
+            Transaction.user_id == user.id,
+            Transaction.is_new.is_(True)
+        ).update({
+            Transaction.is_new: False,
+            Transaction.seen_by_user: True,
+            Transaction.last_seen_by_user: now
+        }, synchronize_session=False)
+        if updated:
+            db.session.commit()
+    except Exception as exc:
+        current_app.logger.warning('Failed to reset new transaction flags for user %s: %s', user.id, exc)
+        db.session.rollback()
 
 
 def handle_successful_login(user):
@@ -214,10 +236,12 @@ def handle_unsuccessful_login(error_message):
 @login_required
 def logout():
     # Mark all transactions as seen before logging out
-    transactions = Transaction.query.filter_by(user_id=current_user.id).all()
-    for txn in transactions:
-        txn.seen_by_user = True
-        txn.is_new = False
+    now = datetime.utcnow()
+    Transaction.query.filter_by(user_id=current_user.id).update({
+        Transaction.seen_by_user: True,
+        Transaction.is_new: False,
+        Transaction.last_seen_by_user: now
+    }, synchronize_session=False)
     db.session.commit()
 
     logout_user()

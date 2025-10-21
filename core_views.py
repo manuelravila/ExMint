@@ -1,5 +1,5 @@
 # core_views.py
-from flask import Blueprint, jsonify, request, session, current_app
+from flask import Blueprint, jsonify, request, session, current_app, send_file
 from flask_login import login_required, current_user
 from models import (
     db,
@@ -24,8 +24,12 @@ import re
 from datetime import datetime, date
 from collections import defaultdict
 import calendar
-from io import StringIO
+from io import StringIO, BytesIO
 import csv
+try:
+    from openpyxl import Workbook
+except ImportError:  # pragma: no cover - Excel export optional
+    Workbook = None
 from config import Config
 from version import __version__ as VERSION
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -182,6 +186,191 @@ def _parse_request_decimal(raw_value):
         return Decimal(normalized)
     except (InvalidOperation, TypeError, ValueError):
         return None
+
+
+def _parse_transaction_filters(args):
+    account_ids_param = args.get('account_ids', '') or ''
+    account_ids = []
+    for part in account_ids_param.split(','):
+        value = part.strip()
+        if value.isdigit():
+            account_ids.append(int(value))
+
+    try:
+        page = int(args.get('page', 1))
+    except (TypeError, ValueError):
+        page = 1
+    page = max(page, 1)
+
+    try:
+        page_size = int(args.get('page_size', 200))
+    except (TypeError, ValueError):
+        page_size = 200
+    page_size = max(1, min(page_size, 500))
+
+    sort_key = args.get('sort_key', 'date')
+    sort_desc_value = args.get('sort_desc', 'true')
+    sort_desc = str(sort_desc_value).lower() in ('true', '1', 'yes', 'y', 'desc')
+    search_term = (args.get('search') or '').strip()
+
+    start_date = _parse_request_date((args.get('start_date') or '').strip())
+    end_date = _parse_request_date((args.get('end_date') or '').strip())
+    if start_date and end_date and start_date > end_date:
+        start_date, end_date = end_date, start_date
+
+    min_amount = _parse_request_decimal((args.get('min_amount') or '').strip())
+    max_amount = _parse_request_decimal((args.get('max_amount') or '').strip())
+
+    custom_category_param = (args.get('custom_category_id') or '').strip()
+
+    return {
+        'account_ids': account_ids,
+        'page': page,
+        'page_size': page_size,
+        'sort_key': sort_key,
+        'sort_desc': sort_desc,
+        'search_term': search_term,
+        'start_date': start_date,
+        'end_date': end_date,
+        'min_amount': min_amount,
+        'max_amount': max_amount,
+        'custom_category_param': custom_category_param
+    }
+
+
+def _build_transactions_query(user_id, filters):
+    override_alias = aliased(TransactionCategoryOverride)
+    query = Transaction.query.options(
+        joinedload(Transaction.account),
+        joinedload(Transaction.credential),
+        joinedload(Transaction.custom_category)
+    ).join(Account).join(Credential).outerjoin(
+        override_alias, override_alias.transaction_id == Transaction.id
+    ).filter(
+        Transaction.user_id == user_id,
+        Transaction.is_removed.is_(False),
+        or_(
+            Transaction.has_split_children.is_(False),
+            Transaction.is_split_child.is_(True)
+        )
+    )
+
+    account_ids = filters.get('account_ids') or []
+    if account_ids:
+        query = query.filter(Transaction.account_id.in_(account_ids))
+
+    search_term = filters.get('search_term')
+    if search_term:
+        token = f"%{search_term}%"
+        query = query.filter(or_(
+            Transaction.name.ilike(token),
+            Transaction.merchant_name.ilike(token),
+            Transaction.category.ilike(token),
+            func.coalesce(Transaction.payment_channel, '').ilike(token),
+            Account.name.ilike(token),
+            func.coalesce(Account.mask, '').ilike(token),
+            Credential.institution_name.ilike(token),
+            Transaction.custom_category.has(CustomCategory.name.ilike(token))
+        ))
+
+    start_date = filters.get('start_date')
+    if start_date:
+        query = query.filter(Transaction.date >= start_date)
+    end_date = filters.get('end_date')
+    if end_date:
+        query = query.filter(Transaction.date <= end_date)
+
+    min_amount = filters.get('min_amount')
+    if min_amount is not None:
+        query = query.filter(Transaction.amount >= min_amount)
+    max_amount = filters.get('max_amount')
+    if max_amount is not None:
+        query = query.filter(Transaction.amount <= max_amount)
+
+    custom_category_param = filters.get('custom_category_param', '')
+    if custom_category_param:
+        normalized = custom_category_param.lower()
+        if normalized in ('none', 'null', 'uncategorized'):
+            query = query.filter(
+                Transaction.custom_category_id.is_(None),
+                override_alias.custom_category_id.is_(None)
+            )
+        else:
+            try:
+                custom_category_id = int(custom_category_param)
+            except (TypeError, ValueError):
+                custom_category_id = None
+            if custom_category_id is not None:
+                query = query.filter(or_(
+                    Transaction.custom_category_id == custom_category_id,
+                    override_alias.custom_category_id == custom_category_id
+                ))
+
+    return query
+
+
+def _normalize_category_name(value):
+    if value is None:
+        return ''
+    return str(value).strip()
+
+
+def _validate_category_name(raw_name, *, plaid_candidates=None, min_length=3):
+    trimmed = _normalize_category_name(raw_name)
+    if len(trimmed) < min_length:
+        raise ValueError(f'Category name must be at least {min_length} characters.')
+    if plaid_candidates:
+        lowered = trimmed.lower()
+        for candidate in plaid_candidates:
+            if not candidate:
+                continue
+            candidate_trimmed = _normalize_category_name(candidate)
+            if not candidate_trimmed:
+                continue
+            if lowered == candidate_trimmed.lower():
+                raise ValueError('Category name cannot match an original Plaid category.')
+    return trimmed
+
+
+def _find_custom_category(user_id, label):
+    normalized = _normalize_category_name(label)
+    if not normalized:
+        return None
+    return CustomCategory.query.filter(
+        CustomCategory.user_id == user_id,
+        func.lower(CustomCategory.name) == normalized.lower()
+    ).first()
+
+
+def _get_or_create_custom_category(user_id, label, *, color=None, plaid_candidates=None):
+    normalized_input = _normalize_category_name(label)
+    category = _find_custom_category(user_id, normalized_input)
+    if category:
+        if color is not None:
+            try:
+                normalized_color = _normalize_color(color)
+            except ValueError:
+                normalized_color = None
+            if normalized_color and category.color != normalized_color:
+                category.color = normalized_color
+        return category
+
+    cleaned = _validate_category_name(normalized_input, plaid_candidates=plaid_candidates)
+    normalized_color = None
+    if color is not None:
+        try:
+            normalized_color = _normalize_color(color)
+        except ValueError:
+            normalized_color = None
+
+    category = CustomCategory(
+        user_id=user_id,
+        name=cleaned,
+        color=normalized_color or DEFAULT_MANUAL_COLOR
+    )
+    db.session.add(category)
+    db.session.flush()
+    return category
 
 
 def _load_overrides(transaction_ids):
@@ -906,6 +1095,7 @@ def _collect_spending_summary(user_id):
             'raw_sum': Decimal('0.00')
         }
 
+    monthly_cashflow = defaultdict(lambda: defaultdict(lambda: Decimal('0.00')))
     uncategorized_totals = defaultdict(lambda: defaultdict(lambda: Decimal('0.00')))
 
     for txn in transactions:
@@ -917,9 +1107,9 @@ def _collect_spending_summary(user_id):
         year = txn.date.year
         month = txn.date.month
         value = Decimal(txn.amount or 0).quantize(CENT, rounding=ROUND_HALF_UP)
+        monthly_cashflow[year][month] += value
         if not label:
-            if value < 0:
-                uncategorized_totals[year][month] += abs(value)
+            uncategorized_totals[year][month] += value
             continue
         label_key = label.lower()
         info = category_entries.setdefault(label_key, {
@@ -980,20 +1170,26 @@ def _collect_spending_summary(user_id):
     # Add uncategorized totals as a synthetic category per month
     for year, months in uncategorized_totals.items():
         for month, value in months.items():
-            if value <= Decimal('0.00'):
+            if value == Decimal('0.00'):
                 continue
             month_entry = year_map[year][month]
             month_entry['month'] = month
             month_entry['label'] = calendar.month_abbr[month]
             month_entry['total'] += value
+            net_classification = 'income' if value > 0 else 'expense'
             month_entry['categories'].append({
                 'label': UNCATEGORIZED_LABEL,
                 'value': value,
                 'six_month_average': Decimal('0.00'),
                 'budget': None,
                 'remainder': None,
-                'classification': 'expense'
+                'classification': net_classification
             })
+
+    for year, months in year_map.items():
+        for month, entry in months.items():
+            net_value = monthly_cashflow[year][month].quantize(CENT, rounding=ROUND_HALF_UP)
+            entry['total'] = net_value
 
     years_output = []
     for year in sorted(year_map.keys(), reverse=True):
@@ -1232,8 +1428,14 @@ def _create_split_children(parent_txn, split_specs):
     _delete_existing_split_children(parent_txn)
     db.session.flush()
 
+    parent_categories = _extract_category_list(parent_txn.category)
+    fallback_label = ' / '.join(parent_categories) if parent_categories else None
+    plaid_candidates = list(parent_categories)
+    if fallback_label:
+        plaid_candidates.append(fallback_label)
+
     label_map = {
-        (category.name or '').strip().lower(): category
+        _normalize_category_name(category.name).lower(): category
         for category in CustomCategory.query.filter_by(user_id=parent_txn.user_id).all()
         if category.name
     }
@@ -1248,6 +1450,11 @@ def _create_split_children(parent_txn, split_specs):
         amount_abs = spec['amount']
         child_amount = (amount_abs * parent_sign).quantize(CENT, rounding=ROUND_HALF_UP)
         plaid_id = _generate_split_transaction_id(parent_txn.plaid_transaction_id)
+
+        try:
+            cleaned_label = _validate_category_name(category_label, plaid_candidates=plaid_candidates)
+        except ValueError as exc:
+            raise ValueError(str(exc))
 
         child = Transaction(
             plaid_transaction_id=plaid_id,
@@ -1271,18 +1478,16 @@ def _create_split_children(parent_txn, split_specs):
             has_split_children=False
         )
 
-        normalized_label = category_label.strip().lower()
+        normalized_label = cleaned_label.lower()
         matching_category = label_map.get(normalized_label)
         if not matching_category:
-            new_category = CustomCategory(
-                user_id=parent_txn.user_id,
-                name=category_label.strip(),
-                color=DEFAULT_MANUAL_COLOR
+            matching_category = _get_or_create_custom_category(
+                parent_txn.user_id,
+                cleaned_label,
+                color=DEFAULT_MANUAL_COLOR,
+                plaid_candidates=plaid_candidates
             )
-            db.session.add(new_category)
-            db.session.flush()
-            label_map[normalized_label] = new_category
-            matching_category = new_category
+            label_map[matching_category.name.strip().lower()] = matching_category
 
         child.custom_category_id = matching_category.id
 
@@ -1892,100 +2097,20 @@ def get_transactions():
     ensure_category_schema()
 
     def handler():
-        account_ids_param = request.args.get('account_ids', '')
-        account_ids = []
+        filter_options = _parse_transaction_filters(request.args)
+        account_ids = filter_options['account_ids']
+        page = filter_options['page']
+        page_size = filter_options['page_size']
+        sort_key = filter_options['sort_key']
+        sort_desc = filter_options['sort_desc']
+        search_term = filter_options['search_term']
+        start_date = filter_options['start_date']
+        end_date = filter_options['end_date']
+        min_amount = filter_options['min_amount']
+        max_amount = filter_options['max_amount']
+        custom_category_param = filter_options['custom_category_param']
 
-        for part in account_ids_param.split(','):
-            value = part.strip()
-            if value.isdigit():
-                account_ids.append(int(value))
-
-        try:
-            page = int(request.args.get('page', 1))
-        except (TypeError, ValueError):
-            page = 1
-        page = max(page, 1)
-
-        try:
-            page_size = int(request.args.get('page_size', 200))
-        except (TypeError, ValueError):
-            page_size = 200
-        page_size = max(1, min(page_size, 500))
-
-        sort_key = request.args.get('sort_key', 'date')
-        sort_desc_value = request.args.get('sort_desc', 'true')
-        sort_desc = str(sort_desc_value).lower() in ('true', '1', 'yes', 'y', 'desc')
-        search_term = (request.args.get('search') or '').strip()
-
-        start_date_str = (request.args.get('start_date') or '').strip()
-        end_date_str = (request.args.get('end_date') or '').strip()
-        min_amount_str = (request.args.get('min_amount') or '').strip()
-        max_amount_str = (request.args.get('max_amount') or '').strip()
-        custom_category_param = (request.args.get('custom_category_id') or '').strip()
-
-        start_date = _parse_request_date(start_date_str)
-        end_date = _parse_request_date(end_date_str)
-        if start_date and end_date and start_date > end_date:
-            start_date, end_date = end_date, start_date
-
-        min_amount = _parse_request_decimal(min_amount_str)
-        max_amount = _parse_request_decimal(max_amount_str)
-
-        override_alias = aliased(TransactionCategoryOverride)
-
-        query = Transaction.query.options(
-            joinedload(Transaction.account),
-            joinedload(Transaction.credential),
-            joinedload(Transaction.custom_category)
-        ).join(Account).join(Credential).outerjoin(
-            override_alias, override_alias.transaction_id == Transaction.id
-        ).filter(
-            Transaction.user_id == current_user.id,
-            Transaction.is_removed.is_(False)
-        )
-
-        if account_ids:
-            query = query.filter(Transaction.account_id.in_(account_ids))
-
-        if search_term:
-            token = f"%{search_term}%"
-            query = query.filter(or_(
-                Transaction.name.ilike(token),
-                Transaction.merchant_name.ilike(token),
-                Transaction.category.ilike(token),
-                func.coalesce(Transaction.payment_channel, '').ilike(token),
-                Account.name.ilike(token),
-                func.coalesce(Account.mask, '').ilike(token),
-                Credential.institution_name.ilike(token),
-                Transaction.custom_category.has(CustomCategory.name.ilike(token))
-            ))
-
-        if start_date:
-            query = query.filter(Transaction.date >= start_date)
-        if end_date:
-            query = query.filter(Transaction.date <= end_date)
-        if min_amount is not None:
-            query = query.filter(Transaction.amount >= min_amount)
-        if max_amount is not None:
-            query = query.filter(Transaction.amount <= max_amount)
-
-        if custom_category_param:
-            normalized = custom_category_param.lower()
-            if normalized in ('none', 'null', 'uncategorized'):
-                query = query.filter(
-                    Transaction.custom_category_id.is_(None),
-                    override_alias.custom_category_id.is_(None)
-                )
-            else:
-                try:
-                    custom_category_id = int(custom_category_param)
-                except (TypeError, ValueError):
-                    custom_category_id = None
-                if custom_category_id is not None:
-                    query = query.filter(or_(
-                        Transaction.custom_category_id == custom_category_id,
-                        override_alias.custom_category_id == custom_category_id
-                    ))
+        query = _build_transactions_query(current_user.id, filter_options)
 
         total_count = query.count()
 
@@ -2049,6 +2174,58 @@ def get_transactions():
     return _with_schema_retry(handler)
 
 
+@core.route('/api/transactions/export', methods=['GET'])
+@login_required
+def export_transactions():
+    ensure_category_schema()
+
+    def handler():
+        format_param = (request.args.get('format') or 'csv').strip().lower()
+        if format_param not in ('csv', 'xlsx'):
+            return jsonify({'error': 'Unsupported export format.'}), 400
+
+        if format_param == 'xlsx' and Workbook is None:
+            return jsonify({'error': 'Excel export is not available on this server.'}), 501
+
+        filters = _parse_transaction_filters(request.args)
+        query = _build_transactions_query(current_user.id, filters)
+
+        sort_mapping = {
+            'date': Transaction.date,
+            'name': Transaction.name,
+            'amount': Transaction.amount
+        }
+        sort_column = sort_mapping.get(filters['sort_key'], Transaction.date)
+        primary_order = desc(sort_column) if filters['sort_desc'] else asc(sort_column)
+        secondary_order = desc(Transaction.id)
+        if sort_column is Transaction.date and not filters['sort_desc']:
+            secondary_order = asc(Transaction.id)
+
+        transactions = query.order_by(primary_order, secondary_order).all()
+        override_map = _load_overrides([txn.id for txn in transactions])
+        payload = [_serialize_transaction(txn, override_map) for txn in transactions]
+
+        timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+        if format_param == 'csv':
+            csv_content = _export_transactions_to_csv(payload)
+            filename = f'transactions_{timestamp}.csv'
+            response = current_app.response_class(csv_content, mimetype='text/csv')
+            response.headers['Content-Disposition'] = f'attachment; filename="{filename}"'
+            return response
+
+        output_stream = _export_transactions_to_excel(payload)
+        filename = f'transactions_{timestamp}.xlsx'
+        output_stream.seek(0)
+        return send_file(
+            output_stream,
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            as_attachment=True,
+            download_name=filename
+        )
+
+    return _with_schema_retry(handler)
+
+
 @core.route('/api/transactions/<int:transaction_id>/split', methods=['GET', 'POST'])
 @login_required
 def split_transaction(transaction_id):
@@ -2092,6 +2269,12 @@ def split_transaction(transaction_id):
         if parent_abs <= Decimal('0.00'):
             return jsonify({'error': 'Only transactions with a non-zero amount can be split.'}), 400
 
+        plaid_categories = _extract_category_list(txn.category)
+        fallback_label = ' / '.join(plaid_categories) if plaid_categories else None
+        plaid_candidates = list(plaid_categories)
+        if fallback_label:
+            plaid_candidates.append(fallback_label)
+
         seen_categories = set()
         processed = []
         for index, split in enumerate(splits, start=1):
@@ -2102,7 +2285,12 @@ def split_transaction(transaction_id):
             if not category_label:
                 return jsonify({'error': f'Row {index}: Category is required.'}), 400
 
-            normalized_category = category_label.lower()
+            try:
+                cleaned_category = _validate_category_name(category_label, plaid_candidates=plaid_candidates)
+            except ValueError as exc:
+                return jsonify({'error': f'Row {index}: {exc}'}), 400
+
+            normalized_category = cleaned_category.lower()
             if normalized_category in seen_categories:
                 return jsonify({'error': 'Each split must use a unique category.'}), 400
             seen_categories.add(normalized_category)
@@ -2114,7 +2302,7 @@ def split_transaction(transaction_id):
 
             processed.append({
                 'description': description,
-                'category': category_label,
+                'category': cleaned_category,
                 'amount': amount_abs
             })
 
@@ -2161,7 +2349,8 @@ def update_transaction_category(transaction_id):
             return jsonify({'error': 'Transaction not found.'}), 404
 
         payload = request.get_json() or {}
-        label = (payload.get('label') or '').strip()
+        raw_label = payload.get('label')
+        label = _normalize_category_name(raw_label)
         explicit_color = payload.get('color')
 
         override = TransactionCategoryOverride.query.filter_by(transaction_id=txn.id).first()
@@ -2176,6 +2365,13 @@ def update_transaction_category(transaction_id):
             override_map = _load_overrides([txn.id])
             return jsonify({'transaction': _serialize_transaction(txn, override_map)})
 
+        plaid_categories = _extract_category_list(txn.category)
+        fallback_label = ' / '.join(plaid_categories) if plaid_categories else None
+        plaid_candidates = list(plaid_categories)
+        if fallback_label:
+            plaid_candidates.append(fallback_label)
+
+        existing_category = _find_custom_category(current_user.id, label)
         normalized_color = None
         if explicit_color:
             try:
@@ -2183,17 +2379,22 @@ def update_transaction_category(transaction_id):
             except ValueError:
                 normalized_color = None
 
-        category = CustomCategory.query.filter_by(user_id=current_user.id, name=label).first()
-        if not category:
+        if existing_category:
+            category = existing_category
+            if normalized_color and category.color != normalized_color:
+                category.color = normalized_color
+        else:
+            try:
+                validated_label = _validate_category_name(label, plaid_candidates=plaid_candidates)
+            except ValueError as exc:
+                return jsonify({'error': str(exc)}), 400
             category = CustomCategory(
                 user_id=current_user.id,
-                name=label,
+                name=validated_label,
                 color=normalized_color or DEFAULT_MANUAL_COLOR
             )
             db.session.add(category)
             db.session.flush()
-        elif normalized_color and category.color != normalized_color:
-            category.color = normalized_color
 
         if override is None:
             override = TransactionCategoryOverride(transaction_id=txn.id, custom_category_id=category.id)
@@ -2224,8 +2425,8 @@ def list_custom_categories():
 
     def handler():
         categories = CustomCategory.query.filter_by(user_id=current_user.id).order_by(
-            CustomCategory.created_at.desc(),
-            CustomCategory.id.desc()
+            func.lower(CustomCategory.name).asc(),
+            CustomCategory.id.asc()
         ).all()
         category_ids = [category.id for category in categories]
         rule_counts, transaction_counts, override_counts = _collect_custom_category_stats(current_user.id, category_ids)
@@ -2255,11 +2456,15 @@ def create_custom_category():
 
     def handler():
         payload = request.get_json() or {}
-        name = (payload.get('name') or payload.get('label') or '').strip()
-        if not name:
-            return jsonify({'error': 'Name is required.'}), 400
+        raw_name = payload.get('name') or payload.get('label')
+        try:
+            name = _validate_category_name(raw_name, plaid_candidates=None)
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
         if len(name) > 255:
             name = name[:255]
+        if not name:
+            return jsonify({'error': 'Name is required.'}), 400
 
         color_value = payload.get('color') or DEFAULT_MANUAL_COLOR
         try:
@@ -2267,11 +2472,7 @@ def create_custom_category():
         except ValueError as exc:
             return jsonify({'error': str(exc)}), 400
 
-        normalized_name = name.lower()
-        existing = CustomCategory.query.filter(
-            CustomCategory.user_id == current_user.id,
-            func.lower(CustomCategory.name) == normalized_name
-        ).first()
+        existing = _find_custom_category(current_user.id, name)
         if existing:
             return jsonify({'error': 'A category with this name already exists.'}), 400
 
@@ -2317,9 +2518,10 @@ def update_custom_category(category_id):
         updated = False
 
         if name is not None:
-            trimmed = name.strip()
-            if not trimmed:
-                return jsonify({'error': 'Name cannot be empty.'}), 400
+            try:
+                trimmed = _validate_category_name(name, plaid_candidates=None)
+            except ValueError as exc:
+                return jsonify({'error': str(exc)}), 400
             if len(trimmed) > 255:
                 trimmed = trimmed[:255]
             if trimmed.lower() != (category.name or '').lower():
@@ -2466,20 +2668,14 @@ def create_category_rule():
             if not category:
                 return jsonify({'error': 'Selected category was not found.'}), 404
         else:
-            color_value = payload.get('color')
             try:
-                normalized_color = _normalize_color(color_value) if color_value else DEFAULT_MANUAL_COLOR
+                category = _get_or_create_custom_category(
+                    current_user.id,
+                    category_name,
+                    color=payload.get('color')
+                )
             except ValueError as exc:
                 return jsonify({'error': str(exc)}), 400
-            category = CustomCategory.query.filter_by(user_id=current_user.id, name=category_name).first()
-            if not category:
-                category = CustomCategory(
-                    user_id=current_user.id,
-                    name=category_name,
-                    color=normalized_color
-                )
-                db.session.add(category)
-                db.session.flush()
 
         rule = CategoryRule(
             user_id=current_user.id,
@@ -2554,15 +2750,14 @@ def update_category_rule(category_id):
             if not category:
                 return jsonify({'error': 'Selected category was not found.'}), 404
         else:
-            category = CustomCategory.query.filter_by(user_id=current_user.id, name=category_name).first()
-            if not category:
-                category = CustomCategory(
-                    user_id=current_user.id,
-                    name=category_name,
-                    color=DEFAULT_MANUAL_COLOR
+            try:
+                category = _get_or_create_custom_category(
+                    current_user.id,
+                    category_name,
+                    color=payload.get('color')
                 )
-                db.session.add(category)
-                db.session.flush()
+            except ValueError as exc:
+                return jsonify({'error': str(exc)}), 400
 
         rule.text_to_match = text_to_match
         rule.field_to_match = field_to_match
@@ -2856,6 +3051,137 @@ def plaid_webhook_item_error():
             db.session.rollback()
 
     return jsonify({"status": "ok"}), 200
+
+
+def _format_transaction_categories(transaction):
+    categories = transaction.get('category') if isinstance(transaction, dict) else None
+    if not categories:
+        return ''
+    if isinstance(categories, list):
+        return ' / '.join([str(item) for item in categories if item])
+    return str(categories)
+
+
+def _coerce_transaction_date(value):
+    if not value:
+        return ''
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(value)
+    except (ValueError, TypeError):
+        return value
+
+
+def _export_transactions_to_csv(transactions):
+    headers = [
+        'Date',
+        'Description',
+        'Merchant',
+        'Amount',
+        'Currency',
+        'Category',
+        'Plaid Categories',
+        'Account',
+        'Account Mask',
+        'Institution',
+        'Pending',
+        'Transaction ID'
+    ]
+    output = StringIO()
+    writer = csv.writer(output)
+    writer.writerow(headers)
+
+    for txn in transactions:
+        amount_value = txn.get('amount')
+        try:
+            amount_decimal = Decimal(str(amount_value)).quantize(CENT, rounding=ROUND_HALF_UP)
+        except (InvalidOperation, TypeError, ValueError):
+            amount_decimal = Decimal('0.00')
+        pending_label = 'Yes' if txn.get('pending') else 'No'
+        writer.writerow([
+            txn.get('date') or '',
+            txn.get('name') or '',
+            txn.get('merchant_name') or '',
+            str(amount_decimal),
+            txn.get('iso_currency_code') or '',
+            txn.get('custom_category') or '',
+            _format_transaction_categories(txn),
+            txn.get('account_name') or '',
+            txn.get('account_mask') or '',
+            txn.get('institution_name') or '',
+            pending_label,
+            txn.get('plaid_transaction_id') or ''
+        ])
+
+    return output.getvalue()
+
+
+def _export_transactions_to_excel(transactions):
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = 'Transactions'
+
+    headers = [
+        'Date',
+        'Description',
+        'Merchant',
+        'Amount',
+        'Currency',
+        'Category',
+        'Plaid Categories',
+        'Account',
+        'Account Mask',
+        'Institution',
+        'Pending',
+        'Transaction ID'
+    ]
+    worksheet.append(headers)
+
+    for txn in transactions:
+        amount_value = txn.get('amount')
+        try:
+            amount_decimal = Decimal(str(amount_value)).quantize(CENT, rounding=ROUND_HALF_UP)
+        except (InvalidOperation, TypeError, ValueError):
+            amount_decimal = Decimal('0.00')
+        pending_label = 'Yes' if txn.get('pending') else 'No'
+        worksheet.append([
+            _coerce_transaction_date(txn.get('date')),
+            txn.get('name') or '',
+            txn.get('merchant_name') or '',
+            float(amount_decimal),
+            txn.get('iso_currency_code') or '',
+            txn.get('custom_category') or '',
+            _format_transaction_categories(txn),
+            txn.get('account_name') or '',
+            txn.get('account_mask') or '',
+            txn.get('institution_name') or '',
+            pending_label,
+            txn.get('plaid_transaction_id') or ''
+        ])
+
+    if Workbook is not None and 'worksheet' in locals() and 'workbook' in locals():
+        try:
+            from openpyxl.utils import get_column_letter  # Lazy import for optional dependency
+            for idx, column_cells in enumerate(worksheet.columns, 1):
+                max_length = 0
+                for cell in column_cells:
+                    value = cell.value
+                    if isinstance(value, date):
+                        text = value.isoformat()
+                    elif value is None:
+                        text = ''
+                    else:
+                        text = str(value)
+                    if len(text) > max_length:
+                        max_length = len(text)
+                worksheet.column_dimensions[get_column_letter(idx)].width = min(40, max(10, max_length + 2))
+        except Exception:
+            pass
+
+    output = BytesIO()
+    workbook.save(output)
+    return output
 
 
 def json_csv(transactions, action):

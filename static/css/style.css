@@ -662,7 +662,7 @@ body.mobile-sidebar-open {
     position: absolute;
     top: calc(100% + 0.25rem);
     left: 0;
-    z-index: 20;
+    z-index: 1080;
     width: 100%;
     max-height: 12rem;
     overflow-y: auto;
@@ -840,9 +840,58 @@ body.mobile-sidebar-open {
     background-color: rgba(54, 187, 255, 0.08) !important;
 }
 
+.export-actions .btn {
+    min-width: 2.5rem;
+}
+
+.export-actions .btn i {
+    width: 1.1rem;
+}
+
+@media (max-width: 991.98px) {
+    .export-actions .btn-group {
+        width: 100%;
+        margin-bottom: 0.5rem;
+    }
+    .export-actions .btn-group .btn {
+        flex: 1 1 50%;
+    }
+    .export-actions .clear-filters-btn {
+        width: 100%;
+    }
+}
+
+.spending-table th:first-child,
+.spending-table td:first-child {
+    text-align: left;
+}
+
+.spending-table .spending-category-link {
+    display: inline-block;
+    text-align: left;
+    white-space: normal;
+}
+
 .highlighted-rule {
     animation: highlightPulse 2.4s ease-in-out;
     background-color: rgba(54, 187, 255, 0.16) !important;
+}
+
+.highlighted-category {
+    animation: highlightPulse 2.4s ease-in-out;
+    background-color: rgba(54, 187, 255, 0.12) !important;
+}
+
+.rule-category-link {
+    color: inherit;
+    font-weight: 600;
+    text-decoration: none;
+}
+
+.rule-category-link:hover,
+.rule-category-link:focus {
+    text-decoration: underline;
+    color: #2563eb;
 }
 
 @keyframes highlightPulse {
@@ -878,10 +927,15 @@ body.mobile-sidebar-open {
     display: block;
 }
 
+.split-transaction-table {
+    overflow-x: auto;
+    overflow-y: visible;
+}
+
 .split-transaction-table table {
     border: 1px solid #e2e8f0;
     border-radius: 0.5rem;
-    overflow: hidden;
+    overflow: visible;
 }
 
 .split-transaction-table thead th {
