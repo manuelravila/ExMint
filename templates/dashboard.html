@@ -351,6 +351,41 @@
                                 @keyup.enter.prevent="applyTransactionFilters"
                             >
                         </div>
+                        <div class="form-group col-12 mb-2 export-actions">
+                            <div class="d-flex flex-wrap align-items-center justify-content-between justify-content-lg-end">
+                                <div class="btn-group btn-group-sm mb-2 mb-lg-0" role="group" aria-label="Export transactions">
+                                    <button
+                                        type="button"
+                                        class="btn btn-outline-secondary"
+                                        :disabled="!transactions.length"
+                                        :title="transactions.length ? 'Download CSV' : 'No transactions to export'"
+                                        aria-label="Export filtered transactions as CSV"
+                                        @click="triggerTransactionExport('csv')"
+                                    >
+                                        <i class="fas fa-file-csv"></i>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        class="btn btn-outline-secondary"
+                                        :disabled="!transactions.length"
+                                        :title="transactions.length ? 'Download Excel' : 'No transactions to export'"
+                                        aria-label="Export filtered transactions as Excel workbook"
+                                        @click="triggerTransactionExport('xlsx')"
+                                    >
+                                        <i class="fas fa-file-excel"></i>
+                                    </button>
+                                </div>
+                                <button
+                                    type="button"
+                                    class="btn btn-outline-secondary btn-sm ml-lg-3 clear-filters-btn"
+                                    :disabled="!hasActiveTransactionFilters"
+                                    aria-label="Clear all transaction filters"
+                                    @click="resetFilters"
+                                >
+                                    <i class="fas fa-eraser mr-1"></i> Clear All
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 </div>
                 <div v-if="loading" class="card-body text-center py-5">
@@ -389,7 +424,11 @@
                                     'new-transaction': transaction.is_new
                                 }"
                                 @contextmenu.prevent="openTransactionMenu($event, transaction)"
-                                @click="markAsSeen(transaction)"
+                                @click="handleTransactionClick(transaction)"
+                                @touchstart="handleTransactionTouchStart($event, transaction)"
+                                @touchmove="handleTransactionTouchMove($event)"
+                                @touchend="handleTransactionTouchEnd()"
+                                @touchcancel="handleTransactionTouchCancel()"
                                 :data-transaction-id="transaction.id"
                             >
                                 <td>[[ formatDate(transaction.date) ]]<span v-if="transaction.pending" class="badge badge-warning ml-2">Pending</span></td>
@@ -1143,9 +1182,11 @@
                                     <tr
                                         v-for="category in customCategories"
                                         :key="category.localId"
+                                        :ref="`customCategoryRow-${category.localId}`"
                                         :class="{
                                             'table-warning': category.isDirty && !category.saving,
-                                            'table-active': category.isEditing
+                                            'table-active': category.isEditing,
+                                            'highlighted-category': highlightedCategoryLocalId === category.localId
                                         }"
                                     >
                                         <td>
@@ -1379,7 +1420,14 @@
                                         </td>
                                         <td @click="!rule.isEditing && startRuleEdit(rule)">
                                             <div v-if="!rule.isEditing" class="d-flex align-items-center table-cell-display">
-                                                <span v-if="rule.category_name">[[ rule.category_name ]]</span>
+                                                <button
+                                                    v-if="rule.category_name"
+                                                    type="button"
+                                                    class="btn btn-link p-0 rule-category-link text-left"
+                                                    @click.stop="focusCustomCategoryByName(rule.category_name)"
+                                                >
+                                                    [[ rule.category_name ]]
+                                                </button>
                                                 <span v-else class="text-muted">Tap to select</span>
                                                 <span
                                                     v-if="rule.category_name"
