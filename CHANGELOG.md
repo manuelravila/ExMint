@@ -1,3 +1,12 @@
+## [0.9.3] - 2025-10-22
+
+### Changed
+- Category creation confirmation now only appears for exact matches with an Automatic category, not for substrings.
+- Renamed "Plaid category" to "Automatic category" in all user-facing messages for better clarity.
+
+### Fixed
+- Fixed an infinite loop bug that occurred when confirming the creation of a new category with the same name as an existing Automatic category.
+
 ## [0.9.2] - 2025-10-21
 
 ### Added
@@ -110,7 +119,7 @@
 ### Added
 
 - Introduced Budgets dashboard pane with editable category, frequency, and amount columns plus auto-calculated 6-month averages and current-month totals.
-- Added income versus expense detection with color coding, along with a summary banner showing net (income - expenses).
+- Added income versus expense detection with color coding, and a summary banner showing net (income - expenses).
 - Provided inline category helpers for budgets and transaction splits to quickly pick existing categories.
 
 ### Changed

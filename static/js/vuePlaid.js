@@ -849,11 +849,6 @@ const app = new Vue({
             const currentLabel = transaction.custom_category || '';
             const isManual = transaction.custom_category_source === 'manual';
             const isFallback = transaction.custom_category_is_fallback;
-            const fallbackSegments = Array.isArray(transaction.category) ? transaction.category.filter(item => !!item) : [];
-            const fallbackLabel = fallbackSegments.length ? fallbackSegments.join(' / ') : '';
-            const trimmedLower = trimmed.toLowerCase();
-            const fallbackLabelLower = fallbackLabel.toLowerCase();
-            const fallbackSegmentSet = new Set(fallbackSegments.map(item => item.toLowerCase()));
 
             if (!trimmed && !isManual) {
                 if (isFallback) {
@@ -877,36 +872,43 @@ const app = new Vue({
                 return;
             }
 
-            const matchesPlaid = trimmed
-                && (fallbackSegmentSet.has(trimmedLower) || (!!fallbackLabel && trimmedLower === fallbackLabelLower));
-            if (matchesPlaid) {
-                if (isFallback && trimmedLower === fallbackLabelLower) {
-                    this.cancelTransactionCategoryEdit();
-                    return;
-                }
-                alert('Please choose a different category name than the original Plaid category.');
-                return;
-            }
-
-            const payload = { label: trimmed };
-            if (trimmed) {
-                const match = this.customCategories.find(cat => cat.name && cat.name.toLowerCase() === trimmed.toLowerCase());
-                if (match && match.color) {
-                    payload.color = match.color;
-                }
-            }
-
             transaction.savingCategory = true;
             try {
-                const response = await fetch(`/api/transactions/${transaction.id}/category`, {
+                let payload = { label: trimmed };
+                if (trimmed) {
+                    const match = this.customCategories.find(cat => cat.name && cat.name.toLowerCase() === trimmed.toLowerCase());
+                    if (match && match.color) {
+                        payload.color = match.color;
+                    }
+                }
+
+                let response = await fetch(`/api/transactions/${transaction.id}/category`, {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
                 });
-                const data = await response.json();
+
+                let data = await response.json();
+
+                if (response.status === 409 && data.confirmation_required) {
+                    if (confirm(data.message)) {
+                        payload.force_create = true;
+                        response = await fetch(`/api/transactions/${transaction.id}/category`, {
+                            method: 'PATCH',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+                        data = await response.json();
+                    } else {
+                        this.cancelTransactionCategoryEdit();
+                        return; // Exit function
+                    }
+                }
+
                 if (!response.ok) {
                     throw new Error(data.error || 'Failed to update category.');
                 }
+
                 if (data.transaction) {
                     Object.assign(transaction, data.transaction);
                 }
@@ -915,6 +917,7 @@ const app = new Vue({
                     await this.fetchDashboard({ suppressLoader: true, force: true });
                 }
                 this.cancelTransactionCategoryEdit();
+
             } catch (error) {
                 console.error('Error updating transaction category:', error);
                 alert(error.message || 'Failed to update category.');
@@ -1352,7 +1355,7 @@ const app = new Vue({
                         categorySet.add(key);
                     }
                     if (fallbackSegmentSet.has(key) || (!!fallbackLabel && key === fallbackLabelLower)) {
-                        errors.push(`Row ${index + 1}: Category cannot match the original Plaid category.`);
+                        errors.push(`Row ${index + 1}: Category cannot match the original Automatic category.`);
                     }
                 }
                 const cents = this.parseAmountToCents(row.amount);

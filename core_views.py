@@ -328,7 +328,7 @@ def _validate_category_name(raw_name, *, plaid_candidates=None, min_length=3):
             if not candidate_trimmed:
                 continue
             if lowered == candidate_trimmed.lower():
-                raise ValueError('Category name cannot match an original Plaid category.')
+                raise ValueError('Category name cannot match an original Automatic category.')
     return trimmed
 
 
@@ -441,6 +441,7 @@ def _serialize_transaction(txn, override_map):
     }
 
 _COLOR_RE = re.compile(r'^#([0-9a-fA-F]{6})$')
+
 
 def _wildcard_to_regex(pattern):
     escaped = re.escape(pattern)
@@ -1701,6 +1702,7 @@ def handle_token_and_accounts():
         db.session.rollback()
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
+
 def _persist_transactions_from_payload(user, credential, data, from_webhook=False):
     counts = {'added': 0, 'modified': 0, 'removed': 0}
     payload_by_action = {
@@ -2352,6 +2354,7 @@ def update_transaction_category(transaction_id):
         raw_label = payload.get('label')
         label = _normalize_category_name(raw_label)
         explicit_color = payload.get('color')
+        force_create = payload.get('force_create', False)
 
         override = TransactionCategoryOverride.query.filter_by(transaction_id=txn.id).first()
 
@@ -2367,7 +2370,7 @@ def update_transaction_category(transaction_id):
 
         plaid_categories = _extract_category_list(txn.category)
         fallback_label = ' / '.join(plaid_categories) if plaid_categories else None
-        plaid_candidates = list(plaid_categories)
+        plaid_candidates = []
         if fallback_label:
             plaid_candidates.append(fallback_label)
 
@@ -2384,13 +2387,27 @@ def update_transaction_category(transaction_id):
             if normalized_color and category.color != normalized_color:
                 category.color = normalized_color
         else:
-            try:
-                validated_label = _validate_category_name(label, plaid_candidates=plaid_candidates)
-            except ValueError as exc:
-                return jsonify({'error': str(exc)}), 400
+            trimmed = _normalize_category_name(label)
+            if len(trimmed) < 3:
+                return jsonify({'error': 'Category name must be at least 3 characters.'}), 400
+
+            if not force_create:
+                lowered = trimmed.lower()
+                for candidate in plaid_candidates:
+                    if not candidate:
+                        continue
+                    candidate_trimmed = _normalize_category_name(candidate)
+                    if not candidate_trimmed:
+                        continue
+                    if lowered == candidate_trimmed.lower():
+                        return jsonify({
+                            'confirmation_required': True,
+                            'message': 'An Automatic category with this name already exists. Do you want to create a new custom category with the same name?'
+                        }), 409
+
             category = CustomCategory(
                 user_id=current_user.id,
-                name=validated_label,
+                name=trimmed,
                 color=normalized_color or DEFAULT_MANUAL_COLOR
             )
             db.session.add(category)
@@ -3081,7 +3098,7 @@ def _export_transactions_to_csv(transactions):
         'Amount',
         'Currency',
         'Category',
-        'Plaid Categories',
+        'Automatic Categories',
         'Account',
         'Account Mask',
         'Institution',
@@ -3129,7 +3146,7 @@ def _export_transactions_to_excel(transactions):
         'Amount',
         'Currency',
         'Category',
-        'Plaid Categories',
+        'Automatic Categories',
         'Account',
         'Account Mask',
         'Institution',
