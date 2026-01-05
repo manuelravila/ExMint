@@ -1,0 +1,1587 @@
+{% extends 'base.html' %}
+
+{% block extra_head %}
+    <!-- Plaid Integration -->
+    <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
+{% endblock %}
+
+{% block content %}
+    <div id="vue-app">
+    <header class="sticky-top">
+        <nav class="navbar navbar-expand-lg navbar-light bg-light">
+            <button
+                v-if="isMobileView"
+                type="button"
+                class="btn btn-link mobile-sidebar-toggle p-0 mr-3"
+                @click="toggleMobileSidebar"
+                :aria-expanded="mobileSidebarVisible ? 'true' : 'false'"
+                aria-controls="accounts-navigation"
+            >
+                <span class="sr-only">Toggle accounts navigation</span>
+                <i class="fas fa-bars fa-lg"></i>
+            </button>
+            <a class="navbar-brand" href="/dashboard">
+                <img src="{{ url_for('static', filename='images/logo.png') }}" alt="Logo" style="height: 30px;">
+            </a>
+            <div class="ml-auto d-flex align-items-center header-action-bar">
+                <div class="header-search mr-3">
+                    <div class="input-group input-group-sm">
+                        <div class="input-group-prepend">
+                            <span class="input-group-text"><i class="fas fa-search"></i></span>
+                        </div>
+                        <input
+                            type="search"
+                            class="form-control"
+                            placeholder="Search description, merchant..."
+                            v-model="filters.search"
+                            @input="handleSearchInput"
+                            aria-label="Search transactions"
+                        >
+                        <div class="input-group-append">
+                            <button class="btn btn-outline-secondary" type="button" @click="resetFilters" :disabled="!hasActiveTransactionFilters">
+                                Reset
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <button class="btn btn-primary btn-sm mr-2" @click="syncTransactions" :disabled="syncing">
+                    <span v-if="!syncing"><i class="fas fa-sync-alt"></i> Sync</span>
+                    <span v-else><i class="fas fa-sync fa-spin"></i> Syncing...</span>
+                </button>
+                <button id="link-button" class="btn btn-outline-secondary mr-2">
+                    <i class="fas fa-university"></i> Connect
+                </button>
+
+                <div class="dropdown d-inline-block">
+                    <button class="btn btn-outline-secondary dropdown-toggle" type="button" id="profileMenu" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+                        <i class="fas fa-user"></i> My Account
+                    </button>
+                    <div class="dropdown-menu" aria-labelledby="profileMenu">
+                        <a class="dropdown-item" href="#" data-toggle="modal" data-target="#profileModal">Edit Profile</a>
+                        <a class="dropdown-item" href="#" data-toggle="modal" data-target="#myConnectionsModal" @click="fetchModalBanks">My Connections</a>
+                        <a class="dropdown-item" href="{{ url_for('views.logout') }}">Log out</a>
+                    </div>
+                </div>
+            </div>
+        </nav>
+    </header>
+
+    <div
+        class="dashboard-shell"
+        :class="{ 'sidebar-collapsed': isSidebarCollapsed, 'dashboard-mobile': isMobileView }"
+    >
+        <!-- Left Sidebar: Connected Banks and Accounts -->
+        <aside
+            id="accounts-navigation"
+            :class="[
+                'accounts-pane',
+                {
+                    'is-collapsed': isSidebarCollapsed && !isMobileView,
+                    'is-mobile-view': isMobileView,
+                    'is-mobile-visible': mobileSidebarVisible
+                }
+            ]"
+            :aria-hidden="isMobileView && !mobileSidebarVisible ? 'true' : 'false'"
+        >
+            <div class="sidebar-toolbar" v-if="!isMobileView">
+                <button
+                    type="button"
+                    class="btn btn-outline-secondary btn-sm sidebar-toggle"
+                    @click.stop="toggleSidebarCollapse"
+                    :aria-expanded="!isSidebarCollapsed"
+                    :aria-label="isSidebarCollapsed ? 'Expand navigation sidebar' : 'Collapse navigation sidebar'"
+                >
+                    <i :class="[isSidebarCollapsed ? 'fas fa-angle-double-right' : 'fas fa-angle-double-left']"></i>
+                </button>
+            </div>
+            <div class="accounts-top-level">
+                <button
+                    type="button"
+                    class="accounts-nav-btn"
+                    :class="{ active: activePane === 'dashboard' }"
+                    @click="setActivePane('dashboard')"
+                    :title="sidebarTooltip('Dashboard')"
+                >
+                    <i class="fas fa-chart-line mr-2"></i>
+                    <span>Dashboard</span>
+                </button>
+                <button
+                    type="button"
+                    class="accounts-nav-btn"
+                    :class="{ active: activePane === 'categories' }"
+                    @click="setActivePane('categories')"
+                    :title="sidebarTooltip('Categories')"
+                >
+                    <i class="fas fa-tags mr-2"></i>
+                    <span>Categories</span>
+                </button>
+                <button
+                    type="button"
+                    class="accounts-nav-btn"
+                    :class="{ active: activePane === 'budgets' }"
+                    @click="setActivePane('budgets')"
+                    :title="sidebarTooltip('Budgets')"
+                >
+                    <i class="fas fa-wallet mr-2"></i>
+                    <span>Budgets</span>
+                </button>
+                <div
+                    class="transactions-nav"
+                    :class="{ active: activePane === 'transactions' }"
+                    @click="setActivePane('transactions')"
+                    :title="sidebarTooltip('Transactions')"
+                >
+                    <div class="transactions-nav-main">
+                        <i class="fas fa-receipt transactions-nav-icon" aria-hidden="true"></i>
+                        <div class="transactions-nav-text">
+                            <div class="custom-control custom-checkbox all-accounts-toggle mb-0">
+                                <input
+                                    type="checkbox"
+                                    class="custom-control-input"
+                                    id="all-accounts-toggle"
+                                    :checked="areAllAccountsSelected"
+                                    @change="toggleAllAccounts"
+                                    @click.stop
+                                    ref="allAccountsCheckbox"
+                                    aria-label="Toggle all accounts"
+                                >
+                                <label class="custom-control-label" for="all-accounts-toggle">
+                                    Transactions
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                    <button
+                        type="button"
+                        class="collapse-toggle"
+                        @click.stop="toggleTransactionsCollapse"
+                        :aria-expanded="!transactionsCollapsed"
+                        aria-controls="transactions-accordion"
+                    >
+                        <i :class="[transactionsCollapsed ? 'fas fa-chevron-right' : 'fas fa-chevron-down']"></i>
+                    </button>
+                </div>
+            </div>
+            <div
+                class="institution-list"
+                id="transactions-accordion"
+                v-show="!transactionsCollapsed && !isSidebarCollapsed"
+            >
+                <div class="institution-card" v-for="bank in banks" :key="bank.id">
+                    <div class="institution-header">
+                        <div class="institution-main">
+                            <div class="form-check form-check-inline institution-checkbox mb-0">
+                                <input
+                                    class="form-check-input"
+                                    type="checkbox"
+                                    :id="`bank-${bank.id}`"
+                                    :checked="isBankFullySelected(bank)"
+                                    @change="toggleInstitutionSelection(bank)"
+                                    :ref="'bankCheckbox-' + bank.id"
+                                >
+                                <label class="sr-only" :for="`bank-${bank.id}`">Toggle [[ bank.institution_name ]]</label>
+                            </div>
+                            <span class="institution-name">[[ bank.institution_name ]]</span>
+                            <button
+                                v-if="bank.requires_update"
+                                type="button"
+                                class="badge badge-danger ml-2 badge-button"
+                                @click.stop.prevent="startReconnect(bank.id)"
+                            >
+                                Reconnect
+                            </button>
+                        </div>
+                        <button
+                            class="btn btn-sm collapse-toggle"
+                            type="button"
+                            @click="toggleAccordion(bank.id)"
+                            :aria-expanded="isAccordionOpen(bank.id)"
+                            :aria-controls="`collapse-${bank.id}`"
+                        >
+                            <i class="fas" :class="isAccordionOpen(bank.id) ? 'fa-chevron-up' : 'fa-chevron-down'"></i>
+                        </button>
+                    </div>
+                    <div
+                        :id="`collapse-${bank.id}`"
+                        :class="['collapse', { show: isAccordionOpen(bank.id) }]"
+                        :aria-labelledby="`heading-${bank.id}`"
+                    >
+                        <div class="list-group list-group-flush account-list">
+                            <label class="list-group-item d-flex justify-content-between align-items-center" v-for="account in bank.accounts" :key="account.id">
+                                <div class="custom-control custom-checkbox">
+                                    <input class="custom-control-input" type="checkbox" :id="`account-${account.id}`" :value="account.id" v-model="selectedAccountIds" @change="handleAccountSelectionChange">
+                                    <label class="custom-control-label" :for="`account-${account.id}`">
+                                        [[ account.name ]]
+                                        <span class="text-muted ml-1" v-if="account.mask">••[[ account.mask ]]</span>
+                                    </label>
+                                </div>
+                                <span class="badge badge-light text-uppercase ml-2" v-if="account.subtype">[[ account.subtype ]]</span>
+                            </label>
+                            <div v-if="!bank.accounts.length" class="list-group-item text-muted small">
+                                No active accounts for this institution.
+                            </div>
+                        </div>
+                        <div class="px-3 py-2 border-top">
+                            <button class="btn btn-link btn-sm px-0" v-if="bank.requires_update" @click.prevent="startReconnect(bank.id)">Reconnect</button>
+                        </div>
+                    </div>
+                </div>
+                <div v-if="!banks.length" class="text-muted small px-3 py-4">
+                    No banks connected yet. Use “Connect Institution” to get started.
+                </div>
+            </div>
+        </aside>
+
+        <div
+            v-if="isMobileView"
+            class="mobile-sidebar-backdrop"
+            :class="{ 'is-visible': mobileSidebarVisible }"
+            @click="closeMobileSidebar"
+            aria-hidden="true"
+        ></div>
+
+        <!-- Main content: Transactions Table -->
+        <main
+            role="main"
+            :class="[
+                activePane === 'transactions' ? 'transactions-pane' : 'categories-pane',
+                'pane-content'
+            ]"
+        >
+            <section v-if="activePane === 'transactions'" class="transactions-section">
+            <div class="transactions-summary">
+                <h4 class="mb-0">Transactions</h4>
+                <small class="text-muted">
+                    <span v-if="transactionsTotal && selectedAccountIds.length">
+                        Showing [[ showingRange.start ]]–[[ showingRange.end ]] of [[ transactionsTotal ]] transactions across [[ selectedAccountIds.length ]] account(s).
+                    </span>
+                    <span v-else-if="!selectedAccountIds.length">
+                        Select at least one account to display transactions.
+                    </span>
+                    <span v-else>
+                        No transactions available for the current filters.
+                    </span>
+                </small>
+            </div>
+            <div v-if="syncSummary.length" class="alert alert-info alert-sm alert-dismissible py-2" role="alert">
+                <button type="button" class="close" aria-label="Close" @click="dismissSyncSummary">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+                <div v-for="item in syncSummary" :key="item.credential_id">
+                    [[ item.institution_name ]]: [[ item.added ]] added, [[ item.modified ]] updated, [[ item.removed ]] removed.
+                </div>
+            </div>
+            <div v-if="syncErrors.length" class="alert alert-warning alert-dismissible py-2" role="alert">
+                <button type="button" class="close" aria-label="Close" @click="dismissSyncErrors">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+                <div v-for="error in syncErrors" :key="`${error.credential_id}-${error.error_code || error.error_message}`">
+                    [[ error.institution_name || 'Institution' ]]: [[ error.error_message || 'An unknown error occurred.' ]]
+                </div>
+            </div>
+            <div class="card shadow-sm transactions-card">
+                <div class="card-body transactions-filter-bar border-bottom">
+                    <div class="form-row align-items-end">
+                        <div class="form-group col-sm-6 col-lg-2 mb-2">
+                            <label class="small text-muted text-uppercase font-weight-bold d-block mb-1" for="transactionsFilterStart">Start date</label>
+                            <input
+                                type="date"
+                                class="form-control form-control-sm"
+                                id="transactionsFilterStart"
+                                v-model="filters.startDate"
+                                @change="applyTransactionFilters"
+                            >
+                        </div>
+                        <div class="form-group col-sm-6 col-lg-2 mb-2">
+                            <label class="small text-muted text-uppercase font-weight-bold d-block mb-1" for="transactionsFilterEnd">End date</label>
+                            <input
+                                type="date"
+                                class="form-control form-control-sm"
+                                id="transactionsFilterEnd"
+                                v-model="filters.endDate"
+                                @change="applyTransactionFilters"
+                            >
+                        </div>
+                        <div class="form-group col-sm-6 col-lg-3 mb-2">
+                            <label class="small text-muted text-uppercase font-weight-bold d-block mb-1" for="transactionsFilterCategory">Custom category</label>
+                            <select
+                                id="transactionsFilterCategory"
+                                class="form-control form-control-sm"
+                                v-model="filters.customCategoryId"
+                                @change="applyTransactionFilters"
+                            >
+                                <option value="">All custom categories</option>
+                                <option value="__uncategorized__">Uncategorized</option>
+                                <option
+                                    v-for="option in customCategoryFilterOptions"
+                                    :key="`filter-cat-${option.id}`"
+                                    :value="option.id"
+                                >
+                                    [[ option.label ]]
+                                </option>
+                            </select>
+                        </div>
+                        <div class="form-group col-sm-6 col-lg-2 mb-2">
+                            <label class="small text-muted text-uppercase font-weight-bold d-block mb-1" for="transactionsFilterMin">Min amount</label>
+                            <input
+                                type="number"
+                                step="0.01"
+                                inputmode="decimal"
+                                class="form-control form-control-sm"
+                                id="transactionsFilterMin"
+                                v-model="filters.amountMin"
+                                placeholder="-200.00"
+                                title="Enter negative values for expenses"
+                                @change="applyTransactionFilters"
+                                @keyup.enter.prevent="applyTransactionFilters"
+                            >
+                        </div>
+                        <div class="form-group col-sm-6 col-lg-2 mb-2">
+                            <label class="small text-muted text-uppercase font-weight-bold d-block mb-1" for="transactionsFilterMax">Max amount</label>
+                            <input
+                                type="number"
+                                step="0.01"
+                                inputmode="decimal"
+                                class="form-control form-control-sm"
+                                id="transactionsFilterMax"
+                                v-model="filters.amountMax"
+                                placeholder="1000.00"
+                                title="Enter negative values for expenses"
+                                @change="applyTransactionFilters"
+                                @keyup.enter.prevent="applyTransactionFilters"
+                            >
+                        </div>
+                        <div class="form-group col-12 mb-2 export-actions">
+                            <div class="d-flex flex-wrap align-items-center justify-content-between justify-content-lg-end">
+                                <div class="btn-group btn-group-sm mb-2 mb-lg-0" role="group" aria-label="Export transactions">
+                                    <button
+                                        type="button"
+                                        class="btn btn-outline-secondary"
+                                        :disabled="!transactions.length"
+                                        :title="transactions.length ? 'Download CSV' : 'No transactions to export'"
+                                        aria-label="Export filtered transactions as CSV"
+                                        @click="triggerTransactionExport('csv')"
+                                    >
+                                        <i class="fas fa-file-csv"></i>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        class="btn btn-outline-secondary"
+                                        :disabled="!transactions.length"
+                                        :title="transactions.length ? 'Download Excel' : 'No transactions to export'"
+                                        aria-label="Export filtered transactions as Excel workbook"
+                                        @click="triggerTransactionExport('xlsx')"
+                                    >
+                                        <i class="fas fa-file-excel"></i>
+                                    </button>
+                                </div>
+                                <button
+                                    type="button"
+                                    class="btn btn-outline-secondary btn-sm ml-lg-3 clear-filters-btn"
+                                    :disabled="!hasActiveTransactionFilters"
+                                    aria-label="Clear all transaction filters"
+                                    @click="resetFilters"
+                                >
+                                    <i class="fas fa-eraser mr-1"></i> Clear All
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div v-if="loading" class="card-body text-center py-5">
+                    <div class="spinner-border text-primary mb-3" role="status">
+                        <span class="sr-only">Loading...</span>
+                    </div>
+                    <div class="text-muted">Loading your transactions...</div>
+                </div>
+                <div v-else class="table-responsive transactions-table">
+                    <table class="table table-hover table-sm mb-0">
+                        <thead class="thead-light">
+                            <tr>
+                                <th scope="col" @click="setSort('date')" role="button">
+                                    Date
+                                    <i :class="['ml-1', sortIcon('date')]"></i>
+                                </th>
+                                <th scope="col" @click="setSort('name')" role="button">
+                                    Description
+                                    <i :class="['ml-1', sortIcon('name')]"></i>
+                                </th>
+                                <th scope="col">Merchant</th>
+                                <th scope="col">Account</th>
+                                <th scope="col">Category</th>
+                                <th scope="col" class="text-right" @click="setSort('amount')" role="button">
+                                    Amount
+                                    <i :class="['ml-1', sortIcon('amount')]"></i>
+                                </th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr
+                                v-for="transaction in displayedTransactions"
+                                :key="transaction.id"
+                                :class="{
+                                    'transaction-row-context': transactionMenu.visible && transactionMenu.transaction && transactionMenu.transaction.id === transaction.id,
+                                    'new-transaction': transaction.is_new
+                                }"
+                                @contextmenu.prevent="openTransactionMenu($event, transaction)"
+                                @click="handleTransactionClick(transaction)"
+                                @touchstart="handleTransactionTouchStart($event, transaction)"
+                                @touchmove="handleTransactionTouchMove($event)"
+                                @touchend="handleTransactionTouchEnd()"
+                                @touchcancel="handleTransactionTouchCancel()"
+                                :data-transaction-id="transaction.id"
+                            >
+                                <td>[[ formatDate(transaction.date) ]]<span v-if="transaction.pending" class="badge badge-warning ml-2">Pending</span></td>
+                                <td><span v-if="transaction.is_new" class="badge badge-success mr-2">New</span>[[ transaction.name ]]</td>
+                                <td>[[ transaction.merchant_name || '—' ]]</td>
+                                <td>
+                                    <div>[[ transaction.account_name ]] <span class="text-muted" v-if="transaction.account_mask">••[[ transaction.account_mask ]]</span></div>
+                                    <small class="text-muted">[[ transaction.institution_name ]]</small>
+                                </td>
+                                <td class="transaction-category-cell">
+                                    <div v-if="editingTransactionCategoryId === transaction.id" class="category-edit-wrapper">
+                                        <input
+                                            type="text"
+                                            class="form-control form-control-sm category-edit-input"
+                                            :ref="`transactionCategoryInput-${transaction.id}`"
+                                            v-model="editingTransactionCategoryValue"
+                                            placeholder="Enter category"
+                                            @keydown="handleTransactionCategoryKeydown($event, transaction)"
+                                            @input="handleTransactionCategoryInput()"
+                                            @blur="onTransactionCategoryBlur(transaction)"
+                                        >
+                                        <div
+                                            v-if="filteredTransactionSuggestions.length"
+                                            class="category-edit-dropdown"
+                                        >
+                                            <button
+                                                v-for="option in filteredTransactionSuggestions"
+                                                :key="`option-${transaction.id}-${option}`"
+                                                type="button"
+                                                class="dropdown-item suggestion-item"
+                                                @mousedown.prevent="applyTransactionCategorySuggestion(option, transaction)"
+                                            >
+                                                [[ option ]]
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <span
+                                        v-else
+                                        class="badge category-tag"
+                                        :class="{ 'category-tag-fallback': transaction.custom_category_is_fallback }"
+                                        :style="transaction.custom_category_is_fallback ? null : categoryTagStyle(transaction)"
+                                        @click.stop="startTransactionCategoryEdit(transaction)"
+                                        title="Click to edit category"
+                                    >
+                                        [[ transaction.custom_category ]]
+                                    </span>
+                                </td>
+                                <td class="text-right font-weight-bold">[[ formatCurrency(transaction.amount, transaction.iso_currency_code) ]]</td>
+                            </tr>
+                            <tr v-if="!selectedAccountIds.length">
+                                <td colspan="6" class="text-center text-muted py-5">
+                                    Select at least one account to view transactions.
+                                </td>
+                            </tr>
+                            <tr v-else-if="!displayedTransactions.length">
+                                <td colspan="6" class="text-center text-muted py-5">
+                                    No transactions match the current filters.
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div
+                    v-if="transactionMenu.visible"
+                    class="transaction-context-menu"
+                    :style="{ top: transactionMenu.y + 'px', left: transactionMenu.x + 'px' }"
+                    ref="transactionContextMenu"
+                    role="menu"
+                    @click.stop
+                    @contextmenu.prevent
+                >
+                    <button
+                        type="button"
+                        class="transaction-context-menu-item"
+                        @click="handleTransactionMenuAutoCategorize"
+                    >
+                        <i class="fas fa-magic mr-2"></i>
+                        Auto-categorize
+                    </button>
+                    <button
+                        type="button"
+                        class="transaction-context-menu-item"
+                        @click="handleTransactionMenuSplit"
+                        :disabled="transactionMenu.transaction && transactionMenu.transaction.is_split_child"
+                    >
+                        <i class="fas fa-cut mr-2"></i>
+                        Split transaction
+                    </button>
+                    <button
+                        type="button"
+                        class="transaction-context-menu-item"
+                        @click="handleTransactionMenuManualOverride"
+                    >
+                        <i class="fas fa-edit mr-2"></i>
+                        Edit category
+                    </button>
+                </div>
+                <div v-if="splitModal.visible">
+                    <div
+                        class="modal fade show split-transaction-modal"
+                        style="display: block;"
+                        role="dialog"
+                        aria-modal="true"
+                    >
+                        <div class="modal-dialog modal-lg modal-dialog-centered">
+                            <div class="modal-content">
+                                <div class="modal-header">
+                                    <h5 class="modal-title">Split Transaction</h5>
+                                    <button type="button" class="close" @click="closeSplitModal" :disabled="splitModal.saving" aria-label="Close split transaction modal">
+                                        <span aria-hidden="true">&times;</span>
+                                    </button>
+                                </div>
+                                <div class="modal-body">
+                                    <div class="mb-3 split-transaction-summary" v-if="splitModal.transaction">
+                                        <div class="d-flex justify-content-between align-items-start">
+                                            <div>
+                                                <h6 class="mb-1">[[ splitModal.transaction.name ]]</h6>
+                                                <small class="text-muted d-block">
+                                                    [[ formatDate(splitModal.transaction.date) ]] · [[ splitModal.transaction.account_name ]]
+                                                </small>
+                                                <small class="text-muted" v-if="splitModal.transaction.institution_name">
+                                                    [[ splitModal.transaction.institution_name ]]
+                                                </small>
+                                            </div>
+                                            <div class="text-right">
+                                                <span class="badge badge-light mb-1">Original Amount</span>
+                                                <div class="font-weight-bold">
+                                                    [[ formatCurrency(Math.abs(splitModal.transaction.amount || 0), splitModal.transaction.iso_currency_code) ]]
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="alert alert-warning py-2 px-3 mb-3" v-if="splitModal.errors.length">
+                                        <ul class="mb-0 pl-3">
+                                            <li v-for="error in splitModal.errors" :key="`split-error-${error}`">[[ error ]]</li>
+                                        </ul>
+                                    </div>
+                                    <div class="table-responsive split-transaction-table">
+                                        <table class="table table-sm mb-0">
+                                            <thead class="thead-light">
+                                                <tr>
+                                                    <th scope="col">Description</th>
+                                                    <th scope="col">Category</th>
+                                                    <th scope="col" class="text-right">Amount</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <tr v-for="(row, index) in splitModal.rows" :key="row.id">
+                                                    <td>
+                                                        <input
+                                                            type="text"
+                                                            class="form-control form-control-sm"
+                                                            :ref="`splitDescription-${row.id}`"
+                                                            v-model="row.description"
+                                                            @input="handleSplitFieldInput"
+                                                            placeholder="Description"
+                                                        >
+                                                    </td>
+                                                    <td class="split-category-cell">
+                                                        <div class="split-category-wrapper">
+                                                            <input
+                                                                type="text"
+                                                                class="form-control form-control-sm"
+                                                                :ref="`splitCategoryInput-${row.id}`"
+                                                                v-model="row.category"
+                                                                @focus="openSplitCategoryDropdown(row)"
+                                                                @input="handleSplitCategoryInput(row)"
+                                                                @blur="onSplitCategoryBlur"
+                                                                list="custom-category-options"
+                                                                placeholder="Select category"
+                                                            >
+                                                            <div
+                                                                v-if="splitCategoryDropdown.rowId === row.id && splitCategoryDropdown.items.length"
+                                                                class="category-edit-dropdown"
+                                                            >
+                                                                <button
+                                                                    v-for="option in splitCategoryDropdown.items"
+                                                                    :key="`split-category-${row.id}-${option}`"
+                                                                    type="button"
+                                                                    class="dropdown-item suggestion-item"
+                                                                    @mousedown.prevent="applySplitCategorySuggestion(option, row)"
+                                                                >
+                                                                    [[ option ]]
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    </td>
+                                                    <td>
+                                                        <div class="input-group input-group-sm split-amount-group">
+                                                            <input
+                                                                type="number"
+                                                                class="form-control form-control-sm text-right"
+                                                                min="0"
+                                                                step="0.01"
+                                                                v-model="row.amount"
+                                                                @input="handleSplitAmountInput(index)"
+                                                                :readonly="index === splitModal.rows.length - 1"
+                                                                aria-label="Split amount"
+                                                            >
+                                                            <div class="input-group-append" v-if="splitModal.rows.length > 2 && index < splitModal.rows.length - 1">
+                                                                <button
+                                                                    type="button"
+                                                                    class="btn btn-outline-danger"
+                                                                    @click="removeSplitRow(index)"
+                                                                    :disabled="splitModal.saving"
+                                                                    aria-label="Remove split row"
+                                                                >
+                                                                    <i class="fas fa-times"></i>
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    <div class="d-flex justify-content-between align-items-center mt-3">
+                                        <button
+                                            type="button"
+                                            class="btn btn-outline-secondary btn-sm"
+                                            @click="addSplitRow"
+                                            :disabled="splitModal.saving"
+                                        >
+                                            <i class="fas fa-plus mr-1"></i>
+                                            Add split row
+                                        </button>
+                                        <div class="text-right small">
+                                            <div class="text-muted">Remaining balance auto-fills the final row.</div>
+                                            <div v-if="splitModalRemainingCents !== 0">
+                                                <span class="text-danger">
+                                                    Difference: [[ formatCentsToAmount(Math.abs(splitModalRemainingCents)) ]]
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="modal-footer">
+                                    <button type="button" class="btn btn-secondary" @click="closeSplitModal" :disabled="splitModal.saving">
+                                        Cancel
+                                    </button>
+                                    <button type="button" class="btn btn-primary" @click="submitSplitModal" :disabled="!canSubmitSplit">
+                                        <span v-if="!splitModal.saving">
+                                            <i class="fas fa-cut mr-1"></i>
+                                            Split
+                                        </span>
+                                        <span v-else>
+                                            <i class="fas fa-spinner fa-spin mr-1"></i>
+                                            Splitting…
+                                        </span>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-backdrop fade show"></div>
+                </div>
+                <div v-if="showPagination" class="card-footer d-flex justify-content-between align-items-center">
+                    <button class="btn btn-outline-secondary btn-sm" @click="goToPreviousPage" :disabled="transactionsPage === 1 || loading">
+                        Previous
+                    </button>
+                    <div class="text-muted small">
+                        Page [[ transactionsPage ]] of [[ totalPages ]] · [[ transactionsTotal ]] total
+                    </div>
+                    <button class="btn btn-outline-secondary btn-sm" @click="goToNextPage" :disabled="!hasMoreTransactions || loading">
+                        Next
+                    </button>
+                </div>
+            </div>
+            </section>
+            <section v-else-if="activePane === 'dashboard'" class="dashboard-section">
+                <div class="dashboard-tabs tab-switch" role="tablist">
+                    <button
+                        type="button"
+                        class="dashboard-tab-btn tab-switch-btn"
+                        :class="{ active: dashboardTab === 'summary' }"
+                        @click="setDashboardTab('summary')"
+                    >
+                        <i class="fas fa-columns mr-2"></i>
+                        Balances &amp; Spending
+                    </button>
+                    <button
+                        type="button"
+                        class="dashboard-tab-btn tab-switch-btn"
+                        :class="{ active: dashboardTab === 'cashflow' }"
+                        @click="setDashboardTab('cashflow')"
+                    >
+                        <i class="fas fa-chart-line mr-2"></i>
+                        Cash Flow
+                    </button>
+                </div>
+                <div v-if="dashboardError" class="alert alert-warning py-2 px-3 mb-3">
+                    [[ dashboardError ]]
+                </div>
+                <div v-else-if="dashboardLoading" class="card shadow-sm dashboard-card">
+                    <div class="card-body text-center py-5">
+                        <div class="spinner-border text-primary mb-3" role="status">
+                            <span class="sr-only">Loading dashboard...</span>
+                        </div>
+                        <div class="text-muted">Loading your financial overview...</div>
+                    </div>
+                </div>
+                <div v-else>
+                    <template v-if="dashboardTab === 'summary'">
+                        <div class="dashboard-grid">
+                            <div class="card shadow-sm balances-card">
+                                <div class="card-header d-flex justify-content-between align-items-start">
+                                    <div class="card-header-text">
+                                        <h5 class="mb-0">Balances</h5>
+                                        <small class="text-muted d-block">Totals by account group and institution</small>
+                                    </div>
+                                    <button
+                                        v-if="isMobileView"
+                                        type="button"
+                                        class="card-collapse-toggle"
+                                        @click.stop="toggleMobileCard('balances')"
+                                        :aria-expanded="!mobileCardCollapsed.balances"
+                                        aria-controls="balances-card-body"
+                                    >
+                                        <i :class="[mobileCardCollapsed.balances ? 'fas fa-chevron-down' : 'fas fa-chevron-up']"></i>
+                                    </button>
+                                </div>
+                                <div
+                                    class="card-body"
+                                    id="balances-card-body"
+                                    v-show="!isMobileView || !mobileCardCollapsed.balances"
+                                >
+                                    <div v-if="!(dashboardData.balances.groups && dashboardData.balances.groups.length)" class="text-muted small">
+                                        No balance data available yet. Connect accounts or sync transactions to populate this section.
+                                    </div>
+                                    <div v-else class="dashboard-tree">
+                                        <div
+                                            v-for="group in dashboardData.balances.groups"
+                                            :key="group.key"
+                                            class="tree-group"
+                                        >
+                                            <button
+                                                type="button"
+                                                class="tree-toggle group-toggle"
+                                                @click="toggleBalanceGroup(group.key)"
+                                                :aria-expanded="isBalanceGroupOpen(group.key) ? 'true' : 'false'"
+                                            >
+                                                <i :class="isBalanceGroupOpen(group.key) ? 'fas fa-chevron-down' : 'fas fa-chevron-right'"></i>
+                                                <span class="tree-label">[[ group.label ]]</span>
+                                                <span class="tree-value" :class="{ 'text-danger': group.total < 0 }">
+                                                    [[ formatDashboardAmount(group.total, null) ]]
+                                                </span>
+                                            </button>
+                                            <div v-if="isBalanceGroupOpen(group.key)" class="tree-children">
+                                                <div
+                                                    v-for="institution in group.institutions"
+                                                    :key="institution.id"
+                                                    class="tree-institution"
+                                                >
+                                                    <button
+                                                        type="button"
+                                                        class="tree-toggle institution-toggle"
+                                                        @click="toggleBalanceInstitution(group.key, institution.id)"
+                                                        :aria-expanded="isBalanceInstitutionOpen(group.key, institution.id) ? 'true' : 'false'"
+                                                    >
+                                                        <i :class="isBalanceInstitutionOpen(group.key, institution.id) ? 'fas fa-chevron-down' : 'fas fa-chevron-right'"></i>
+                                                        <span class="tree-label">[[ institution.name ]]</span>
+                                                        <span class="tree-value" :class="{ 'text-danger': institution.total < 0 }">
+                                                            [[ formatDashboardAmount(institution.total, null) ]]
+                                                        </span>
+                                                    </button>
+                                                    <div v-if="isBalanceInstitutionOpen(group.key, institution.id)" class="tree-children accounts">
+                                                        <div
+                                                            v-for="account in institution.accounts"
+                                                            :key="account.id"
+                                                            class="tree-account"
+                                                        >
+                                                            <span class="tree-label">[[ account.name ]] <small v-if="account.mask" class="text-muted">([[ account.mask ]])</small></span>
+                                                            <span class="tree-value" :class="{ 'text-danger': account.balance < 0 }">
+                                                                [[ formatDashboardAmount(account.balance, null) ]]
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="tree-footer">
+                                            <span class="tree-label">Grand Total</span>
+                                            <span class="tree-value" :class="{ 'text-danger': dashboardData.balances.grand_total < 0 }">
+                                                [[ formatDashboardAmount(dashboardData.balances.grand_total, null) ]]
+                                            </span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="card shadow-sm spending-card">
+                                <div class="card-header d-flex justify-content-between align-items-center flex-wrap">
+                                    <h5 class="mb-0">Spending Report</h5>
+                                    <div class="spending-controls">
+                                        <label class="mb-0 mr-2" for="spendingYearSelect">Year</label>
+                                        <select
+                                            id="spendingYearSelect"
+                                            class="form-control form-control-sm"
+                                            v-model.number="selectedSpendingYear"
+                                            @change="handleSpendingYearChange"
+                                            :disabled="!spendingYearOptions.length"
+                                        >
+                                            <option v-for="year in spendingYearOptions" :key="`spending-year-${year}`" :value="year">
+                                                [[ year ]]
+                                            </option>
+                                        </select>
+                                    </div>
+                                    <button
+                                        v-if="isMobileView"
+                                        type="button"
+                                        class="card-collapse-toggle ml-auto"
+                                        @click.stop="toggleMobileCard('spending')"
+                                        :aria-expanded="!mobileCardCollapsed.spending"
+                                        aria-controls="spending-card-body"
+                                    >
+                                        <i :class="[mobileCardCollapsed.spending ? 'fas fa-chevron-down' : 'fas fa-chevron-up']"></i>
+                                    </button>
+                                </div>
+                                <div
+                                    class="card-body"
+                                    id="spending-card-body"
+                                    v-show="!isMobileView || !mobileCardCollapsed.spending"
+                                >
+                                    <div v-if="!filteredSpendingMonths.length" class="text-muted small">
+                                        No spending data available. Start syncing transactions to analyze your budget.
+                                    </div>
+                                    <div v-else class="spending-months">
+                                        <div
+                                            v-for="month in filteredSpendingMonths"
+                                            :key="`spending-month-${selectedSpendingYear}-${month.month}`"
+                                            class="spending-month-block"
+                                        >
+                                            <button
+                                                type="button"
+                                                class="spending-month-toggle"
+                                                @click="toggleSpendingMonth(selectedSpendingYear, month.month)"
+                                                :aria-expanded="isSpendingMonthOpen(selectedSpendingYear, month.month) ? 'true' : 'false'"
+                                            >
+                                                <div class="spending-month-label">
+                                                    <i :class="isSpendingMonthOpen(selectedSpendingYear, month.month) ? 'fas fa-chevron-down' : 'fas fa-chevron-right'"></i>
+                                                    <span>[[ month.label ]]</span>
+                                                </div>
+                                                <span class="spending-month-total">[[ formatDashboardAmount(month.total, null) ]]</span>
+                                            </button>
+                                            <div v-if="isSpendingMonthOpen(selectedSpendingYear, month.month)" class="spending-month-table">
+                                                <div v-if="getSpendingCategoriesForMonth(month).length" class="table-responsive spending-table-wrapper">
+                                                    <table class="table table-sm table-hover table-striped mb-0 spending-table">
+                                                        <thead class="thead-light">
+                                                            <tr>
+                                                                <th scope="col">Category</th>
+                                                                <th scope="col">This Month</th>
+                                                                <th scope="col">6M Average</th>
+                                                                <th scope="col">Budget</th>
+                                                                <th scope="col">Remainder</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            <tr
+                                                                v-for="category in getSpendingCategoriesForMonth(month)"
+                                                                :key="`spending-${selectedSpendingYear}-${month.month}-${category.label}`"
+                                                            >
+                                                                <td class="align-middle">
+                                                                    <button
+                                                                        type="button"
+                                                                        class="btn btn-link p-0 spending-category-link"
+                                                                        @click="applySpendingCategoryFilter(category.label, month.month, selectedSpendingYear)"
+                                                                    >
+                                                                        [[ category.label ]]
+                                                                    </button>
+                                                                </td>
+                                                                <td class="align-middle">
+                                                                    [[ formatDashboardAmount(category.value, null) ]]
+                                                                </td>
+                                                                <td class="align-middle">
+                                                                    [[ formatDashboardAmount(category.six_month_average, null) ]]
+                                                                </td>
+                                                                <td class="align-middle">
+                                                                    [[ category.budget !== null ? formatDashboardAmount(category.budget, null) : '—' ]]
+                                                                </td>
+                                                                <td
+                                                                    class="align-middle"
+                                                                    :class="{
+                                                                        'text-success': category.remainder !== null && category.remainder >= 0,
+                                                                        'text-danger': category.remainder !== null && category.remainder < 0
+                                                                    }"
+                                                                >
+                                                                    [[ category.remainder !== null ? formatDashboardAmount(category.remainder, null) : '—' ]]
+                                                                </td>
+                                                            </tr>
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                                <div v-else class="text-muted small pt-2">
+                                                    No spending recorded for this month yet.
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+                    <template v-else>
+                        <div class="card shadow-sm cashflow-card cashflow-full">
+                            <div class="card-header d-flex justify-content-between align-items-center">
+                                <div>
+                                    <h5 class="mb-0">Cash Flow</h5>
+                                    <small class="text-muted">Trailing 12 months net income minus expenses</small>
+                                </div>
+                                <select class="form-control form-control-sm cashflow-select" v-model="selectedCashflowCategory">
+                                    <option value="all">All categories</option>
+                                    <option
+                                        v-for="category in (dashboardData.cashflow.categories || [])"
+                                        :key="`cashflow-cat-${category.key}`"
+                                        :value="category.key"
+                                    >
+                                        [[ category.label ]]
+                                    </option>
+                                </select>
+                            </div>
+                            <div class="card-body">
+                                <div class="cashflow-chart-container">
+                                    <line-chart :chart-data="cashflowChartData" :options="cashflowChartOptions"></line-chart>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </section>
+            <section v-else-if="activePane === 'budgets'" class="budgets-section">
+                <div class="budgets-header">
+                    <div>
+                        <h4 class="mb-0">Budgets</h4>
+                        <small class="text-muted">Compare planned amounts with recent and current spending.</small>
+                    </div>
+                    <div class="d-flex align-items-center">
+                        <button class="btn btn-primary btn-sm" @click="addBudgetRow">
+                            <i class="fas fa-plus mr-1"></i> Add Budget
+                        </button>
+                    </div>
+                </div>
+                <div class="budgets-summary" role="status">
+                    <div class="budgets-summary-item">
+                        <span class="label text-muted">Income Budgets</span>
+                        <strong class="text-success">
+                            [[ formatCurrency(budgetSummary.income_total, null) ]]
+                        </strong>
+                    </div>
+                    <div class="budgets-summary-item">
+                        <span class="label text-muted">Expense Budgets</span>
+                        <strong class="text-danger">
+                            [[ formatCurrency(budgetSummary.expense_total, null) ]]
+                        </strong>
+                    </div>
+                    <div class="budgets-summary-item">
+                        <span class="label text-muted">Net</span>
+                        <strong :class="budgetSummary.net_total >= 0 ? 'text-success' : 'text-danger'">
+                            [[ formatCurrency(budgetSummary.net_total, null) ]]
+                        </strong>
+                    </div>
+                </div>
+                <div v-if="budgetsError" class="alert alert-warning py-2 px-3 mb-3">
+                    [[ budgetsError ]]
+                </div>
+                <div v-if="budgetsLoading" class="card shadow-sm budgets-card">
+                    <div class="card-body text-center py-5">
+                        <div class="spinner-border text-primary mb-3" role="status">
+                            <span class="sr-only">Loading budgets...</span>
+                        </div>
+                        <div class="text-muted">Loading your budgets...</div>
+                    </div>
+                </div>
+                <div v-else class="card shadow-sm budgets-card">
+                    <div v-if="!budgets.length" class="card-body text-center text-muted py-5">
+                        No budgets yet. Add one to get started.
+                    </div>
+                    <div v-else class="table-responsive budgets-table">
+                        <table class="table table-sm mb-0">
+                            <thead class="thead-light">
+                                <tr>
+                                    <th scope="col">Category</th>
+                                    <th scope="col">Frequency</th>
+                                    <th scope="col" class="text-right">Amount</th>
+                                    <th scope="col" class="text-right">6M Average</th>
+                                    <th scope="col" class="text-right">This Month</th>
+                                    <th scope="col" class="text-right">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr
+                                    v-for="budget in budgets"
+                                    :key="budget.localId"
+                                    :class="{
+                                        'budget-income-row': budget.classification === 'income',
+                                        'budget-expense-row': budget.classification !== 'income'
+                                    }"
+                                >
+                                    <td class="budget-category-cell">
+                                        <div class="budget-category-wrapper">
+                                            <input
+                                                type="text"
+                                                class="form-control form-control-sm"
+                                                :ref="`budgetCategoryInput-${budget.localId}`"
+                                                v-model="budget.category_label"
+                                                @focus="openBudgetCategoryDropdown(budget)"
+                                                @input="handleBudgetCategoryInput(budget)"
+                                                @blur="onBudgetCategoryBlur"
+                                                placeholder="Select category"
+                                            >
+                                            <div
+                                                v-if="budgetCategoryDropdown.rowId === budget.localId && budgetCategoryDropdown.items.length"
+                                                class="category-edit-dropdown"
+                                            >
+                                                <button
+                                                    v-for="option in budgetCategoryDropdown.items"
+                                                    :key="`budget-category-${budget.localId}-${option}`"
+                                                    type="button"
+                                                    class="dropdown-item suggestion-item"
+                                                    @mousedown.prevent="applyBudgetCategorySuggestion(option, budget)"
+                                                >
+                                                    [[ option ]]
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <select class="form-control form-control-sm" v-model="budget.frequency" @change="markBudgetDirty(budget)">
+                                            <option
+                                                v-for="freq in budgetFrequencies"
+                                                :key="`frequency-${budget.localId}-${freq.value}`"
+                                                :value="freq.value"
+                                            >
+                                                [[ freq.label ]]
+                                            </option>
+                                        </select>
+                                    </td>
+                                    <td>
+                                        <input
+                                            type="number"
+                                            class="form-control form-control-sm text-right"
+                                            min="0"
+                                            step="0.01"
+                                            v-model="budget.amount"
+                                            @input="markBudgetDirty(budget)"
+                                            @blur="discardBudgetRowIfEmpty"
+                                            placeholder="0.00"
+                                        >
+                                    </td>
+                                    <td class="text-right">
+                                        [[ formatCurrency(Math.abs(budget.sixMonthAverage), null) ]]
+                                    </td>
+                                    <td class="text-right">
+                                        [[ formatCurrency(Math.abs(budget.currentMonthTotal), null) ]]
+                                    </td>
+                                    <td class="text-right">
+                                        <div class="btn-group btn-group-sm" role="group">
+                                            <button
+                                                class="btn btn-outline-success"
+                                                :disabled="budget.saving || !budget.isDirty"
+                                                @click="saveBudgetRow(budget)"
+                                            >
+                                                <span v-if="!budget.saving"><i class="fas fa-save"></i></span>
+                                                <span v-else><i class="fas fa-spinner fa-spin"></i></span>
+                                            </button>
+                                            <button
+                                                class="btn btn-outline-danger"
+                                                :disabled="budget.saving"
+                                                @click="deleteBudgetRow(budget)"
+                                            >
+                                                <i class="fas fa-trash-alt"></i>
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+            <section v-else class="categories-section">
+                <div class="categories-header">
+                    <div class="categories-controls d-flex align-items-center">
+                        <div class="categories-tabs tab-switch mr-3" role="tablist">
+                            <button
+                                type="button"
+                                class="categories-tab-btn tab-switch-btn"
+                                :class="{ active: categoryTab === 'manage' }"
+                                @click="setCategoryTab('manage')"
+                            >
+                                <i class="fas fa-layer-group mr-2"></i>
+                                Edit Categories
+                            </button>
+                            <button
+                                type="button"
+                                class="categories-tab-btn tab-switch-btn"
+                                :class="{ active: categoryTab === 'rules' }"
+                                @click="setCategoryTab('rules')"
+                            >
+                                <i class="fas fa-magic mr-2"></i>
+                                Automatic rules
+                            </button>
+                        </div>
+                        <div class="ml-auto">
+                            <button
+                                v-if="categoryTab === 'manage'"
+                                class="btn btn-primary btn-sm"
+                                @click="addCustomCategory"
+                            >
+                                <i class="fas fa-plus mr-1"></i> Add Category
+                            </button>
+                            <button
+                                v-else
+                                class="btn btn-primary btn-sm"
+                                @click="addCategoryRule"
+                            >
+                                <i class="fas fa-plus mr-1"></i> Add Rule
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div v-if="categoryTab === 'manage'">
+                    <div v-if="customCategoriesError" class="alert alert-warning py-2 px-3 mb-3">
+                        [[ customCategoriesError ]]
+                    </div>
+                    <div v-if="customCategoriesLoading" class="card shadow-sm categories-card">
+                        <div class="card-body text-center py-5">
+                            <div class="spinner-border text-primary mb-3" role="status">
+                                <span class="sr-only">Loading categories...</span>
+                            </div>
+                            <div class="text-muted">Loading your custom categories...</div>
+                        </div>
+                    </div>
+                    <div v-else class="card shadow-sm categories-card">
+                        <div v-if="!customCategories.length" class="card-body text-center text-muted py-5">
+                            No custom categories yet. Add one to get started.
+                        </div>
+                        <div v-else class="table-responsive categories-table">
+                            <table class="table table-sm mb-0 table-editable">
+                                <thead class="thead-light">
+                                    <tr>
+                                        <th scope="col">Name</th>
+                                        <th scope="col">Color</th>
+                                        <th scope="col" class="text-right">Rules</th>
+                                        <th scope="col" class="text-right">Transactions</th>
+                                        <th scope="col" class="text-right">Manual Overrides</th>
+                                        <th scope="col" class="text-right">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr
+                                        v-for="category in customCategories"
+                                        :key="category.localId"
+                                        :ref="`customCategoryRow-${category.localId}`"
+                                        :class="{
+                                            'table-warning': category.isDirty && !category.saving,
+                                            'table-active': category.isEditing,
+                                            'highlighted-category': highlightedCategoryLocalId === category.localId
+                                        }"
+                                    >
+                                        <td>
+                                            <div
+                                                v-if="!category.isEditing"
+                                                class="table-cell-display"
+                                                role="button"
+                                                tabindex="0"
+                                                @click="startCustomCategoryEdit(category)"
+                                                @keydown.enter.prevent="startCustomCategoryEdit(category)"
+                                            >
+                                                <span v-if="category.name">[[ category.name ]]</span>
+                                                <span v-else class="text-muted">Tap to name</span>
+                                            </div>
+                                            <input
+                                                v-else
+                                                type="text"
+                                                class="form-control form-control-sm"
+                                                :ref="`categoryNameInput-${category.localId}`"
+                                                v-model="category.editableName"
+                                                @input="markCustomCategoryDirty(category)"
+                                                placeholder="Category name"
+                                            >
+                                        </td>
+                                        <td class="category-color-cell">
+                                            <div
+                                                v-if="!category.isEditing"
+                                                class="category-color-chip"
+                                                :style="{ backgroundColor: normalizeColor(category.color) }"
+                                                :title="`Category color ${normalizeColor(category.color)}`"
+                                            ></div>
+                                            <div v-else>
+                                                <button
+                                                    type="button"
+                                                    class="color-trigger"
+                                                    :style="{ backgroundColor: normalizeColor(category.editableColor) }"
+                                                    @click.stop="toggleCategoryColorPalette(category)"
+                                                    :aria-expanded="openCategoryColorId === category.localId ? 'true' : 'false'"
+                                                    :aria-controls="`category-color-${category.localId}`"
+                                                    :title="`Selected color ${normalizeColor(category.editableColor)}`"
+                                                ></button>
+                                                <div
+                                                    v-if="openCategoryColorId === category.localId"
+                                                    :id="`category-color-${category.localId}`"
+                                                    class="color-swatch-popover"
+                                                    role="menu"
+                                                    @click.stop
+                                                >
+                                                    <div class="color-swatch-grid">
+                                                        <button
+                                                            v-for="paletteColor in categoryPalette"
+                                                            :key="`${category.localId}-${paletteColor}`"
+                                                            type="button"
+                                                            class="color-swatch"
+                                                        :class="{ selected: normalizeColor(category.editableColor) === paletteColor }"
+                                                            :style="{ backgroundColor: paletteColor }"
+                                                            @click.stop="selectCategoryColor(category, paletteColor)"
+                                                            :aria-label="`Select color ${paletteColor}`"
+                                                            role="menuitemradio"
+                                                        :aria-checked="normalizeColor(category.editableColor) === paletteColor ? 'true' : 'false'"
+                                                        ></button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td class="text-right">[[ category.rule_count ]]</td>
+                                        <td class="text-right">[[ category.transaction_count ]]</td>
+                                        <td class="text-right">[[ category.override_count ]]</td>
+                                        <td class="text-right">
+                                            <div class="btn-group btn-group-sm" role="group">
+                                                <button
+                                                    v-if="!category.isEditing"
+                                                    class="btn btn-outline-primary"
+                                                    :disabled="category.saving"
+                                                    @click="startCustomCategoryEdit(category)"
+                                                >
+                                                    <i class="fas fa-edit"></i>
+                                                </button>
+                                                <button
+                                                    v-else
+                                                    class="btn btn-outline-success"
+                                                    :disabled="category.saving || !category.isDirty || !(category.editableName && category.editableName.trim())"
+                                                    @click="saveCustomCategory(category)"
+                                                >
+                                                    <span v-if="!category.saving"><i class="fas fa-save"></i></span>
+                                                    <span v-else><i class="fas fa-spinner fa-spin"></i></span>
+                                                </button>
+                                                <button
+                                                    v-if="category.isEditing"
+                                                    class="btn btn-outline-secondary"
+                                                    :disabled="category.saving"
+                                                    @click="cancelCustomCategoryEdit(category)"
+                                                >
+                                                    <i class="fas fa-times"></i>
+                                                </button>
+                                                <button
+                                                    class="btn btn-outline-danger"
+                                                    :disabled="category.saving"
+                                                    @click="deleteCustomCategory(category)"
+                                                >
+                                                    <i class="fas fa-trash-alt"></i>
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <div v-else>
+                    <div v-if="categoriesError" class="alert alert-warning py-2 px-3 mb-3">
+                        [[ categoriesError ]]
+                    </div>
+                    <div v-if="categoriesLoading" class="card shadow-sm categories-card">
+                        <div class="card-body text-center py-5">
+                            <div class="spinner-border text-primary mb-3" role="status">
+                                <span class="sr-only">Loading rules...</span>
+                            </div>
+                            <div class="text-muted">Loading your category rules...</div>
+                        </div>
+                    </div>
+                    <div v-else class="card shadow-sm categories-card">
+                        <div v-if="!categoryRules.length" class="card-body text-center text-muted py-5">
+                            No category rules yet. Add one to get started.
+                        </div>
+                        <div v-else class="table-responsive categories-table">
+                            <table class="table table-sm mb-0 table-editable">
+                                <thead class="thead-light">
+                                    <tr>
+                                        <th scope="col">Text to match</th>
+                                        <th scope="col">Field to match</th>
+                                        <th scope="col">Type</th>
+                                        <th scope="col">Amount &gt;=</th>
+                                        <th scope="col">Amount &lt;=</th>
+                                        <th scope="col">Custom Category</th>
+                                        <th scope="col" class="text-right">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr
+                                        v-for="rule in categoryRules"
+                                        :key="rule.localId"
+                                        :ref="`categoryRuleRow-${rule.localId}`"
+                                        :class="{
+                                            'highlighted-rule': highlightedRuleLocalId === rule.localId,
+                                            'table-active': rule.isEditing,
+                                            'table-warning': rule.isDirty && !rule.saving
+                                        }"
+                                    >
+                                        <td @click="!rule.isEditing && startRuleEdit(rule)">
+                                            <div
+                                                v-if="!rule.isEditing"
+                                                class="table-cell-display"
+                                                role="button"
+                                                tabindex="0"
+                                                @keydown.enter.prevent="startRuleEdit(rule)"
+                                            >
+                                                <span v-if="rule.text_to_match">[[ rule.text_to_match ]]</span>
+                                                <span v-else class="text-muted">Tap to edit</span>
+                                            </div>
+                                            <input
+                                                v-else
+                                                type="text"
+                                                class="form-control form-control-sm"
+                                                :ref="`ruleTextInput-${rule.localId}`"
+                                                v-model="rule.draft.text_to_match"
+                                                @input="markRuleDraftDirty(rule)"
+                                                @blur="handleRuleInputBlur(rule)"
+                                                placeholder="Enter pattern (* ? # supported)"
+                                            >
+                                        </td>
+                                        <td @click="!rule.isEditing && startRuleEdit(rule)">
+                                            <div v-if="!rule.isEditing" class="table-cell-display">
+                                                [[ rule.field_to_match === 'merchant' ? 'Merchant' : (rule.field_to_match === 'category' ? 'Category' : 'Description') ]]
+                                            </div>
+                                            <select
+                                                v-else
+                                                class="form-control form-control-sm"
+                                                v-model="rule.draft.field_to_match"
+                                                @change="markRuleDraftDirty(rule)"
+                                            >
+                                                <option value="description">Description</option>
+                                                <option value="merchant">Merchant</option>
+                                                <option value="category">Category</option>
+                                            </select>
+                                        </td>
+                                        <td @click="!rule.isEditing && startRuleEdit(rule)">
+                                            <div v-if="!rule.isEditing" class="table-cell-display">
+                                                [[ rule.transaction_type ? (rule.transaction_type === 'credit' ? 'Credit' : 'Debit') : 'Any' ]]
+                                            </div>
+                                            <select
+                                                v-else
+                                                class="form-control form-control-sm"
+                                                v-model="rule.draft.transaction_type"
+                                                @change="markRuleDraftDirty(rule)"
+                                            >
+                                                <option value="">Any</option>
+                                                <option value="debit">Debit</option>
+                                                <option value="credit">Credit</option>
+                                            </select>
+                                        </td>
+                                        <td @click="!rule.isEditing && startRuleEdit(rule)">
+                                            <div v-if="!rule.isEditing" class="table-cell-display">
+                                                [[ rule.amount_min ? rule.amount_min : '—' ]]
+                                            </div>
+                                            <input
+                                                v-else
+                                                type="number"
+                                                class="form-control form-control-sm"
+                                                v-model="rule.draft.amount_min"
+                                                @input="markRuleDraftDirty(rule)"
+                                                step="0.01"
+                                                placeholder="Min"
+                                            >
+                                        </td>
+                                        <td @click="!rule.isEditing && startRuleEdit(rule)">
+                                            <div v-if="!rule.isEditing" class="table-cell-display">
+                                                [[ rule.amount_max ? rule.amount_max : '—' ]]
+                                            </div>
+                                            <input
+                                                v-else
+                                                type="number"
+                                                class="form-control form-control-sm"
+                                                v-model="rule.draft.amount_max"
+                                                @input="markRuleDraftDirty(rule)"
+                                                step="0.01"
+                                                placeholder="Max"
+                                            >
+                                        </td>
+                                        <td @click="!rule.isEditing && startRuleEdit(rule)">
+                                            <div v-if="!rule.isEditing" class="d-flex align-items-center table-cell-display">
+                                                <button
+                                                    v-if="rule.category_name"
+                                                    type="button"
+                                                    class="btn btn-link p-0 rule-category-link text-left"
+                                                    @click.stop="focusCustomCategoryByName(rule.category_name)"
+                                                >
+                                                    [[ rule.category_name ]]
+                                                </button>
+                                                <span v-else class="text-muted">Tap to select</span>
+                                                <span
+                                                    v-if="rule.category_name"
+                                                    class="category-color-chip ml-2"
+                                                    :style="{ backgroundColor: normalizeColor(rule.category_color) }"
+                                                    :title="`Category color ${normalizeColor(rule.category_color)}`"
+                                                    aria-hidden="true"
+                                                ></span>
+                                            </div>
+                                            <div v-else class="d-flex align-items-center">
+                                                <input
+                                                    type="text"
+                                                    class="form-control form-control-sm"
+                                                    :ref="`ruleCategoryInput-${rule.localId}`"
+                                                    v-model="rule.draft.category_name"
+                                                    @input="handleRuleCategoryInput(rule)"
+                                                    @blur="handleRuleInputBlur(rule)"
+                                                    list="custom-category-options"
+                                                    placeholder="Select category"
+                                                >
+                                                <span
+                                                    class="category-color-chip ml-2"
+                                                    :style="{ backgroundColor: normalizeColor(rule.draft.category_color) }"
+                                                    :title="`Category color ${normalizeColor(rule.draft.category_color)}`"
+                                                    aria-hidden="true"
+                                                ></span>
+                                            </div>
+                                        </td>
+                                        <td class="text-right">
+                                            <div class="btn-group btn-group-sm" role="group">
+                                                <button
+                                                    v-if="!rule.isEditing"
+                                                    class="btn btn-outline-primary"
+                                                    :disabled="rule.saving"
+                                                    @click.stop="startRuleEdit(rule)"
+                                                >
+                                                    <i class="fas fa-edit"></i>
+                                                </button>
+                                                <button
+                                                    v-else
+                                                    class="btn btn-outline-success"
+                                                    :disabled="rule.saving || !rule.isDirty || !(rule.draft.text_to_match && rule.draft.text_to_match.trim()) || (!rule.draft.category_id && !(rule.draft.category_name && rule.draft.category_name.trim()))"
+                                                    @click.stop="saveCategoryRule(rule)"
+                                                >
+                                                    <span v-if="!rule.saving"><i class="fas fa-save"></i></span>
+                                                    <span v-else><i class="fas fa-spinner fa-spin"></i></span>
+                                                </button>
+                                                <button
+                                                    v-if="rule.isEditing"
+                                                    class="btn btn-outline-secondary"
+                                                    :disabled="rule.saving"
+                                                    @click.stop="cancelRuleEdit(rule)"
+                                                >
+                                                    <i class="fas fa-times"></i>
+                                                </button>
+                                                <button
+                                                    class="btn btn-outline-danger"
+                                                    :disabled="rule.saving"
+                                                    @click.stop="deleteCategoryRule(rule)"
+                                                >
+                                                    <i class="fas fa-trash-alt"></i>
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+                <datalist id="custom-category-options">
+                    <option v-for="label in categoryLabels" :key="`rule-${label}`" :value="label"></option>
+                </datalist>
+            </section>
+        </main>
+    </div>
+            <!-- My Connections Modal -->
+            <div class="modal fade" id="myConnectionsModal" tabindex="-1" role="dialog" aria-labelledby="myConnectionsModalLabel" aria-hidden="true">
+                <div class="modal-dialog" role="document">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title" id="myConnectionsModalLabel">My Connections</h5>
+                            <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                                <span aria-hidden="true">&times;</span>
+                            </button>
+                        </div>
+                        <div class="modal-body">
+                            <ul>
+                                <li v-for="bank in banks" :key="bank.id" class="list-group-item d-flex justify-content-between align-items-center">
+                                    <span class="bank-name">[[ bank.institution_name ]]</span>
+                                    <div class="button-group">
+                                        <button class="btn btn-secondary btn-sm mr-2" @click="startReconnect(bank.id)">Reconnect</button>
+                                        <button class="btn btn-danger btn-sm" @click="removeBank(bank)">Remove</button>
+                                    </div>
+                                </li>
+                            </ul>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    <!-- Profile Modal -->
+    <div class="modal fade" id="profileModal" tabindex="-1" role="dialog" aria-labelledby="profileModalLabel" aria-hidden="true">
+        <div class="modal-dialog" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="profileModalLabel">Profile</h5>
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                </div>
+                <form action="{{ url_for('views.dashboard') }}" method="post">
+                    {{ form.hidden_tag() }}
+                    <div class="modal-body">
+                        <div class="form-group">
+                            {{ form.email.label }}
+                            {{ form.email(class='form-control') }}
+                        </div>
+                        <div class="form-group">
+                            {{ form.password.label }}
+                            {{ form.password(class='form-control') }}
+                        </div>
+                        <div class="form-group">
+                            {{ form.confirm_password.label }}
+                            {{ form.confirm_password(class='form-control') }}
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                        {{ form.submit(class='btn btn-primary') }}
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    </div>
+
+{% endblock %}
+
+{% block scripts %}
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@2.7.1/dist/Chart.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vue-chartjs@3.5.1/dist/vue-chartjs.min.js"></script>
+    <script src="{{ url_for('static', filename='js/vuePlaid.js') }}"></script>
+    <script type="text/javascript">
+        $(document).ready(function() {
+            // Check if the my connections modal should be open
+            {% if connections_modal_open %}
+                $('#myConnectionsModal').modal('show');
+            {% endif %}
+        });
+    </script>   
+{% endblock %}

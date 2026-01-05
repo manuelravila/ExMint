@@ -1,0 +1,41 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "ExMint: DB Upgrade",
+            "type": "shell",
+            "command": "flask db upgrade",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "ExMint: SSH Tunnel",
+            "type": "shell",
+            "command": "echo 'Starting SSH Tunnel...'; ssh -i /root/.ssh/id_rsa -o StrictHostKeyChecking=no -L 3307:127.0.0.1:3306 root@srv469975.hstgr.cloud -N",
+            "isBackground": true,
+            "problemMatcher": {
+                "pattern": [
+                    {
+                        "regexp": "^(Starting SSH Tunnel...)$",
+                        "message": 1
+                    }
+                ],
+                "background": {
+                    "activeOnStart": true,
+                    "beginsPattern": "^Starting SSH Tunnel...",
+                    "endsPattern": "^Starting SSH Tunnel..."
+                }
+            },
+            "presentation": {
+                "group": "none"
+            }
+        },
+        {
+            "label": "ExMint: Start Dev Environment",
+            "dependsOn": ["ExMint: DB Upgrade", "ExMint: SSH Tunnel"],
+            "dependsOrder": "sequence"
+        }
+    ]
+}

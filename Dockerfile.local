@@ -1,0 +1,48 @@
+# Flask App Dockerfile
+
+# Use an official Python runtime as a parent image
+FROM python:3.9-slim
+
+# Set the working directory
+WORKDIR /app
+
+# Install necessary packages for Bitwarden CLI
+RUN apt-get update && apt-get install -y \
+    wget \
+    unzip \
+    ca-certificates \
+    openssh-client \
+    sshpass \
+    jq \
+    net-tools
+
+# Download Bitwarden Secrets Manager CLI binary and install it
+RUN wget https://github.com/bitwarden/sdk/releases/download/bws-v0.5.0/bws-x86_64-unknown-linux-gnu-0.5.0.zip \
+    && unzip bws-x86_64-unknown-linux-gnu-0.5.0.zip -d /usr/local/bin/ \
+    && chmod +x /usr/local/bin/bws \
+    && rm bws-x86_64-unknown-linux-gnu-0.5.0.zip
+
+# Copy the SSH private key into the container
+COPY dev_docker_key /root/.ssh/id_rsa
+RUN chmod 600 /root/.ssh/id_rsa
+
+# Copy the current directory contents into the container at /app
+COPY . /app
+
+# Make start.sh executable
+COPY start.sh /app/start.sh
+RUN chmod 755 /app/start.sh
+
+# Install any needed packages specified in requirements.txt
+RUN pip install --upgrade pip
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Make port 5000 available to the world outside this container
+EXPOSE 5000
+
+# Define environment variable
+ENV FLASK_APP=app.py
+
+# Entry point to start the application
+RUN ls -l /app/start.sh
+ENTRYPOINT ["/bin/sh", "/app/start.sh"]
