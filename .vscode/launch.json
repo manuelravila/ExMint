@@ -1,0 +1,81 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "ExMint PROD",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "flask",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "env": {
+        "FLASK_APP": "app.py",
+        "FLASK_SYS": "linux",
+        "DB_HOST": "127.0.0.1",
+        "DB_PORT": "3308"
+      },
+      "envFile": "${workspaceFolder}/.env.main",
+      "args": [
+        "run",
+        "--no-debugger",
+        "--no-reload",
+        "--host=127.0.0.1",
+        "--port=5000"
+      ],
+      "jinja": true,
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "preLaunchTask": "Prepare Prod launch"
+    },
+    {
+      "name": "ExMint STAG",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "flask",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "env": {
+        "FLASK_APP": "app.py",
+        "FLASK_SYS": "linux",
+        "FLASK_DEBUG": "1",
+        "FLASK_ENV": "stag",
+        "DB_HOST": "127.0.0.1",
+        "DB_PORT": "3309"
+      },
+      "envFile": "${workspaceFolder}/.env.stag",
+      "args": [
+        "run",
+        "--no-debugger",
+        "--no-reload",
+        "--host=127.0.0.1",
+        "--port=5001"
+      ],
+      "jinja": true,
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "preLaunchTask": "Prepare Stag launch"
+    },
+    {
+      "name": "ExMint DEV",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "flask",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "env": {
+        "FLASK_APP": "app.py",
+        "FLASK_SYS": "linux",
+        "FLASK_DEBUG": "1"
+      },
+      "envFile": "${workspaceFolder}/.env.dev",
+      "args": [
+        "run",
+        "--no-debugger",
+        "--no-reload",
+        "--host=127.0.0.1",
+        "--port=5000"
+      ],
+      "jinja": true,
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "preLaunchTask": "Prepare Dev launch"
+    }
+  ]
+}
