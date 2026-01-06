@@ -6,7 +6,7 @@
       "type": "debugpy",
       "request": "launch",
       "module": "flask",
-      "python": "${workspaceFolder}/.venv/bin/python",
+      "python": "${workspaceFolder}/venv/bin/python",
       "env": {
         "FLASK_APP": "app.py",
         "FLASK_SYS": "linux",
@@ -31,7 +31,7 @@
       "type": "debugpy",
       "request": "launch",
       "module": "flask",
-      "python": "${workspaceFolder}/.venv/bin/python",
+      "python": "${workspaceFolder}/venv/bin/python",
       "env": {
         "FLASK_APP": "app.py",
         "FLASK_SYS": "linux",
@@ -58,7 +58,7 @@
       "type": "debugpy",
       "request": "launch",
       "module": "flask",
-      "python": "${workspaceFolder}/.venv/bin/python",
+      "python": "${workspaceFolder}/venv/bin/python",
       "env": {
         "FLASK_APP": "app.py",
         "FLASK_SYS": "linux",

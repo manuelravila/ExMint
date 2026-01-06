@@ -6,8 +6,8 @@
       "type": "shell",
       "command": "bash",
       "args": [
-        "-lc",
-        "set -a; source .env.dev; set +a; FLASK_APP=app.py FLASK_SYS=linux FLASK_DEBUG=1 ${workspaceFolder}/.venv/bin/python -m flask db upgrade && FLASK_APP=app.py FLASK_SYS=linux FLASK_DEBUG=1 ${workspaceFolder}/.venv/bin/python -m flask db migrate"
+        "-c",
+        "set -a; source .env.dev; set +a; FLASK_APP=app.py ${workspaceFolder}/venv/bin/python -m flask db upgrade"
       ],
       "options": {
         "cwd": "${workspaceFolder}"
@@ -19,7 +19,7 @@
       "type": "shell",
       "command": "bash",
       "args": [
-        "-lc",
+        "-c",
         "if lsof -iTCP:3307 -sTCP:LISTEN -Pn 2>/dev/null | grep -q ssh; then exit 0; fi; ssh -f -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o StrictHostKeyChecking=accept-new -L 3307:127.0.0.1:3306 root@automatos.ca"
       ],
       "problemMatcher": []
@@ -37,8 +37,8 @@
       "type": "shell",
       "command": "bash",
       "args": [
-        "-lc",
-        "STAG_DB_HOST=${STAG_DB_HOST:-127.0.0.1}; STAG_DB_PORT=${STAG_DB_PORT:-3309}; set -a; source .env.stag; set +a; DB_HOST=$STAG_DB_HOST DB_PORT=$STAG_DB_PORT FLASK_APP=app.py FLASK_SYS=linux ${workspaceFolder}/.venv/bin/python -m flask db upgrade && DB_HOST=$STAG_DB_HOST DB_PORT=$STAG_DB_PORT FLASK_APP=app.py FLASK_SYS=linux ${workspaceFolder}/.venv/bin/python -m flask db migrate"
+        "-c",
+        "set -a; source .env.stag; set +a; FLASK_APP=app.py ${workspaceFolder}/venv/bin/python -m flask db upgrade"
       ],
       "options": {
         "cwd": "${workspaceFolder}"
@@ -50,7 +50,7 @@
       "type": "shell",
       "command": "bash",
       "args": [
-        "-lc",
+        "-c",
         "if lsof -iTCP:3309 -sTCP:LISTEN -Pn 2>/dev/null | grep -q ssh; then exit 0; fi; ssh -f -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o StrictHostKeyChecking=accept-new -L 3309:127.0.0.1:3306 root@automatos.ca"
       ],
       "problemMatcher": []
@@ -68,8 +68,8 @@
       "type": "shell",
       "command": "bash",
       "args": [
-        "-lc",
-        "PROD_DB_HOST=${PROD_DB_HOST:-127.0.0.1}; PROD_DB_PORT=${PROD_DB_PORT:-3308}; set -a; source .env.main; set +a; DB_HOST=$PROD_DB_HOST DB_PORT=$PROD_DB_PORT FLASK_APP=app.py FLASK_SYS=linux ${workspaceFolder}/.venv/bin/python -m flask db upgrade && DB_HOST=$PROD_DB_HOST DB_PORT=$PROD_DB_PORT FLASK_APP=app.py FLASK_SYS=linux ${workspaceFolder}/.venv/bin/python -m flask db migrate"
+        "-c",
+        "set -a; source .env.main; set +a; FLASK_APP=app.py ${workspaceFolder}/venv/bin/python -m flask db upgrade"
       ],
       "options": {
         "cwd": "${workspaceFolder}"
@@ -81,7 +81,7 @@
       "type": "shell",
       "command": "bash",
       "args": [
-        "-lc",
+        "-c",
         "if lsof -iTCP:3308 -sTCP:LISTEN -Pn 2>/dev/null | grep -q ssh; then exit 0; fi; ssh -f -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o StrictHostKeyChecking=accept-new -L 3308:127.0.0.1:3306 root@automatos.ca"
       ],
       "problemMatcher": []
