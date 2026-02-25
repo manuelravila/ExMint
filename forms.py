@@ -10,16 +10,14 @@ class LoginForm(FlaskForm):
     submit = SubmitField('Log In')
 
 class RegistrationForm(FlaskForm):
-    # Removed: username = StringField('Username', validators=[validators.DataRequired(), validators.Length(min=2, max=20)])
     email = StringField('Email', validators=[validators.DataRequired(), validators.Email()])
-    password = PasswordField('Password', validators=[validators.DataRequired()])
+    password = PasswordField('Password', validators=[validators.DataRequired(), validators.Length(min=8, message='Password must be at least 8 characters.')])
     confirm_password = PasswordField('Repeat Password', validators=[validators.DataRequired(), validators.EqualTo('password')])
     submit = SubmitField('Register')
 
 class ProfileForm(FlaskForm):
-    # Removed: username = StringField('Username', validators=[validators.DataRequired(), validators.Length(min=2, max=20)])
     email = StringField('Email', validators=[validators.DataRequired(), validators.Email()])
-    password = PasswordField('Password', validators=[validators.Optional()])
+    password = PasswordField('Password', validators=[validators.Optional(), validators.Length(min=8, message='Password must be at least 8 characters.')])
     confirm_password = PasswordField('Confirm Password', validators=[validators.EqualTo('password', message='Passwords must match')])
     submit = SubmitField('Update')
 
@@ -27,5 +25,5 @@ class ProfileForm(FlaskForm):
         self.is_registration = kwargs.pop('is_registration', False)
         super(ProfileForm, self).__init__(*args, **kwargs)
         if self.is_registration:
-            self.password.validators = [validators.DataRequired()]
+            self.password.validators = [validators.DataRequired(), validators.Length(min=8, message='Password must be at least 8 characters.')]
             self.confirm_password.validators.append(validators.DataRequired())

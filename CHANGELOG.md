@@ -1,3 +1,11 @@
+## [1.0.0] - 2026-02-25
+
+### Fixed
+
+- Transaction splitting now correctly handles Plaid amount changes: when a synced transaction has split children and its amount changes, all child transactions are deleted and the parent is restored as a normal unsplit transaction. Previously, child amounts were silently rescaled in proportion to the new total, which violated the user's explicit split breakdown.
+- Category rules engine no longer overwrites or clears the categories of split child transactions. Previously, running auto-categorization could strip the user-assigned category from a split child if no rule matched its description. Split children are now fully exempt from rule evaluation and retain their manually assigned categories.
+- Removed the internal `_rebalance_split_children` helper, which had become unreachable and embodied the incorrect proportional-rescaling behavior described above.
+
 ## [0.9.3] - 2025-10-22
 
 ### Changed

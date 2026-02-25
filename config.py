@@ -6,7 +6,6 @@ from secrets_manager import get_secret, branch
 # FIX: The 'get_database_uri' function needs to be defined BEFORE the Config class.
 def get_database_uri():
     branch_trimmed = branch.strip()
-    print('Detected branch: ', branch_trimmed)
 
     # Map environment to the respective secret ID in Bitwarden
     secret_keys = {
@@ -43,8 +42,9 @@ class Config:
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     SECRET_KEY = get_secret('SECRET_KEY') 
     ENCRYPTION_KEY = get_secret('ENCRYPTION_KEY')
-    # Session cookie settings
-    SESSION_COOKIE_SAMESITE = None
+    # Session cookie settings — 'None' (string) required for cross-site requests
+    # from the Excel add-in and WordPress frontend. Must be paired with Secure=True.
+    SESSION_COOKIE_SAMESITE = 'None'
     SESSION_COOKIE_SECURE = True
     SESSION_COOKIE_PATH = '/'
     PERMANENT_SESSION_LIFETIME = 900  # 15 minutes
@@ -83,8 +83,6 @@ class Config:
         SUFFIX = '-dev'
         SSL_CONTEXT = ('/app/dev_exmint_me.crt', '/app/dev_exmint_me.key')
 
-    print(f"Current branch: {branch.strip()}")
-    print(f"SSL_CONTEXT: {SSL_CONTEXT}")
 
     @staticmethod
     def get_plaid_environment():

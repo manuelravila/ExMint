@@ -35,6 +35,10 @@ from version import __version__ as VERSION
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from sqlalchemy.exc import OperationalError, IntegrityError
 from uuid import uuid4
+import hashlib
+import time as _time
+import jwt as _pyjwt
+from jwt.algorithms import ECAlgorithm as _ECAlgorithm
 
 core = Blueprint('core', __name__)
 
@@ -43,6 +47,80 @@ FALLBACK_CATEGORY_COLOR = '#E2E8F0'
 DEFAULT_MANUAL_COLOR = '#2C6B4F'
 UNCATEGORIZED_LABEL = 'Uncategorized'
 CENT = Decimal('0.01')
+
+# ---------------------------------------------------------------------------
+# Plaid webhook signature verification
+# ---------------------------------------------------------------------------
+_WEBHOOK_KEY_CACHE: dict = {}
+_WEBHOOK_KEY_TTL = 3600  # cache keys for 1 hour
+
+
+def _get_webhook_verification_key(kid: str):
+    """Fetch (and cache) a Plaid webhook verification key by key-id."""
+    cached = _WEBHOOK_KEY_CACHE.get(kid)
+    if cached and _time.time() < cached['expires']:
+        return cached['key']
+
+    from plaid.model.webhook_verification_key_get_request import WebhookVerificationKeyGetRequest
+    try:
+        response = current_app.plaid_client.webhook_verification_key_get(
+            WebhookVerificationKeyGetRequest(key_id=kid)
+        )
+        key_data = response.to_dict()['key']
+        _WEBHOOK_KEY_CACHE[kid] = {'key': key_data, 'expires': _time.time() + _WEBHOOK_KEY_TTL}
+        return key_data
+    except Exception as exc:
+        current_app.logger.error('Failed to fetch Plaid webhook verification key %s: %s', kid, exc)
+        return None
+
+
+def _verify_plaid_webhook_signature() -> bool:
+    """
+    Verify the Plaid-Verification JWT header against the raw request body.
+    Verification is skipped in sandbox/dev environments to ease local development.
+    Returns True if the signature is valid (or skipped), False if it fails.
+    """
+    if current_app.config.get('PLAID_ENV') in ('sandbox',):
+        return True
+
+    token = request.headers.get('Plaid-Verification')
+    if not token:
+        current_app.logger.warning('Plaid webhook received without Plaid-Verification header')
+        return False
+
+    try:
+        header = _pyjwt.get_unverified_header(token)
+        kid = header.get('kid')
+        if not kid:
+            current_app.logger.warning('Plaid webhook JWT missing kid claim')
+            return False
+
+        key_data = _get_webhook_verification_key(kid)
+        if key_data is None:
+            return False
+
+        public_key = _ECAlgorithm.from_jwk(json.dumps(key_data))
+        claims = _pyjwt.decode(
+            token, public_key, algorithms=['ES256'],
+            options={'require': ['iat', 'request_body_sha256']}
+        )
+
+        if _time.time() - claims.get('iat', 0) > 300:
+            current_app.logger.warning('Plaid webhook JWT is stale (iat=%s)', claims.get('iat'))
+            return False
+
+        body_hash = hashlib.sha256(request.get_data()).hexdigest()
+        if claims.get('request_body_sha256') != body_hash:
+            current_app.logger.warning('Plaid webhook body hash mismatch')
+            return False
+
+        return True
+    except _pyjwt.exceptions.InvalidTokenError as exc:
+        current_app.logger.warning('Plaid webhook JWT verification failed: %s', exc)
+        return False
+    except Exception as exc:
+        current_app.logger.error('Unexpected error during Plaid webhook verification: %s', exc)
+        return False
 
 
 def ensure_category_schema(force=False):
@@ -562,6 +640,8 @@ def apply_rules_to_transactions(user_id, transaction_ids=None, include_removed=F
     matched = 0
 
     for txn in transactions:
+        if txn.is_split_child:
+            continue
         if txn.id in override_map:
             continue
 
@@ -1369,57 +1449,6 @@ def _mark_split_children_removed(parent_txn):
     parent_txn.has_split_children = False
 
 
-def _rebalance_split_children(parent_txn, previous_amount, new_amount):
-    if not parent_txn or not parent_txn.has_split_children:
-        return
-
-    previous_amount = Decimal(previous_amount or 0)
-    new_amount = Decimal(new_amount or 0)
-    previous_abs = previous_amount.copy_abs()
-    new_abs = new_amount.copy_abs()
-
-    children = parent_txn.split_children.filter(Transaction.is_removed.is_(False)).all()
-    if not children:
-        parent_txn.has_split_children = False
-        return
-
-    sign = -1 if new_amount < 0 or (new_amount == 0 and previous_amount < 0) else 1
-
-    if previous_abs == 0:
-        if new_abs == 0:
-            for child in children:
-                child.amount = Decimal('0.00')
-                child.updated_at = datetime.utcnow()
-                child.last_action = 'modified'
-            return
-        equal_share = (new_abs / len(children)).quantize(CENT, rounding=ROUND_HALF_UP)
-        values = [equal_share for _ in children]
-        total = sum(values, Decimal('0.00'))
-        diff = (new_abs - total).quantize(CENT, rounding=ROUND_HALF_UP)
-        if values:
-            values[-1] = (values[-1] + diff).quantize(CENT, rounding=ROUND_HALF_UP)
-    else:
-        ratio = (new_abs / previous_abs) if previous_abs != 0 else Decimal('0')
-        values = []
-        total = Decimal('0.00')
-        for child in children:
-            child_abs = Decimal(child.amount or 0).copy_abs()
-            scaled = (child_abs * ratio).quantize(CENT, rounding=ROUND_HALF_UP)
-            values.append(scaled)
-            total += scaled
-        diff = (new_abs - total).quantize(CENT, rounding=ROUND_HALF_UP)
-        if values:
-            values[-1] = (values[-1] + diff).quantize(CENT, rounding=ROUND_HALF_UP)
-
-    for idx, child in enumerate(children):
-        adjusted = values[idx] if idx < len(values) else Decimal('0.00')
-        if adjusted < 0:
-            adjusted = Decimal('0.00')
-        child.amount = adjusted * sign
-        child.updated_at = datetime.utcnow()
-        child.last_action = 'modified'
-
-
 def _create_split_children(parent_txn, split_specs):
     if not parent_txn:
         raise ValueError('Parent transaction not provided.')
@@ -1557,13 +1586,14 @@ def handle_token_and_accounts():
             return jsonify({'error': 'Webhook URL is not configured in the environment.'}), 500
 
         if is_refresh:
-            print(f"Trying to refresh connection...")
-            credential = Credential.query.get(credential_id)
+            credential = db.session.get(Credential, credential_id)
             if not credential:
                 return jsonify({'error': 'Credential not found'}), 404
-            
+
+            if credential.user_id != current_user.id:
+                return jsonify({'error': 'Credential not found'}), 404
+
             access_token = credential.access_token
-            print(f"** Debug: Refreshing with access_token: {access_token}")
 
             # Update the webhook for the existing item
             webhook_update_request = {
@@ -1574,24 +1604,20 @@ def handle_token_and_accounts():
             }
             webhook_update_response = current_app.plaid_client.item_webhook_update(webhook_update_request)
             webhook_update_data = webhook_update_response.to_dict()
-            print(f"** Debug: Webhook updated for refresh. Response: {webhook_update_data}")
 
-            # Extract and update the item_id in the Credential table
             item_id = webhook_update_data['item']['item_id']
-            print(f"Item ID during refresh: {item_id}")
             credential.item_id = item_id
             db.session.commit()
-            print(f"Connection refreshed...")
+            current_app.logger.info('Credential %s refreshed, item_id=%s', credential_id, item_id)
 
         else:
-            print(f"Trying to add new connection...")
             public_token = data['public_token']
             institution_name = data.get('institution_name', 'Unknown')
             exchange_request = ItemPublicTokenExchangeRequest(public_token=public_token)
             exchange_response = current_app.plaid_client.item_public_token_exchange(exchange_request)
             access_token = exchange_response['access_token']
-            item_id = exchange_response['item_id']  # Extract item_id
-            print(f"Item ID during creation: {item_id}")
+            item_id = exchange_response['item_id']
+            current_app.logger.info('New Plaid connection created, item_id=%s', item_id)
 
             credential = Credential(
                 user_id=current_user.id,
@@ -1698,7 +1724,7 @@ def handle_token_and_accounts():
         return jsonify(response_payload)
 
     except Exception as e:
-        print(f"Error in handle_token_and_accounts: {str(e)}")
+        current_app.logger.exception('Error in handle_token_and_accounts: %s', e)
         db.session.rollback()
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
@@ -1850,7 +1876,7 @@ def _persist_transactions_from_payload(user, credential, data, from_webhook=Fals
             transaction.last_action = action
             transaction.updated_at = datetime.utcnow()
             if transaction.has_split_children and previous_amount is not None and previous_amount != new_amount:
-                _rebalance_split_children(transaction, previous_amount, new_amount)
+                _delete_existing_split_children(transaction)
 
             if action in counts:
                 counts[action] += 1
@@ -1925,6 +1951,9 @@ def _sync_credential_transactions(user, credential, from_webhook=False):
 
 @core.route('/api/plaid/webhook', methods=['POST'])
 def plaid_webhook():
+    if not _verify_plaid_webhook_signature():
+        return jsonify({'error': 'Unauthorized'}), 401
+
     data = request.get_json()
     webhook_type = data.get('webhook_type')
     webhook_code = data.get('webhook_code')
@@ -2929,13 +2958,19 @@ def delete_budget(budget_id):
 @core.route('/api/balance', methods=['POST'])
 @login_required
 def fetch_balances():
-    data = request.json
-    access_token = data.get('access_token')
+    data = request.json or {}
+    credential_id = data.get('credential_id')
     account_ids = data.get('account_ids', [])
 
-    # Use AccountsGetRequest instead of AccountsBalanceGetRequest
+    if not credential_id:
+        return jsonify({'error': 'credential_id is required'}), 400
+
+    credential = Credential.query.filter_by(id=credential_id, user_id=current_user.id).first()
+    if not credential:
+        return jsonify({'error': 'Credential not found'}), 404
+
     accounts_request = AccountsGetRequest(
-        access_token=access_token,
+        access_token=credential.access_token,
         options={"account_ids": account_ids} if account_ids else None
     )
 
@@ -2943,15 +2978,10 @@ def fetch_balances():
         accounts_response = current_app.plaid_client.accounts_get(accounts_request)
         accounts = accounts_response.to_dict().get('accounts', [])
 
-        # Extract the necessary balance information from the accounts data
-        balances = []
-        for account in accounts:
-            balance_info = {
-                "account_id": account.get('account_id'),
-                "balances": account.get('balances')
-            }
-            balances.append(balance_info)
-
+        balances = [
+            {"account_id": account.get('account_id'), "balances": account.get('balances')}
+            for account in accounts
+        ]
         return jsonify({"balances": balances})
     except plaid.ApiException as e:
         return jsonify(json.loads(e.body)), e.status
@@ -2975,73 +3005,31 @@ def remove_bank(bank_id):
             session['connections_modal_open'] = True
             return jsonify({'success': True, 'message': 'Bank connection removed'}), 200
         else:
-            print(f"Failed to deactivate token: {plaid_response}")
+            current_app.logger.error('Failed to deactivate Plaid token for credential %s: %s', bank_id, plaid_response)
             session['connections_modal_open'] = True
             return jsonify({'success': False, 'message': 'Failed to remove bank connection', 'error': plaid_response}), 400
     else:
         return jsonify({'success': False, 'message': 'Credential not found'}), 404
 
-@core.route('/api/get_access_token/<int:credential_id>', methods=['GET'])
-@login_required
-def get_access_token_for_bank(credential_id):
-    credential = Credential.query.filter_by(id=credential_id, user_id=current_user.id).first()
-
-    if not credential:
-        return jsonify({'error': 'Credential not found or does not belong to the current user'}), 404
-
-    try:
-        access_token = credential.access_token
-        return jsonify({'access_token': access_token})
-    except Exception as e:
-        return jsonify({'error': 'Failed to retrieve access token', 'message': str(e)}), 500
-
-# CANDIDATE FOR DELETION, THIS FUNCTION DOES NOT SEEM TO BE USED ANYWHERE:
-def refresh_accounts(credential_id, accounts_data):
-    existing_accounts = Account.query.filter_by(credential_id=credential_id).all()
-    existing_account_ids = {account.plaid_account_id for account in existing_accounts}
-
-    for account in accounts_data['accounts']:
-        if account['account_id'] in existing_account_ids:
-            existing_account = next((acc for acc in existing_accounts if acc.plaid_account_id == account['account_id']), None)
-            if existing_account:
-                existing_account.name = account['name']
-                existing_account.type = account['type']
-                existing_account.subtype = account['subtype']
-                existing_account.mask = account.get('mask', '')
-        else:
-                new_account = Account(
-                    credential_id=credential_id,
-                    plaid_account_id=account['account_id'],
-                    name=account['name'],
-                    type=account['type'],
-                    subtype=account['subtype'],
-                    mask=account.get('mask', ''),
-                    status='Active'
-                )
-                db.session.add(new_account)
-
-    current_account_ids = {account['account_id'] for account in accounts_data['accounts']}
-    for existing_account in existing_accounts:
-        if existing_account.plaid_account_id not in current_account_ids:
-            existing_account.status = 'Inactive'
-
-    db.session.commit()
 
 @core.route('/plaid_webhook', methods=['POST'])
 def plaid_webhook_item_error():
+    if not _verify_plaid_webhook_signature():
+        return jsonify({'error': 'Unauthorized'}), 401
+
     data = request.get_json()
 
     # Extract relevant fields from the payload
-    timestamp = datetime.now()
-    error = data.get('error', {}) or {}  # Handle None by defaulting to an empty dictionary
+    error = data.get('error', {}) or {}
     error_code = error.get('error_code', 'None')
     item_id = data.get('item_id', 'Unknown')
     webhook_code = data.get('webhook_code', 'Unknown')
     webhook_type = data.get('webhook_type', 'Unknown')
 
-    # Log the incoming webhook
-    print("***** INCOMING WEBHOOK *****")
-    print(f"Data: {data}")
+    current_app.logger.info(
+        'Plaid item webhook received: type=%s code=%s item_id=%s error_code=%s',
+        webhook_type, webhook_code, item_id, error_code
+    )
 
     # Handle ITEM_LOGIN_REQUIRED
     if webhook_type == "ITEM" and webhook_code in ["ERROR", "NEW_ACCOUNTS_AVAILABLE"]:
@@ -3050,21 +3038,19 @@ def plaid_webhook_item_error():
             credential = Credential.query.filter_by(item_id=item_id).first()
 
             if credential:
-                # Extract the user_id from the Credential
                 user_id = credential.user_id
                 if not user_id:
-                    print(f"Warning: No user_id found for Credential ID: {credential.id}")
+                    current_app.logger.warning('No user_id found for Credential ID: %s', credential.id)
                     return jsonify({"status": "ok"}), 200
 
                 credential.requires_update = True
                 db.session.commit()
-                print(f"Updated Credential (ID: {credential.id}) with requires_update=True")
-
+                current_app.logger.info('Set requires_update=True for Credential ID: %s', credential.id)
 
             else:
-                print(f"No Credential found for Item ID: {item_id}")
+                current_app.logger.warning('No Credential found for item_id: %s', item_id)
         except Exception as e:
-            print(f"Error handling ITEM_LOGIN_REQUIRED: {str(e)}")
+            current_app.logger.exception('Error handling Plaid item webhook: %s', e)
             db.session.rollback()
 
     return jsonify({"status": "ok"}), 200
@@ -3228,12 +3214,9 @@ def filter_transactions(transactions, account_plaid_id):
 
 def deactivate_plaid_token(access_token):
     try:
-        print('Access Token to Remove: ', access_token)
-        request = ItemRemoveRequest(access_token=access_token)
-        response = current_app.plaid_client.item_remove(request)
-        
-        print("Plaid response:", response)
+        remove_request = ItemRemoveRequest(access_token=access_token)
+        response = current_app.plaid_client.item_remove(remove_request)
         return True, response.to_dict()
     except plaid.ApiException as e:
-        print("An error occurred while removing the item from Plaid:", e)
+        current_app.logger.error('Plaid item_remove failed: %s', e)
         return False, e.body
