@@ -154,19 +154,6 @@ async function initializePlaidLink() {
     }
 }
 
-// Event Listener for Plaid Link button
-document.addEventListener('DOMContentLoaded', () => {
-    linkButton.addEventListener('click', () => {
-        if (linkHandler) {
-            linkHandler.open();
-        } else {
-            console.error("Plaid Link handler is not defined");
-        }
-    });
-
-    // Initialize Plaid Link
-    initializePlaidLink();
-});
 
 const app = new Vue({
     el: '#vue-app',
@@ -3103,6 +3090,13 @@ const app = new Vue({
         },
         fetchModalBanks: function() {
             this.modalBanks = this.banks;
+        },
+        openPlaidLink: function() {
+            if (linkHandler) {
+                linkHandler.open();
+            } else {
+                console.error("Plaid Link handler is not defined");
+            }
         }
     },
     watch: {
@@ -3122,6 +3116,7 @@ const app = new Vue({
         }
     },
     mounted: async function() {
+        initializePlaidLink();
         this.initializeSidebarState();
         this.evaluateViewportState();
         await this.refreshData();

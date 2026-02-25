@@ -13,19 +13,19 @@
         {
             "label": "ExMint: SSH Tunnel",
             "type": "shell",
-            "command": "echo 'Starting SSH Tunnel...'; ssh -i /root/.ssh/id_rsa -o StrictHostKeyChecking=no -L 3307:127.0.0.1:3306 root@srv469975.hstgr.cloud -N",
+            "command": "echo 'Starting SSH Tunnel...'; ssh -v -i /root/.ssh/id_rsa -o StrictHostKeyChecking=no -L 3307:127.0.0.1:3306 root@srv469975.hstgr.cloud -N",
             "isBackground": true,
             "problemMatcher": {
                 "pattern": [
                     {
-                        "regexp": "^(Starting SSH Tunnel...)$",
+                        "regexp": "^.*(Entering interactive session).*$",
                         "message": 1
                     }
                 ],
                 "background": {
                     "activeOnStart": true,
                     "beginsPattern": "^Starting SSH Tunnel...",
-                    "endsPattern": "^Starting SSH Tunnel..."
+                    "endsPattern": "^.*Entering interactive session.*"
                 }
             },
             "presentation": {
@@ -34,8 +34,25 @@
         },
         {
             "label": "ExMint: Start Dev Environment",
-            "dependsOn": ["ExMint: DB Upgrade", "ExMint: SSH Tunnel"],
-            "dependsOrder": "sequence"
+            "type": "shell",
+            "command": "export FLASK_ENV=dev && bash ./start.sh debug",
+            "isBackground": true,
+            "problemMatcher": {
+                "pattern": [
+                    {
+                        "regexp": "^.*(Dev environment ready).*",
+                        "message": 1
+                    }
+                ],
+                "background": {
+                    "activeOnStart": true,
+                    "beginsPattern": "^.*Setting up SSH tunnel.*",
+                    "endsPattern": "^.*Dev environment ready.*"
+                }
+            },
+            "presentation": {
+                "group": "none"
+            }
         }
     ]
 }
