@@ -37,7 +37,7 @@ def send_activation_email_to(email, subject):
     msg.html = html_content
     try:
         mail.send(msg)
-        print(f"Activation email sent to {email}")
+        current_app.logger.info("Activation email sent to %s", email)
         return True
     except Exception as e:
         current_app.logger.error("Error sending activation email: %s", e)
@@ -150,7 +150,6 @@ def activate_account(token):
 @views.route('/login', methods=['GET', 'POST'])
 def login():
     if current_user.is_authenticated:
-        print('Current user IS authenticated')
         return handle_authenticated_user()
 
     if request.method == 'POST':
@@ -162,11 +161,11 @@ def login():
 
 def handle_login_request():
     # Distinguish between JSON and Form submissions
-    try:
-        data = request.get_json()
+    if request.is_json:
+        data = request.get_json() or {}
         username_or_email = data.get('login')
         password = data.get('password')
-    except:
+    else:
         username_or_email = request.form.get('login')
         password = request.form.get('password')
 
@@ -256,46 +255,33 @@ def logout():
         
 @views.route('/reset_password', methods=['GET', 'POST'])
 def reset_password():
-    # If the user is already logged in, redirect them to the dashboard
     if current_user.is_authenticated:
-        print("User is already authenticated, redirecting to notice.")
         return render_template('already_logged_in.html')
 
     if request.method == 'POST':
         email = request.form.get('email')
-        #print(f"Received POST request for password reset with email: {email}")
 
         user = User.query.filter_by(email=email).first()
         if user:
-            print(f"User found: {user.email}")
-
             # Generate a secure token
             serializer = URLSafeTimedSerializer(current_app.config['SECRET_KEY'])
             token = serializer.dumps(email, salt='email-reset-salt')
-            #print(f"Generated token: {token}")
 
-            # Prepare the password reset email
             reset_url = url_for('views.reset_password_token', token=token, _external=True)
-            #print(f"Generated reset URL: {reset_url}")
-
             html_content = render_template('password_reset_email.html', reset_url=reset_url, suffix=current_app.config['SUFFIX'])
-            msg = Message('Password Reset Request', 
-                          sender=current_app.config['MAIL_USERNAME'], 
+            msg = Message('Password Reset Request',
+                          sender=current_app.config['MAIL_USERNAME'],
                           recipients=[email])
             msg.html = html_content
 
-            # Send the email
             try:
                 mail.send(msg)
-                print(f"Password reset email sent to: {email}")
+                current_app.logger.info("Password reset email sent to: %s", email)
             except Exception as e:
-                print(f"An error occurred while sending the email: {e}")
+                current_app.logger.error("Failed to send password reset email to %s: %s", email, e)
 
-            # Render the password reset sent page
-            return render_template('password_reset_sent.html', suffix=current_app.config['SUFFIX'])
-        else:
-            print(f"No account found for email: {email}")
-            flash('No account could be found for this email address.', 'warning')
+        # Always render the same page to prevent user enumeration
+        return render_template('password_reset_sent.html', suffix=current_app.config['SUFFIX'])
 
     return render_template('reset_password.html')
 
@@ -335,8 +321,12 @@ def get_user_info():
     return jsonify({"email": current_user.email})
 
 @views.route('/api/accounts/enable/<int:account_id>', methods=['POST'])
+@login_required
 def enable_account(account_id):
-    account = Account.query.get(account_id)
+    account = Account.query.join(Credential).filter(
+        Account.id == account_id,
+        Credential.user_id == current_user.id
+    ).first()
     if account:
         account.is_enabled = True
         db.session.commit()
@@ -344,8 +334,12 @@ def enable_account(account_id):
     return jsonify({'success': False, 'message': 'Account not found.'}), 404
 
 @views.route('/api/accounts/disable/<int:account_id>', methods=['POST'])
+@login_required
 def disable_account(account_id):
-    account = Account.query.get(account_id)
+    account = Account.query.join(Credential).filter(
+        Account.id == account_id,
+        Credential.user_id == current_user.id
+    ).first()
     if account:
         account.is_enabled = False
         db.session.commit()

@@ -51,9 +51,6 @@ class CategoryRule(db.Model):
     def __repr__(self):
         return f'<CategoryRule {self.text_to_match} -> {self.category_id}>'
 
-# Backwards compatibility alias. Remove once callers are updated.
-Category = CategoryRule
-
 class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
     # Removed: username = db.Column(db.String(80), unique=True, nullable=False)

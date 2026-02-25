@@ -23,10 +23,7 @@ def create_app():
     app = Flask(__name__)
     app.config.from_object('config.Config')
 
-    print(f"Using database URI: {app.config['SQLALCHEMY_DATABASE_URI']}")
-    
     # Initialize extensions
-    print('Initializing extensions')
     mail.init_app(app)
     flask_bcrypt.init_app(app)
     login_manager.init_app(app)
@@ -34,7 +31,6 @@ def create_app():
     migrate.init_app(app, db)
 
     # Configure CORS
-    print('Configuring CORS')
     cors_origins = [
         "http://localhost:5000",  # Local dev URL without sandbox
         "http://127.0.0.1:5000",  # Local dev URL without sandbox
@@ -52,10 +48,9 @@ def create_app():
         'X-Requested-With',
         'X-Request-Source',
         'cursors'
-    ], allow_methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'])
+    ], allow_methods=['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'])
 
     # Initialize Plaid client
-    print('Initializing Plaid')
     plaid_environment = Config.get_plaid_environment()
     configuration = plaid.Configuration(
         host=plaid_environment,
@@ -68,7 +63,6 @@ def create_app():
     plaid_client = plaid_api.PlaidApi(api_client)
 
     # Register blueprints
-    print('Registering blueprints')
     from views import views as views_blueprint
     from core_views import core as core_blueprint
     app.register_blueprint(views_blueprint)
@@ -87,7 +81,7 @@ def create_app():
     @login_manager.user_loader
     def load_user(user_id):
         from models import User
-        return User.query.get(int(user_id))
+        return db.session.get(User, int(user_id))
 
     # Pass the Plaid client to the core_routes blueprint
     app.plaid_client = plaid_client
@@ -95,25 +89,16 @@ def create_app():
     # Set the APPLICATION_ROOT if running in the dev environment
     if os.environ.get('FLASK_ENV') == 'dev':
         app.config['APPLICATION_ROOT'] = '/sandbox'
-        print("Setting APPLICATION_ROOT to /sandbox")
-    else:
-        print("Not setting APPLICATION_ROOT")
-
-    # Apply ProxyFix only in dev environment to handle Nginx sub-path proxying
-    if os.environ.get('FLASK_ENV') == 'dev':
         from werkzeug.middleware.proxy_fix import ProxyFix
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
-    print(f"App created with DEBUG={app.config['DEBUG']}, SSL_CONTEXT={app.config['SSL_CONTEXT']}")
     return app
 
 app = create_app()
 
 if __name__ == '__main__':
     if app.config['SSL_CONTEXT']:
-        print('ExMint Back-End starting on SSL')
         app.run(ssl_context=app.config['SSL_CONTEXT'], debug=app.config['DEBUG'], host='0.0.0.0')
     else:
-        print('ExMint Back-End starting without SSL')
         app.run(debug=app.config['DEBUG'], host='0.0.0.0')
         
