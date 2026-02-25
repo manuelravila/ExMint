@@ -1,3 +1,9 @@
+## [1.0.2] - 2026-02-25
+
+### Fixed
+
+- Reconnect button now disappears after a successful re-authentication. The sync that runs immediately after update-mode could encounter a transient `ITEM_LOGIN_REQUIRED` response from Plaid, which set `requires_update` back to `True` before it was committed — leaving the button visible even though the user had just reconnected. The flag is now re-applied to `False` after the sync for all reconnect flows, so a transient sync error can no longer undo the re-authentication result.
+
 ## [1.0.1] - 2026-02-25
 
 ### Fixed

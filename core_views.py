@@ -1711,6 +1711,13 @@ def handle_token_and_accounts():
         if has_category_rules:
             category_summary = apply_category_rules(credential.user_id)
 
+        # For reconnect flows the user has just successfully completed Plaid's
+        # update-mode flow, so the credential is valid.  Re-apply the flag here
+        # so a transient ITEM_LOGIN_REQUIRED error inside the sync cannot leave
+        # the button visible after a successful re-authentication.
+        if is_refresh:
+            credential.requires_update = False
+
         db.session.commit()
         db.session.refresh(credential)  # Ensure we have the latest cursor state
 
