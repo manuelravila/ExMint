@@ -1,3 +1,9 @@
+## [1.0.1] - 2026-02-25
+
+### Fixed
+
+- Reconnect button now works again. The frontend was calling `/api/get_access_token/<id>` which was never implemented, causing a 404 that silently aborted the Plaid update-mode flow. The fix removes the extra round-trip: `createLinkToken` now accepts a `credential_id` and the backend resolves the access token internally, so the raw Plaid token is never exposed to the browser.
+
 ## [1.0.0] - 2026-02-25
 
 ### Fixed
