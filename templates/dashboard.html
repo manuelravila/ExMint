@@ -48,7 +48,7 @@
                     <span v-if="!syncing"><i class="fas fa-sync-alt"></i> Sync</span>
                     <span v-else><i class="fas fa-sync fa-spin"></i> Syncing...</span>
                 </button>
-                <button id="link-button" class="btn btn-outline-secondary mr-2">
+                <button id="link-button" class="btn btn-outline-secondary mr-2" @click="openPlaidLink">
                     <i class="fas fa-university"></i> Connect
                 </button>
 

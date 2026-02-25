@@ -46,6 +46,7 @@ class Config:
     # Session cookie settings
     SESSION_COOKIE_SAMESITE = None
     SESSION_COOKIE_SECURE = True
+    SESSION_COOKIE_PATH = '/'
     PERMANENT_SESSION_LIFETIME = 900  # 15 minutes
 
     # Plaid credentials

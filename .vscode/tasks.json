@@ -20,9 +20,22 @@
       "command": "bash",
       "args": [
         "-c",
-        "if lsof -iTCP:3307 -sTCP:LISTEN -Pn 2>/dev/null | grep -q ssh; then exit 0; fi; ssh -f -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o StrictHostKeyChecking=accept-new -L 3307:127.0.0.1:3306 root@automatos.ca"
+        "echo 'Starting dev tunnel'; if lsof -iTCP:3307 -sTCP:LISTEN -Pn 2>/dev/null | grep -q ssh; then exit 0; fi; ssh -f -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o StrictHostKeyChecking=accept-new -L 3307:127.0.0.1:3306 root@automatos.ca"
       ],
-      "problemMatcher": []
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": [
+          {
+            "regexp": "^(Starting dev tunnel)$",
+            "message": 1
+          }
+        ],
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^Starting dev tunnel",
+          "endsPattern": "^Starting dev tunnel"
+        }
+      }
     },
     {
       "label": "Prepare Dev launch",
@@ -51,9 +64,22 @@
       "command": "bash",
       "args": [
         "-c",
-        "if lsof -iTCP:3309 -sTCP:LISTEN -Pn 2>/dev/null | grep -q ssh; then exit 0; fi; ssh -f -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o StrictHostKeyChecking=accept-new -L 3309:127.0.0.1:3306 root@automatos.ca"
+        "echo 'Starting stag tunnel'; if lsof -iTCP:3309 -sTCP:LISTEN -Pn 2>/dev/null | grep -q ssh; then exit 0; fi; ssh -f -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o StrictHostKeyChecking=accept-new -L 3309:127.0.0.1:3306 root@automatos.ca"
       ],
-      "problemMatcher": []
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": [
+          {
+            "regexp": "^(Starting stag tunnel)$",
+            "message": 1
+          }
+        ],
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^Starting stag tunnel",
+          "endsPattern": "^Starting stag tunnel"
+        }
+      }
     },
     {
       "label": "Prepare Stag launch",
@@ -82,9 +108,22 @@
       "command": "bash",
       "args": [
         "-c",
-        "if lsof -iTCP:3308 -sTCP:LISTEN -Pn 2>/dev/null | grep -q ssh; then exit 0; fi; ssh -f -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o StrictHostKeyChecking=accept-new -L 3308:127.0.0.1:3306 root@automatos.ca"
+        "echo 'Starting prod tunnel'; if lsof -iTCP:3308 -sTCP:LISTEN -Pn 2>/dev/null | grep -q ssh; then exit 0; fi; ssh -f -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o StrictHostKeyChecking=accept-new -L 3308:127.0.0.1:3306 root@automatos.ca"
       ],
-      "problemMatcher": []
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": [
+          {
+            "regexp": "^(Starting prod tunnel)$",
+            "message": 1
+          }
+        ],
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^Starting prod tunnel",
+          "endsPattern": "^Starting prod tunnel"
+        }
+      }
     },
     {
       "label": "Prepare Prod launch",

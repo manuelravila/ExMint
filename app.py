@@ -1,5 +1,6 @@
 # app.py
 from flask import Flask, session
+import os
 from extensions import mail
 from config import Config
 from models import db
@@ -35,6 +36,9 @@ def create_app():
     # Configure CORS
     print('Configuring CORS')
     cors_origins = [
+        "http://localhost:5000",  # Local dev URL without sandbox
+        "http://127.0.0.1:5000",  # Local dev URL without sandbox
+        "https://192.168.50.206:5000",  # Local dev URL without sandbox
         "https://localhost:3000",  # Local dev URL
         "https://dev.exmint.me:3000",  # Local dev URL
         "https://127.0.0.1:3000",  # Local dev URL
@@ -87,6 +91,18 @@ def create_app():
 
     # Pass the Plaid client to the core_routes blueprint
     app.plaid_client = plaid_client
+
+    # Set the APPLICATION_ROOT if running in the dev environment
+    if os.environ.get('FLASK_ENV') == 'dev':
+        app.config['APPLICATION_ROOT'] = '/sandbox'
+        print("Setting APPLICATION_ROOT to /sandbox")
+    else:
+        print("Not setting APPLICATION_ROOT")
+
+    # Apply ProxyFix only in dev environment to handle Nginx sub-path proxying
+    if os.environ.get('FLASK_ENV') == 'dev':
+        from werkzeug.middleware.proxy_fix import ProxyFix
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
     print(f"App created with DEBUG={app.config['DEBUG']}, SSL_CONTEXT={app.config['SSL_CONTEXT']}")
     return app
