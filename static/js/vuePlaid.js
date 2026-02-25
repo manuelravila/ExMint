@@ -16,11 +16,16 @@ Vue.component('line-chart', {
 const linkButton = document.getElementById('link-button');
 let linkHandler = null;
 
-// Function to handle the creation of the link token, adapted to support update mode
-async function createLinkToken(access_token = null) {
+// Function to handle the creation of the link token, adapted to support update mode.
+// Pass credential_id when reconnecting an existing bank so the backend can look up
+// the access token internally without exposing it to the browser.
+async function createLinkToken(access_token = null, credential_id = null) {
     const payload = {};
     if (access_token) {
         payload.access_token = access_token;
+    }
+    if (credential_id) {
+        payload.credential_id = credential_id;
     }
     const response = await fetch('/create_link_token', {
         method: 'POST',
@@ -29,14 +34,12 @@ async function createLinkToken(access_token = null) {
     });
 
     if (!response.ok) {
-        // Handle HTTP errors (e.g., network issues, endpoint not found, server errors)
         console.error("Failed to create link token:", response.statusText);
         throw new Error(`HTTP error! status: ${response.status}`);
     }
 
     const data = await response.json();
-    console.log("Received link token:", data); // Debugging
-    return data.link_token; // Ensure to handle the case where this might be undefined due to errors
+    return data.link_token;
 }
 
 
@@ -95,31 +98,22 @@ async function initializeLink() {
     console.log("Plaid Link initialized", linkHandler);
 }
 
-// Function to initiate the reconnect process for a bank
+// Function to initiate the reconnect process for a bank.
+// The access token is never sent to the browser; the backend resolves it from credential_id.
 async function reconnectBank(bankId) {
-    //console.log("Initiating reconnect for Bank ID:", bankId);
-
     try {
-        const response = await fetch(`/api/get_access_token/${bankId}`, { method: 'GET' });
-        if (!response.ok) throw new Error('Failed to fetch access token.');
-
-        const {access_token} = await response.json();
-        //console.log("Fetched access token for update:", access_token);
-
-        const linkToken = await createLinkToken(access_token); 
-        //console.log("Received link token for update mode:", linkToken);
+        const linkToken = await createLinkToken(null, bankId);
 
         linkHandler = Plaid.create({
             token: linkToken,
             onSuccess: async (publicToken, metadata) => {
-                console.log("OnSuccess block started")
-                let refreshResponse = await fetch('/handle_token_and_accounts', {
+                const refreshResponse = await fetch('/handle_token_and_accounts', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
                         public_token: publicToken,
                         institution_name: metadata.institution.name,
-                        is_refresh: true, // Indicate this is a refresh operation
+                        is_refresh: true,
                         credential_id: bankId
                     })
                 });
@@ -135,8 +129,6 @@ async function reconnectBank(bankId) {
             },
             onExit: (err, metadata) => console.log("User exited link modal", err, metadata)
         });
-
-        //console.log("Opening Plaid Link...");
 
         linkHandler.open();
     } catch (error) {

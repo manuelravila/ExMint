@@ -1543,25 +1543,29 @@ def _create_split_children(parent_txn, split_specs):
 def create_link_token():
     data = request.json or {}
     access_token = data.get('access_token')
-    is_refresh = data.get('is_refresh', False)
-    
+    credential_id = data.get('credential_id')
+
+    if credential_id and not access_token:
+        credential = Credential.query.filter_by(
+            id=int(credential_id), user_id=current_user.id
+        ).first()
+        if not credential:
+            return jsonify({'error': 'Credential not found'}), 404
+        access_token = credential.access_token
+
     link_token_request = {
         'user': {
             'client_user_id': str(current_user.id),
         },
         'client_name': "ExMint",
         'products': ["transactions"],
-        'country_codes': ['CA','US'],
+        'country_codes': ['CA', 'US'],
         'language': 'en',
         'redirect_uri': 'https://automatos.ca',
         'webhook': current_app.config['PLAID_WEBHOOK_URL'],
-        "update": {
-        "account_selection_enabled": True
-        },
+        'update': {'account_selection_enabled': True},
     }
 
-    link_token_request["update"] = {"account_selection_enabled": True}
-        
     if access_token:
         link_token_request['access_token'] = access_token
 
