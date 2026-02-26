@@ -884,7 +884,7 @@ def _calculate_budget_metrics(user_id, category_labels):
     for txn in transactions:
         if txn.has_split_children and not txn.is_split_child:
             continue
-        label = _resolve_transaction_category_label(txn, override_map, allow_fallback=False)
+        label = _resolve_transaction_category_label(txn, override_map, allow_fallback=True)
         if not label:
             continue
         label_key = label.lower()
@@ -1108,7 +1108,7 @@ def _calculate_spending_metrics(user_id, category_labels):
     for txn in transactions:
         if txn.has_split_children and not txn.is_split_child:
             continue
-        label = _resolve_transaction_category_label(txn, override_map, allow_fallback=False)
+        label = _resolve_transaction_category_label(txn, override_map, allow_fallback=True)
         if not label:
             continue
         label_key = label.lower()
@@ -1163,7 +1163,9 @@ def _collect_spending_summary(user_id):
     # First, find all unique category labels from the transaction set
     all_category_labels = set()
     for txn in transactions:
-        label = _resolve_transaction_category_label(txn, override_map, allow_fallback=False)
+        if txn.has_split_children and not txn.is_split_child:
+            continue
+        label = _resolve_transaction_category_label(txn, override_map, allow_fallback=True)
         if label:
             all_category_labels.add(label)
 
@@ -1184,7 +1186,7 @@ def _collect_spending_summary(user_id):
             continue
         if not txn.date:
             continue
-        label = _resolve_transaction_category_label(txn, override_map, allow_fallback=False)
+        label = _resolve_transaction_category_label(txn, override_map, allow_fallback=True)
         year = txn.date.year
         month = txn.date.month
         value = Decimal(txn.amount or 0).quantize(CENT, rounding=ROUND_HALF_UP)
@@ -1355,7 +1357,7 @@ def _collect_cashflow_summary(user_id):
         else:
             month_map[month_key]['expense'] += amount
 
-        label = _resolve_transaction_category_label(txn, override_map, allow_fallback=False)
+        label = _resolve_transaction_category_label(txn, override_map, allow_fallback=True)
         if label:
             label_key = label.lower()
             category_series[label_key][month_key] += amount
