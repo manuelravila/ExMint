@@ -807,6 +807,18 @@ def _resolve_transaction_category_label(txn, override_map, allow_fallback=True):
     return None
 
 
+def _resolve_custom_category_label(txn, override_map):
+    """Resolve custom category only (no PLAID fallback). For split children with no
+    custom category of their own, inherits the parent transaction's manual override."""
+    label = _resolve_transaction_category_label(txn, override_map, allow_fallback=False)
+    if not label and txn.is_split_child and txn.parent_transaction_id:
+        parent_override = override_map.get(txn.parent_transaction_id)
+        if parent_override and parent_override.custom_category:
+            name = (parent_override.custom_category.name or '').strip()
+            label = name or None
+    return label
+
+
 _BUDGET_FREQUENCY_MAP = {
     'weekly': 'Weekly',
     'biweekly': 'Biweekly',
@@ -884,7 +896,7 @@ def _calculate_budget_metrics(user_id, category_labels):
     for txn in transactions:
         if txn.has_split_children and not txn.is_split_child:
             continue
-        label = _resolve_transaction_category_label(txn, override_map, allow_fallback=True)
+        label = _resolve_custom_category_label(txn, override_map)
         if not label:
             continue
         label_key = label.lower()
@@ -1108,7 +1120,7 @@ def _calculate_spending_metrics(user_id, category_labels):
     for txn in transactions:
         if txn.has_split_children and not txn.is_split_child:
             continue
-        label = _resolve_transaction_category_label(txn, override_map, allow_fallback=True)
+        label = _resolve_custom_category_label(txn, override_map)
         if not label:
             continue
         label_key = label.lower()
@@ -1165,7 +1177,7 @@ def _collect_spending_summary(user_id):
     for txn in transactions:
         if txn.has_split_children and not txn.is_split_child:
             continue
-        label = _resolve_transaction_category_label(txn, override_map, allow_fallback=True)
+        label = _resolve_custom_category_label(txn, override_map)
         if label:
             all_category_labels.add(label)
 
@@ -1186,7 +1198,7 @@ def _collect_spending_summary(user_id):
             continue
         if not txn.date:
             continue
-        label = _resolve_transaction_category_label(txn, override_map, allow_fallback=True)
+        label = _resolve_custom_category_label(txn, override_map)
         year = txn.date.year
         month = txn.date.month
         value = Decimal(txn.amount or 0).quantize(CENT, rounding=ROUND_HALF_UP)
@@ -1357,7 +1369,7 @@ def _collect_cashflow_summary(user_id):
         else:
             month_map[month_key]['expense'] += amount
 
-        label = _resolve_transaction_category_label(txn, override_map, allow_fallback=True)
+        label = _resolve_custom_category_label(txn, override_map)
         if label:
             label_key = label.lower()
             category_series[label_key][month_key] += amount
