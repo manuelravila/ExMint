@@ -2197,6 +2197,9 @@ const app = new Vue({
                 });
                 await this.fetchTransactions({ reset: false, skipLoadingState: true });
                 await this.fetchCategoryRules({ force: true, suppressLoader: true, refresh: true });
+                if (this.dashboardLoaded) {
+                    await this.fetchDashboard({ suppressLoader: true, force: true });
+                }
             } catch (error) {
                 console.error('Error saving custom category:', error);
                 this.customCategoriesError = error.message || 'Failed to save category.';
