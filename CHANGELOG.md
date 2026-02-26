@@ -2,8 +2,7 @@
 
 ### Fixed
 
-- Dashboard spending report and cash flow chart now show all active categories, not just custom ones. Previously, `allow_fallback=False` caused every transaction without an explicit rule or manual override to fall into an "Uncategorized" bucket, making newly created categories appear to have little or no data. The effective label for each transaction is now resolved in priority order — manual override → category rule → Plaid fallback label — so only transactions with no category at all (not even a Plaid label) are uncategorized.
-- Manually created categories (created by overriding a Plaid-assigned category on a transaction) now appear correctly in the spending report and cash flow chart with their full spending amounts.
+- Manually created categories (created by overriding a Plaid-assigned category on a parent split transaction) now appear correctly in the spending report and cash flow chart. Previously, a manual override applied to the parent of a split transaction had no visible effect on the dashboard because the accumulation loops only process split children. Split children now inherit the parent transaction's manual override when they have no custom category of their own, so the full split amount is attributed to the user-chosen category.
 - Fixed phantom zero-total category entries in the spending report caused by parent split transactions. The first pass that collects distinct category labels now applies the same parent-split exclusion as the accumulation pass, so categories matched only to split-parent rows no longer create empty entries that silently disappear from the output.
 
 ## [1.0.2] - 2026-02-25
