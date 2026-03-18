@@ -70,8 +70,12 @@ class User(UserMixin, db.Model):
         return f'<User {self.email}>'
 
 class Credential(db.Model):
+    __table_args__ = (
+        db.UniqueConstraint('user_id', 'item_id', name='uq_credential_user_item_id'),
+    )
+
     id = db.Column(db.Integer, primary_key=True)
-    item_id = db.Column(db.String(100), nullable=False) 
+    item_id = db.Column(db.String(100), nullable=False)
     status = db.Column(db.String(10), nullable=False, default='Active')
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     institution_name = db.Column(db.String(100))

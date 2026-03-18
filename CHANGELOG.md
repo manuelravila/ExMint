@@ -1,3 +1,17 @@
+## [1.1.1] - 2026-03-18
+
+### Added
+
+- Duplicate bank connection guard: re-connecting the same bank through Plaid Link is now blocked at the backend. The check is account-aware — a second connection to the same institution is only rejected when every account Plaid returns already exists in the database as an active account, so households sharing one ExMint account can legitimately add separate connections at the same bank.
+- When a duplicate connection is detected, the newly exchanged Plaid access token is immediately revoked to prevent orphaned items on the Plaid side, and the user receives a browser alert naming the institution.
+- `UniqueConstraint('user_id', 'item_id')` added to the `Credential` model with a matching Alembic migration (`d4e5f6a7b8c9`) as a database-level safety net against duplicate credentials.
+
+### Fixed
+
+- Re-adding a previously removed bank no longer triggers the duplicate guard. When a bank is removed its credential and accounts are marked `Revoked`; upon re-connection those account rows are reactivated in-place (updating `credential_id` and `plaid_account_id`) so the full transaction history is immediately visible again without any data migration.
+- Newly added bank accounts are now automatically selected after a connection completes. Previously, `fetchBanks` only retained the existing account selection and never appended brand-new account IDs, so transactions and dashboard metrics for a freshly linked institution were invisible until the user manually ticked the accounts.
+- `start.sh` now delegates SSH tunnel setup to `open_db_tunnel.py` instead of running a raw `ssh` command, aligning the dev startup script with the dedicated tunnel utility.
+
 ## [1.1.0] - 2026-02-25
 
 ### Fixed
