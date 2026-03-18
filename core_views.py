@@ -1637,11 +1637,59 @@ def handle_token_and_accounts():
             item_id = exchange_response['item_id']
             current_app.logger.info('New Plaid connection created, item_id=%s', item_id)
 
+            # Fast path: exact same Plaid item re-submitted (item_id already stored).
+            if Credential.query.filter_by(user_id=current_user.id, item_id=item_id).first():
+                current_app.logger.warning(
+                    'Duplicate connection attempt blocked for user=%s item_id=%s',
+                    current_user.id, item_id
+                )
+                return jsonify({
+                    'error': f'{institution_name} is already connected. '
+                             'Use the reconnect option to refresh it instead.'
+                }), 409
+
+            # Fetch the account list before persisting anything so we can run the duplicate
+            # guard without a second round-trip to Plaid later (reused in the sync loop).
+            accounts_response = current_app.plaid_client.accounts_get(
+                AccountsGetRequest(access_token=access_token)
+            )
+            accounts_data = accounts_response.to_dict().get('accounts', [])
+
+            # Duplicate guard: block only when every account Plaid returned is already
+            # stored under another credential for this user at the same institution.
+            # A legitimate second connection (e.g., a couple sharing one ExMint account)
+            # would include at least one account whose mask/name is not yet in our DB.
+            def _account_already_exists(acct):
+                m, n = acct.get('mask'), acct.get('name')
+                if not m:
+                    return False  # no mask — cannot determine, assume new
+                return bool(
+                    Account.query.join(Credential)
+                    .filter(
+                        Credential.user_id == current_user.id,
+                        Credential.institution_name == institution_name,
+                        Account.mask == m,
+                        Account.name == n,
+                        Account.status == 'Active',  # Revoked accounts must not block re-connection
+                    ).first()
+                )
+
+            if accounts_data and all(_account_already_exists(a) for a in accounts_data):
+                deactivate_plaid_token(access_token)
+                current_app.logger.warning(
+                    'Duplicate connection attempt blocked for user=%s institution=%r item_id=%s',
+                    current_user.id, institution_name, item_id
+                )
+                return jsonify({
+                    'error': f'{institution_name} is already connected. '
+                             'Use the reconnect option to refresh it instead.'
+                }), 409
+
             credential = Credential(
                 user_id=current_user.id,
                 access_token=access_token,
                 institution_name=institution_name,
-                item_id=item_id,  # Store the item_id
+                item_id=item_id,
                 requires_update=False
             )
             db.session.add(credential)
@@ -1649,11 +1697,13 @@ def handle_token_and_accounts():
 
             credential_id = credential.id
 
-        # Fetch accounts using the access token
-        accounts_request = AccountsGetRequest(access_token=access_token)
-        accounts_response = current_app.plaid_client.accounts_get(accounts_request)
-
-        accounts_data = accounts_response.to_dict().get('accounts', [])
+        # For new credentials, accounts were already fetched inside the else branch above
+        # as part of the duplicate guard.  For the is_refresh path, fetch them now.
+        if is_refresh:
+            accounts_response = current_app.plaid_client.accounts_get(
+                AccountsGetRequest(access_token=access_token)
+            )
+            accounts_data = accounts_response.to_dict().get('accounts', [])
         for account in accounts_data:
             plaid_account_id = account.get('account_id')
             name = account.get('name')
@@ -1663,7 +1713,41 @@ def handle_token_and_accounts():
             is_enabled = account.get('is_enabled', True)  # Default to True if not present
 
             existing_account = Account.query.filter_by(plaid_account_id=plaid_account_id).first()
+            if not existing_account and mask:
+                # Secondary match: same physical account number at same institution.
+                # Handles two distinct situations:
+                #   1. Re-adding a previously removed bank (account is Revoked) — reactivate.
+                #   2. Duplicate active connection for same bank — skip.
+                existing_account = (
+                    Account.query
+                    .join(Credential)
+                    .filter(
+                        Credential.user_id == current_user.id,
+                        Credential.institution_name == credential.institution_name,
+                        Account.mask == mask,
+                        Account.name == name,
+                    )
+                    .first()
+                )
+                if existing_account and existing_account.status == 'Active':
+                    current_app.logger.warning(
+                        'Skipping duplicate active account mask=%s name=%r institution=%r for user=%s',
+                        mask, name, credential.institution_name, current_user.id
+                    )
             if existing_account:
+                if existing_account.status == 'Revoked':
+                    # Re-adding a previously removed bank: reactivate the old account row
+                    # in-place so all historical transactions keep their account_id FK and
+                    # are immediately visible again without any data migration.
+                    current_app.logger.info(
+                        'Reactivating revoked account mask=%s name=%r institution=%r for user=%s '
+                        'under new credential %s (new plaid_account_id=%s)',
+                        mask, name, credential.institution_name, current_user.id,
+                        credential_id, plaid_account_id
+                    )
+                    existing_account.credential_id = credential_id
+                    existing_account.plaid_account_id = plaid_account_id
+                    existing_account.status = 'Active'
                 existing_account.name = name
                 existing_account.type = type_
                 existing_account.subtype = subtype

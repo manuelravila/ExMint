@@ -263,6 +263,12 @@
                     </span>
                 </small>
             </div>
+            <div v-if="connectionWarning" class="alert alert-warning alert-dismissible py-2" role="alert">
+                <button type="button" class="close" aria-label="Close" @click="dismissConnectionWarning">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+                [[ connectionWarning ]]
+            </div>
             <div v-if="syncSummary.length" class="alert alert-info alert-sm alert-dismissible py-2" role="alert">
                 <button type="button" class="close" aria-label="Close" @click="dismissSyncSummary">
                     <span aria-hidden="true">&times;</span>

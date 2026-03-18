@@ -87,6 +87,12 @@ async function initializeLink() {
                         window.location.href = '/dashboard';
                     }, 500);
                 }
+            } else if (response.status === 409) {
+                const msg = data.error || 'This bank is already connected. Use the reconnect option to refresh it instead.';
+                alert(msg);
+                if (typeof app !== 'undefined') {
+                    app.connectionWarning = msg;
+                }
             } else {
                 // Handle error scenario
                 console.error('Error adding bank connection:', data.error || 'Unknown error');
@@ -173,6 +179,7 @@ const app = new Vue({
         loading: true,
         syncSummary: [],
         syncErrors: [],
+        connectionWarning: null,
         modalBanks: [],
         openInstitutionIds: [],
         transactionsPage: 1,
@@ -2654,7 +2661,12 @@ const app = new Vue({
                 if (!this.selectedAccountIds.length) {
                     this.selectedAccountIds = Array.from(availableIds);
                 } else {
-                    this.selectedAccountIds = this.selectedAccountIds.filter(id => availableIds.has(id));
+                    const previousIds = new Set(this.selectedAccountIds);
+                    const retained = this.selectedAccountIds.filter(id => availableIds.has(id));
+                    // Auto-select accounts that didn't exist before (new bank added, or
+                    // previously removed bank re-added with reactivated/new account IDs).
+                    const newIds = Array.from(availableIds).filter(id => !previousIds.has(id));
+                    this.selectedAccountIds = retained.concat(newIds);
                     if (!this.selectedAccountIds.length) {
                         this.selectedAccountIds = Array.from(availableIds);
                     }
@@ -2991,6 +3003,9 @@ const app = new Vue({
         },
         dismissSyncErrors: function() {
             this.syncErrors = [];
+        },
+        dismissConnectionWarning: function() {
+            this.connectionWarning = null;
         },
         startReconnect: function(bankId) {
             reconnectBank(bankId);
