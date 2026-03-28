@@ -280,7 +280,15 @@ const app = new Vue({
             spending: false
         },
         lastDesktopSidebarPreference: null,
-        mobileSidebarVisible: false
+        mobileSidebarVisible: false,
+        maintenance: {
+            scanning: false,
+            deduplicating: false,
+            duplicateGroups: null,
+            totalDuplicates: 0,
+            scanError: null,
+            deduplicationResult: null,
+        }
     },
     computed: {
         totalAccountCount: function() {
@@ -3097,6 +3105,60 @@ const app = new Vue({
                 console.error('Error removing bank:', error);
                 alert('An error occurred while removing the bank connection.');
             }
+        },
+        openMaintenanceModal: function() {
+            // Reset state each time the modal is opened
+            this.maintenance.duplicateGroups = null;
+            this.maintenance.totalDuplicates = 0;
+            this.maintenance.scanError = null;
+            this.maintenance.deduplicationResult = null;
+            $('#maintenanceModal').modal('show');
+        },
+        scanDuplicates: async function() {
+            this.maintenance.scanning = true;
+            this.maintenance.scanError = null;
+            this.maintenance.duplicateGroups = null;
+            this.maintenance.deduplicationResult = null;
+            try {
+                const resp = await fetch('/api/maintenance/duplicates');
+                if (!resp.ok) {
+                    throw new Error('Server returned ' + resp.status);
+                }
+                const data = await resp.json();
+                this.maintenance.duplicateGroups = data.groups || [];
+                this.maintenance.totalDuplicates = data.total_duplicates || 0;
+            } catch (err) {
+                this.maintenance.scanError = 'Scan failed: ' + err.message;
+            } finally {
+                this.maintenance.scanning = false;
+            }
+        },
+        runDeduplication: async function() {
+            if (this.maintenance.totalDuplicates === 0) return;
+            if (!confirm('This will permanently mark ' + this.maintenance.totalDuplicates + ' duplicate transaction(s) as removed. Make sure you have downloaded a backup first. Continue?')) {
+                return;
+            }
+            this.maintenance.deduplicating = true;
+            this.maintenance.scanError = null;
+            try {
+                const resp = await fetch('/api/maintenance/deduplicate', { method: 'POST' });
+                if (!resp.ok) {
+                    const err = await resp.json().catch(() => ({}));
+                    throw new Error(err.error || 'Server returned ' + resp.status);
+                }
+                const data = await resp.json();
+                this.maintenance.deduplicationResult = data;
+                this.maintenance.duplicateGroups = null;
+                // Refresh transactions list so the removed duplicates disappear
+                await this.fetchTransactions({ reset: true });
+            } catch (err) {
+                this.maintenance.scanError = 'Deduplication failed: ' + err.message;
+            } finally {
+                this.maintenance.deduplicating = false;
+            }
+        },
+        downloadBackup: function() {
+            window.location.href = '/api/maintenance/backup';
         },
         fetchModalBanks: function() {
             this.modalBanks = this.banks;
