@@ -1,3 +1,34 @@
+## [1.1.4] - 2026-03-28
+
+### Added
+
+- **Maintenance → Duplicate Transactions** modal under the My Account menu.
+  - **Download CSV Backup** — exports all transactions (including removed ones) before any cleanup.
+  - **Scan for Duplicates** — previews duplicate groups (same account, date, amount, and description) with a Keep / Remove breakdown before any data is touched.
+  - **Remove Duplicates** — marks duplicates as removed after explicit confirmation; the transaction list refreshes automatically.
+
+### Changed
+
+- Duplicate detection now includes split-parent transactions, covering two previously unhandled scenarios:
+  - *One split, one not* — the split parent is always kept (preserves the user's categorisation work); the unsplit duplicate is removed.
+  - *Both split* — the most-recently created split parent is kept; the older one is removed along with a **cascade removal of all its split children** so no orphaned rows remain.
+- Within a duplicate group the keep-priority order is: split parent → posted (non-pending) → most-recent id (when split) / oldest id (when not split).
+- The scan response now includes an `is_split` flag per transaction; the preview table shows a **Split** badge on kept split parents and a **Split+children** badge on split parents slated for removal, making the cascade impact visible before confirmation.
+
+### Fixed
+
+- Maintenance modal was placed outside the `#vue-app` root element, causing Vue directives (`v-if`, `v-else`, `@click`) and template interpolations (`[[ ... ]]`) to be ignored — all conditional panels rendered simultaneously and expressions showed as raw text. Modal moved inside the Vue root boundary.
+
+## [1.1.3] - 2026-03-28
+
+### Fixed
+
+- **`read ECONNRESET` on browser caused by a broken SSH tunnel being silently treated as healthy.**
+  The previous `is_listening()` check only verified that *something* had a socket bound on the tunnel port (a bare TCP `connect`).  On a container restart, the OS could briefly keep the port in `TIME_WAIT`, or the SSH process could still have its listen socket open while the path to the remote MySQL was broken — both cases made the health check pass, the tunnel setup was skipped, and the first DB query hung until gunicorn killed the worker, producing `ECONNRESET` in the browser.
+  The check is replaced by `_tunnel_healthy()`, which connects and waits for MySQL's greeting packet (≥1 byte).  Receiving data proves the full path (local port → SSH → remote MySQL) is working end-to-end before `open_db_tunnel.py` declares success.
+- The post-`ssh` readiness check is now a **retry loop** (`_wait_for_tunnel`, up to 15 s, polling every 0.5 s) instead of a single probe after a hard-coded 1-second sleep, making startup more robust on slow or loaded hosts.
+- Added `ServerAliveCountMax=3` to the SSH command so the explicit keepalive behaviour (already using `ServerAliveInterval=30`) is fully specified and not left to the SSH client default.
+
 ## [1.1.2] - 2026-03-28
 
 ### Added
