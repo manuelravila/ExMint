@@ -3349,10 +3349,21 @@ def _find_duplicate_transaction_groups(user_id):
 
     A duplicate group is a set of non-removed, non-split-child transactions
     that share the same (account_id, date, amount, name).  Within each group
-    the record with the lowest id is considered the one to *keep*; all others
-    are candidates for removal.
+    the record to *keep* is chosen by this priority:
+
+      1. Split parents (has_split_children=True) beat unsplit rows — preserves
+         the user's manual categorisation work.
+      2. Posted (pending=False) beats pending.
+      3. Tie-break: if the surviving candidate is a split parent, keep the most
+         recent one (highest id — the user likely refined it last); otherwise
+         keep the oldest (lowest id — original behaviour).
+
+    Split *children* are never surfaced as independent candidates; they are
+    handled by cascade when their parent is removed (see maintenance_deduplicate).
     """
-    # Subquery: (account_id, date, amount, name) tuples that appear >1 time
+    # Subquery: (account_id, date, amount, name) tuples that appear >1 time.
+    # Split children are excluded; split parents are now included so that
+    # scenario 1 (one split / one not) and scenario 2 (both split) are caught.
     dup_key = (
         db.session.query(
             Transaction.account_id,
@@ -3365,7 +3376,6 @@ def _find_duplicate_transaction_groups(user_id):
             Transaction.user_id == user_id,
             Transaction.is_removed.is_(False),
             Transaction.is_split_child.is_(False),
-            Transaction.has_split_children.is_(False),
         )
         .group_by(
             Transaction.account_id,
@@ -3394,7 +3404,6 @@ def _find_duplicate_transaction_groups(user_id):
             Transaction.user_id == user_id,
             Transaction.is_removed.is_(False),
             Transaction.is_split_child.is_(False),
-            Transaction.has_split_children.is_(False),
         )
         .order_by(Transaction.date.desc(), Transaction.id.asc())
         .all()
@@ -3408,8 +3417,15 @@ def _find_duplicate_transaction_groups(user_id):
 
     result = []
     for txns in groups.values():
-        # Sort: posted (pending=False) first, then by id asc so lowest id = keep
-        txns.sort(key=lambda t: (1 if t.pending else 0, t.id))
+        # Priority sort (ascending — index 0 = keep):
+        #   1. Split parents first (0 < 1)
+        #   2. Posted before pending
+        #   3. Most-recent id when split (negate), oldest id when not split
+        txns.sort(key=lambda t: (
+            0 if t.has_split_children else 1,
+            0 if not t.pending else 1,
+            -t.id if t.has_split_children else t.id,
+        ))
         keep = txns[0]
         remove_candidates = txns[1:]
         result.append({
@@ -3426,34 +3442,25 @@ def maintenance_find_duplicates():
     """Scan for duplicate transactions and return a preview."""
     groups = _find_duplicate_transaction_groups(current_user.id)
 
+    def _serialize_txn(t):
+        return {
+            'id': t.id,
+            'date': t.date.isoformat() if t.date else None,
+            'name': t.name,
+            'amount': float(t.amount) if t.amount is not None else 0.0,
+            'pending': bool(t.pending),
+            'is_split': bool(t.has_split_children),
+            'account_name': t.account.name if t.account else None,
+            'account_mask': t.account.mask if t.account else None,
+            'institution_name': t.credential.institution_name if t.credential else None,
+            'plaid_transaction_id': t.plaid_transaction_id,
+        }
+
     serialized = []
     for g in groups:
         serialized.append({
-            'keep': {
-                'id': g['keep'].id,
-                'date': g['keep'].date.isoformat() if g['keep'].date else None,
-                'name': g['keep'].name,
-                'amount': float(g['keep'].amount) if g['keep'].amount is not None else 0.0,
-                'pending': bool(g['keep'].pending),
-                'account_name': g['keep'].account.name if g['keep'].account else None,
-                'account_mask': g['keep'].account.mask if g['keep'].account else None,
-                'institution_name': g['keep'].credential.institution_name if g['keep'].credential else None,
-                'plaid_transaction_id': g['keep'].plaid_transaction_id,
-            },
-            'remove': [
-                {
-                    'id': t.id,
-                    'date': t.date.isoformat() if t.date else None,
-                    'name': t.name,
-                    'amount': float(t.amount) if t.amount is not None else 0.0,
-                    'pending': bool(t.pending),
-                    'account_name': t.account.name if t.account else None,
-                    'account_mask': t.account.mask if t.account else None,
-                    'institution_name': t.credential.institution_name if t.credential else None,
-                    'plaid_transaction_id': t.plaid_transaction_id,
-                }
-                for t in g['remove']
-            ],
+            'keep': _serialize_txn(g['keep']),
+            'remove': [_serialize_txn(t) for t in g['remove']],
         })
 
     return jsonify({
@@ -3483,6 +3490,18 @@ def maintenance_deduplicate():
                 txn.is_removed = True
                 txn.last_action = 'maintenance_dedup'
                 txn.updated_at = datetime.utcnow()
+                # Cascade: if this is a split parent, mark all its children
+                # removed too so they don't become orphaned visible rows.
+                if txn.has_split_children:
+                    children = Transaction.query.filter_by(
+                        parent_transaction_id=txn.id,
+                        is_removed=False,
+                    ).all()
+                    for child in children:
+                        child.is_removed = True
+                        child.last_action = 'maintenance_dedup_cascade'
+                        child.updated_at = datetime.utcnow()
+                        removed_ids.append(child.id)
 
     if not dry_run and removed_ids:
         try:

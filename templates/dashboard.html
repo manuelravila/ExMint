@@ -1538,7 +1538,6 @@
                     </div>
                 </div>
             </div>
-        </div>
 
     <!-- Maintenance Modal -->
     <div class="modal fade" id="maintenanceModal" tabindex="-1" role="dialog" aria-labelledby="maintenanceModalLabel" aria-hidden="true">
@@ -1613,7 +1612,7 @@
                                             <tbody>
                                                 <template v-for="(group, gi) in maintenance.duplicateGroups">
                                                     <tr :key="'keep-' + gi" class="table-success">
-                                                        <td><span class="badge badge-success">Keep</span></td>
+                                                        <td><span class="badge badge-success">Keep</span> <span v-if="group.keep.is_split" class="badge badge-info ml-1">Split</span></td>
                                                         <td>[[ group.keep.date ]]</td>
                                                         <td>[[ group.keep.name ]]</td>
                                                         <td>[[ group.keep.amount.toFixed(2) ]]</td>
@@ -1621,7 +1620,7 @@
                                                         <td>[[ group.keep.pending ? 'Yes' : 'No' ]]</td>
                                                     </tr>
                                                     <tr v-for="(dup, di) in group.remove" :key="'rm-' + gi + '-' + di" class="table-danger">
-                                                        <td><span class="badge badge-danger">Remove</span></td>
+                                                        <td><span class="badge badge-danger">Remove</span> <span v-if="dup.is_split" class="badge badge-warning ml-1">Split+children</span></td>
                                                         <td>[[ dup.date ]]</td>
                                                         <td>[[ dup.name ]]</td>
                                                         <td>[[ dup.amount.toFixed(2) ]]</td>
@@ -1644,6 +1643,8 @@
             </div>
         </div>
     </div>
+
+        </div>
 
     <!-- Profile Modal -->
     <div class="modal fade" id="profileModal" tabindex="-1" role="dialog" aria-labelledby="profileModalLabel" aria-hidden="true">
@@ -1680,7 +1681,6 @@
         </div>
     </div>
 
-    </div>
 
 {% endblock %}
 
