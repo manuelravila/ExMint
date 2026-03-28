@@ -15,11 +15,12 @@ depends_on = None
 
 def upgrade():
     # Credential rows created before item_id was properly populated have an
-    # empty string instead of a real Plaid item_id.  MySQL treats each NULL as
-    # distinct in a UNIQUE index, so converting '' → NULL de-duplicates these
-    # stale rows without deleting anything or orphaning related transactions.
+    # empty string instead of a real Plaid item_id.  Stamp each such row with
+    # a unique placeholder (CONCAT('__legacy__', id)) so the UNIQUE constraint
+    # on (user_id, item_id) can be applied without deleting rows or orphaning
+    # related transactions.  Real Plaid item IDs never start with '__'.
     op.execute(
-        "UPDATE credential SET item_id = NULL WHERE item_id IS NOT NULL AND item_id = ''"
+        "UPDATE credential SET item_id = CONCAT('__legacy__', id) WHERE item_id = ''"
     )
     with op.batch_alter_table('credential', schema=None) as batch_op:
         batch_op.create_unique_constraint('uq_credential_user_item_id', ['user_id', 'item_id'])
