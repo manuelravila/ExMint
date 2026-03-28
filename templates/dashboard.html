@@ -59,6 +59,7 @@
                     <div class="dropdown-menu" aria-labelledby="profileMenu">
                         <a class="dropdown-item" href="#" data-toggle="modal" data-target="#profileModal">Edit Profile</a>
                         <a class="dropdown-item" href="#" data-toggle="modal" data-target="#myConnectionsModal" @click="fetchModalBanks">My Connections</a>
+                        <a class="dropdown-item" href="#" @click.prevent="openMaintenanceModal">Maintenance</a>
                         <a class="dropdown-item" href="{{ url_for('views.logout') }}">Log out</a>
                     </div>
                 </div>
@@ -1538,6 +1539,111 @@
                 </div>
             </div>
         </div>
+
+    <!-- Maintenance Modal -->
+    <div class="modal fade" id="maintenanceModal" tabindex="-1" role="dialog" aria-labelledby="maintenanceModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="maintenanceModalLabel"><i class="fas fa-tools mr-2"></i>Maintenance</h5>
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                </div>
+                <div class="modal-body">
+
+                    <!-- Backup Section -->
+                    <div class="card mb-3">
+                        <div class="card-header"><strong><i class="fas fa-download mr-1"></i> Download Backup</strong></div>
+                        <div class="card-body">
+                            <p class="text-muted small mb-2">Download a full CSV export of all your transactions, including removed ones. Use this before running any cleanup operations.</p>
+                            <button class="btn btn-outline-secondary btn-sm" @click="downloadBackup">
+                                <i class="fas fa-file-csv mr-1"></i> Download CSV Backup
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Deduplication Section -->
+                    <div class="card">
+                        <div class="card-header"><strong><i class="fas fa-clone mr-1"></i> Duplicate Transactions</strong></div>
+                        <div class="card-body">
+                            <p class="text-muted small mb-2">
+                                Scans for transactions with the same date, amount, description, and account that appear more than once.
+                                Use <strong>Scan</strong> first to preview what would be removed, then <strong>Remove Duplicates</strong> to clean up.
+                            </p>
+                            <div class="d-flex align-items-center mb-3">
+                                <button class="btn btn-outline-primary btn-sm mr-2" @click="scanDuplicates" :disabled="maintenance.scanning || maintenance.deduplicating">
+                                    <span v-if="!maintenance.scanning"><i class="fas fa-search mr-1"></i> Scan for Duplicates</span>
+                                    <span v-else><i class="fas fa-spinner fa-spin mr-1"></i> Scanning...</span>
+                                </button>
+                                <button class="btn btn-danger btn-sm" @click="runDeduplication"
+                                    :disabled="maintenance.scanning || maintenance.deduplicating || maintenance.duplicateGroups === null || maintenance.totalDuplicates === 0">
+                                    <span v-if="!maintenance.deduplicating"><i class="fas fa-trash-alt mr-1"></i> Remove Duplicates</span>
+                                    <span v-else><i class="fas fa-spinner fa-spin mr-1"></i> Removing...</span>
+                                </button>
+                            </div>
+
+                            <!-- Scan results -->
+                            <div v-if="maintenance.scanError" class="alert alert-danger py-2 small">[[ maintenance.scanError ]]</div>
+                            <div v-if="maintenance.deduplicationResult" class="alert alert-success py-2 small">
+                                <i class="fas fa-check-circle mr-1"></i>
+                                Removed <strong>[[ maintenance.deduplicationResult.removed_count ]]</strong> duplicate transaction(s) successfully.
+                            </div>
+                            <div v-if="maintenance.duplicateGroups !== null && !maintenance.deduplicationResult">
+                                <div v-if="maintenance.totalDuplicates === 0" class="alert alert-success py-2 small">
+                                    <i class="fas fa-check-circle mr-1"></i> No duplicate transactions found.
+                                </div>
+                                <div v-else>
+                                    <div class="alert alert-warning py-2 small mb-2">
+                                        Found <strong>[[ maintenance.totalDuplicates ]]</strong> duplicate transaction(s) across <strong>[[ maintenance.duplicateGroups.length ]]</strong> group(s).
+                                        The entries listed under "Remove" will be marked as removed; those under "Keep" will be preserved.
+                                    </div>
+                                    <div class="table-responsive" style="max-height:300px;overflow-y:auto;">
+                                        <table class="table table-sm table-bordered small mb-0">
+                                            <thead class="thead-light">
+                                                <tr>
+                                                    <th>Action</th>
+                                                    <th>Date</th>
+                                                    <th>Description</th>
+                                                    <th>Amount</th>
+                                                    <th>Account</th>
+                                                    <th>Pending</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <template v-for="(group, gi) in maintenance.duplicateGroups">
+                                                    <tr :key="'keep-' + gi" class="table-success">
+                                                        <td><span class="badge badge-success">Keep</span></td>
+                                                        <td>[[ group.keep.date ]]</td>
+                                                        <td>[[ group.keep.name ]]</td>
+                                                        <td>[[ group.keep.amount.toFixed(2) ]]</td>
+                                                        <td>[[ group.keep.account_name ]] [[ group.keep.account_mask ? '(…' + group.keep.account_mask + ')' : '' ]]</td>
+                                                        <td>[[ group.keep.pending ? 'Yes' : 'No' ]]</td>
+                                                    </tr>
+                                                    <tr v-for="(dup, di) in group.remove" :key="'rm-' + gi + '-' + di" class="table-danger">
+                                                        <td><span class="badge badge-danger">Remove</span></td>
+                                                        <td>[[ dup.date ]]</td>
+                                                        <td>[[ dup.name ]]</td>
+                                                        <td>[[ dup.amount.toFixed(2) ]]</td>
+                                                        <td>[[ dup.account_name ]] [[ dup.account_mask ? '(…' + dup.account_mask + ')' : '' ]]</td>
+                                                        <td>[[ dup.pending ? 'Yes' : 'No' ]]</td>
+                                                    </tr>
+                                                </template>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <!-- Profile Modal -->
     <div class="modal fade" id="profileModal" tabindex="-1" role="dialog" aria-labelledby="profileModalLabel" aria-hidden="true">

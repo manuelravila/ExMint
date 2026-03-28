@@ -1,3 +1,16 @@
+## [1.1.2] - 2026-03-28
+
+### Added
+
+- **Maintenance menu** under My Account with two tools:
+  - **Download Backup** — exports a full CSV of all transactions (including removed ones) for safe-keeping before any cleanup.
+  - **Duplicate Transactions** — scan-then-fix workflow: Scan shows a colour-coded preview table of every duplicate group (green = keep, red = remove) without touching data; Remove Duplicates then marks the redundant rows as removed after a confirmation prompt and refreshes the transaction list automatically.
+- Three new backend endpoints: `GET /api/maintenance/duplicates` (read-only scan), `POST /api/maintenance/deduplicate` (supports `?dry_run=true`), `GET /api/maintenance/backup` (full CSV download).
+
+### Fixed
+
+- **Duplicate transactions caused by concurrent sync race condition.** A Plaid webhook (`SYNC_UPDATES_AVAILABLE`) and a simultaneous manual Sync click could both call `_sync_credential_transactions` for the same credential, read the same cursor, and insert the same transactions before either committed. A row-level `SELECT … FOR UPDATE` lock is now acquired on the `Credential` row at the start of each sync, serialising concurrent callers on MySQL/MariaDB (production). The lock is a no-op on SQLite (development), where file-level locking already prevents this.
+
 ## [1.1.1] - 2026-03-18
 
 ### Added

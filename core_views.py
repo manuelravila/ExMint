@@ -1994,6 +1994,15 @@ def _persist_transactions_from_payload(user, credential, data, from_webhook=Fals
 
 
 def _sync_credential_transactions(user, credential, from_webhook=False):
+    # Acquire a row-level lock on the credential to prevent concurrent syncs
+    # (e.g. a Plaid webhook and a manual sync firing at the same time for the
+    # same credential).  On MySQL this is a real exclusive lock that serialises
+    # the two callers; on SQLite (dev/test) with_for_update() is a no-op.
+    try:
+        db.session.query(Credential).filter_by(id=credential.id).with_for_update().one_or_none()
+    except Exception:
+        pass  # Locking not supported by this database backend — best-effort
+
     counts = {'added': 0, 'modified': 0, 'removed': 0}
     cursor = credential.transactions_cursor
     has_more = True
@@ -3329,3 +3338,207 @@ def deactivate_plaid_token(access_token):
     except plaid.ApiException as e:
         current_app.logger.error('Plaid item_remove failed: %s', e)
         return False, e.body
+
+
+# ---------------------------------------------------------------------------
+# Maintenance endpoints
+# ---------------------------------------------------------------------------
+
+def _find_duplicate_transaction_groups(user_id):
+    """Return a list of duplicate groups for the given user.
+
+    A duplicate group is a set of non-removed, non-split-child transactions
+    that share the same (account_id, date, amount, name).  Within each group
+    the record with the lowest id is considered the one to *keep*; all others
+    are candidates for removal.
+    """
+    # Subquery: (account_id, date, amount, name) tuples that appear >1 time
+    dup_key = (
+        db.session.query(
+            Transaction.account_id,
+            Transaction.date,
+            Transaction.amount,
+            Transaction.name,
+            func.count(Transaction.id).label('cnt'),
+        )
+        .filter(
+            Transaction.user_id == user_id,
+            Transaction.is_removed.is_(False),
+            Transaction.is_split_child.is_(False),
+            Transaction.has_split_children.is_(False),
+        )
+        .group_by(
+            Transaction.account_id,
+            Transaction.date,
+            Transaction.amount,
+            Transaction.name,
+        )
+        .having(func.count(Transaction.id) > 1)
+        .subquery()
+    )
+
+    # Fetch all transactions that belong to a duplicate group
+    duplicates = (
+        Transaction.query
+        .options(joinedload(Transaction.account), joinedload(Transaction.credential))
+        .join(
+            dup_key,
+            and_(
+                Transaction.account_id == dup_key.c.account_id,
+                Transaction.date == dup_key.c.date,
+                Transaction.amount == dup_key.c.amount,
+                Transaction.name == dup_key.c.name,
+            ),
+        )
+        .filter(
+            Transaction.user_id == user_id,
+            Transaction.is_removed.is_(False),
+            Transaction.is_split_child.is_(False),
+            Transaction.has_split_children.is_(False),
+        )
+        .order_by(Transaction.date.desc(), Transaction.id.asc())
+        .all()
+    )
+
+    # Group them
+    groups = {}
+    for txn in duplicates:
+        key = (txn.account_id, str(txn.date), str(txn.amount), txn.name)
+        groups.setdefault(key, []).append(txn)
+
+    result = []
+    for txns in groups.values():
+        # Sort: posted (pending=False) first, then by id asc so lowest id = keep
+        txns.sort(key=lambda t: (1 if t.pending else 0, t.id))
+        keep = txns[0]
+        remove_candidates = txns[1:]
+        result.append({
+            'keep': keep,
+            'remove': remove_candidates,
+        })
+
+    return result
+
+
+@core.route('/api/maintenance/duplicates', methods=['GET'])
+@login_required
+def maintenance_find_duplicates():
+    """Scan for duplicate transactions and return a preview."""
+    groups = _find_duplicate_transaction_groups(current_user.id)
+
+    serialized = []
+    for g in groups:
+        serialized.append({
+            'keep': {
+                'id': g['keep'].id,
+                'date': g['keep'].date.isoformat() if g['keep'].date else None,
+                'name': g['keep'].name,
+                'amount': float(g['keep'].amount) if g['keep'].amount is not None else 0.0,
+                'pending': bool(g['keep'].pending),
+                'account_name': g['keep'].account.name if g['keep'].account else None,
+                'account_mask': g['keep'].account.mask if g['keep'].account else None,
+                'institution_name': g['keep'].credential.institution_name if g['keep'].credential else None,
+                'plaid_transaction_id': g['keep'].plaid_transaction_id,
+            },
+            'remove': [
+                {
+                    'id': t.id,
+                    'date': t.date.isoformat() if t.date else None,
+                    'name': t.name,
+                    'amount': float(t.amount) if t.amount is not None else 0.0,
+                    'pending': bool(t.pending),
+                    'account_name': t.account.name if t.account else None,
+                    'account_mask': t.account.mask if t.account else None,
+                    'institution_name': t.credential.institution_name if t.credential else None,
+                    'plaid_transaction_id': t.plaid_transaction_id,
+                }
+                for t in g['remove']
+            ],
+        })
+
+    return jsonify({
+        'total_groups': len(serialized),
+        'total_duplicates': sum(len(g['remove']) for g in serialized),
+        'groups': serialized,
+    })
+
+
+@core.route('/api/maintenance/deduplicate', methods=['POST'])
+@login_required
+def maintenance_deduplicate():
+    """Remove duplicate transactions.
+
+    Query params:
+        dry_run=true  — analyse only, do not modify data (default: false)
+    """
+    dry_run = request.args.get('dry_run', 'false').lower() in ('true', '1', 'yes')
+
+    groups = _find_duplicate_transaction_groups(current_user.id)
+
+    removed_ids = []
+    for g in groups:
+        for txn in g['remove']:
+            removed_ids.append(txn.id)
+            if not dry_run:
+                txn.is_removed = True
+                txn.last_action = 'maintenance_dedup'
+                txn.updated_at = datetime.utcnow()
+
+    if not dry_run and removed_ids:
+        try:
+            db.session.commit()
+        except Exception as exc:
+            db.session.rollback()
+            current_app.logger.exception('Deduplication failed: %s', exc)
+            return jsonify({'error': 'Deduplication failed. Please try again.'}), 500
+
+    return jsonify({
+        'dry_run': dry_run,
+        'removed_count': len(removed_ids),
+        'removed_ids': removed_ids,
+    })
+
+
+@core.route('/api/maintenance/backup', methods=['GET'])
+@login_required
+def maintenance_backup():
+    """Download a full CSV backup of all the user's transactions (including removed)."""
+    txns = (
+        Transaction.query
+        .options(joinedload(Transaction.account), joinedload(Transaction.credential))
+        .filter(Transaction.user_id == current_user.id)
+        .order_by(Transaction.date.desc(), Transaction.id.desc())
+        .all()
+    )
+
+    output = StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        'ID', 'Date', 'Description', 'Merchant', 'Amount', 'Currency',
+        'Pending', 'Is Removed', 'Account', 'Account Mask', 'Institution',
+        'Plaid Transaction ID', 'Last Action', 'Created At', 'Updated At',
+    ])
+    for txn in txns:
+        writer.writerow([
+            txn.id,
+            txn.date.isoformat() if txn.date else '',
+            txn.name or '',
+            txn.merchant_name or '',
+            str(txn.amount) if txn.amount is not None else '',
+            txn.iso_currency_code or '',
+            'Yes' if txn.pending else 'No',
+            'Yes' if txn.is_removed else 'No',
+            txn.account.name if txn.account else '',
+            txn.account.mask if txn.account else '',
+            txn.credential.institution_name if txn.credential else '',
+            txn.plaid_transaction_id or '',
+            txn.last_action or '',
+            txn.created_at.isoformat() if txn.created_at else '',
+            txn.updated_at.isoformat() if txn.updated_at else '',
+        ])
+
+    timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+    filename = f'exmint_backup_{timestamp}.csv'
+    response = current_app.response_class(output.getvalue(), mimetype='text/csv')
+    response.headers['Content-Disposition'] = f'attachment; filename="{filename}"'
+    return response
