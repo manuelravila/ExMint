@@ -22,12 +22,15 @@ RUN wget https://github.com/bitwarden/sdk/releases/download/bws-v0.5.0/bws-x86_6
     && chmod +x /usr/local/bin/bws \
     && rm bws-x86_64-unknown-linux-gnu-0.5.0.zip
 
-# Copy the SSH private key into the container
-COPY dev_docker_key /root/.ssh/id_rsa
-RUN chmod 600 /root/.ssh/id_rsa
-
 # Copy the current directory contents into the container at /app
 COPY . /app
+
+# Set up SSH key for dev DB tunnel — only present in dev environments.
+# Stag and prod connect to the database directly (no tunnel needed).
+RUN if [ -f /app/dev_docker_key ]; then \
+    cp /app/dev_docker_key /root/.ssh/id_rsa && \
+    chmod 600 /root/.ssh/id_rsa; \
+fi
 
 # Make start.sh executable
 COPY start.sh /app/start.sh
