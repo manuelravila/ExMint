@@ -43,26 +43,8 @@ class Config:
     SECRET_KEY = get_secret("SECRET_KEY")
     ENCRYPTION_KEY = get_secret("ENCRYPTION_KEY")
 
-    # Session cookie settings
-    SESSION_COOKIE_SAMESITE = "None"
-    SESSION_COOKIE_SECURE = True
-    SESSION_COOKIE_PATH = "/"
-    PERMANENT_SESSION_LIFETIME = 900  # 15 minutes
-
-    # Plaid credentials
-    PLAID_CLIENT_ID = get_secret("PLAID_CLIENT_ID")
-    PLAID_SECRET = get_secret("PLAID_SECRET")
-    PLAID_WEBHOOK_URL = os.getenv("PLAID_WEBHOOK_URL")
-
-    # Email configuration
-    MAIL_SERVER = os.getenv("MAIL_SERVER", "localhost")
-    MAIL_USERNAME = os.getenv("MAIL_USERNAME", "")
-    MAIL_PASSWORD = get_secret("MAIL_PASSWORD")
-    MAIL_PORT = int(os.getenv("MAIL_PORT", "587"))
-    MAIL_USE_TLS = True
-    MAIL_USE_SSL = False
-
-    # Environment-dependent configuration
+    # Environment-dependent configuration (must come before session cookie
+    # settings so SSL_CONTEXT is defined when those are evaluated)
     if branch.strip() == "main":
         PLAID_ENV = "production"
         SUFFIX = ""
@@ -81,6 +63,29 @@ class Config:
         _cert = os.getenv("SSL_CERT_PATH", "/app/dev_exmint_me.crt")
         _key = os.getenv("SSL_KEY_PATH", "/app/dev_exmint_me.key")
         SSL_CONTEXT = (_cert, _key) if os.path.exists(_cert) and os.path.exists(_key) else None
+
+    # Session cookie settings
+    # SECURE=True and SAMESITE=None are required for HTTPS deployments.
+    # In dev without SSL, SECURE must be False or the browser silently drops
+    # the cookie, causing a login loop.
+    _ssl_active = SSL_CONTEXT is not None
+    SESSION_COOKIE_SECURE = _ssl_active
+    SESSION_COOKIE_SAMESITE = "None" if _ssl_active else "Lax"
+    SESSION_COOKIE_PATH = "/"
+    PERMANENT_SESSION_LIFETIME = 900  # 15 minutes
+
+    # Plaid credentials
+    PLAID_CLIENT_ID = get_secret("PLAID_CLIENT_ID")
+    PLAID_SECRET = get_secret("PLAID_SECRET")
+    PLAID_WEBHOOK_URL = os.getenv("PLAID_WEBHOOK_URL")
+
+    # Email configuration
+    MAIL_SERVER = os.getenv("MAIL_SERVER", "localhost")
+    MAIL_USERNAME = os.getenv("MAIL_USERNAME", "")
+    MAIL_PASSWORD = get_secret("MAIL_PASSWORD")
+    MAIL_PORT = int(os.getenv("MAIL_PORT", "587"))
+    MAIL_USE_TLS = True
+    MAIL_USE_SSL = False
 
     @staticmethod
     def get_plaid_environment():

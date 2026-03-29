@@ -3347,91 +3347,121 @@ def deactivate_plaid_token(access_token):
 def _find_duplicate_transaction_groups(user_id):
     """Return a list of duplicate groups for the given user.
 
-    A duplicate group is a set of non-removed, non-split-child transactions
-    that share the same (account_id, date, amount, name).  Within each group
-    the record to *keep* is chosen by this priority:
+    Detects two classes of duplicates:
+
+    1. **Same-account** — same (account_id, date, amount, name) appearing
+       more than once on the same account.  Catches the race-condition sync
+       duplicates fixed in v1.1.2.
+
+    2. **Cross-account** — same (date, amount, name) appearing on 2+ different
+       accounts.  Catches the supplementary-card / double-credential scenario
+       where Plaid reports the same real-world transaction under both a primary
+       and supplementary card, each with a distinct plaid_transaction_id.
+
+    Within each group the record to *keep* is chosen by this priority:
 
       1. Split parents (has_split_children=True) beat unsplit rows — preserves
          the user's manual categorisation work.
       2. Posted (pending=False) beats pending.
-      3. Tie-break: if the surviving candidate is a split parent, keep the most
-         recent one (highest id — the user likely refined it last); otherwise
-         keep the oldest (lowest id — original behaviour).
+      3. Same-account tie-break: keep oldest id (lowest id).
+         Cross-account tie-break: keep lowest credential_id (older connection).
 
     Split *children* are never surfaced as independent candidates; they are
     handled by cascade when their parent is removed (see maintenance_deduplicate).
     """
-    # Subquery: (account_id, date, amount, name) tuples that appear >1 time.
-    # Split children are excluded; split parents are now included so that
-    # scenario 1 (one split / one not) and scenario 2 (both split) are caught.
-    dup_key = (
+    base_filter = [
+        Transaction.user_id == user_id,
+        Transaction.is_removed.is_(False),
+        Transaction.is_split_child.is_(False),
+    ]
+
+    # ── Phase 1: same-account duplicates ─────────────────────────────────
+    # (account_id, date, amount, name) tuples that appear >1 time on the
+    # same account.
+    same_acct_subq = (
         db.session.query(
             Transaction.account_id,
             Transaction.date,
             Transaction.amount,
             Transaction.name,
-            func.count(Transaction.id).label('cnt'),
         )
-        .filter(
-            Transaction.user_id == user_id,
-            Transaction.is_removed.is_(False),
-            Transaction.is_split_child.is_(False),
-        )
-        .group_by(
-            Transaction.account_id,
-            Transaction.date,
-            Transaction.amount,
-            Transaction.name,
-        )
+        .filter(*base_filter)
+        .group_by(Transaction.account_id, Transaction.date, Transaction.amount, Transaction.name)
         .having(func.count(Transaction.id) > 1)
         .subquery()
     )
 
-    # Fetch all transactions that belong to a duplicate group
-    duplicates = (
+    same_acct_txns = (
         Transaction.query
         .options(joinedload(Transaction.account), joinedload(Transaction.credential))
-        .join(
-            dup_key,
-            and_(
-                Transaction.account_id == dup_key.c.account_id,
-                Transaction.date == dup_key.c.date,
-                Transaction.amount == dup_key.c.amount,
-                Transaction.name == dup_key.c.name,
-            ),
-        )
-        .filter(
-            Transaction.user_id == user_id,
-            Transaction.is_removed.is_(False),
-            Transaction.is_split_child.is_(False),
-        )
+        .join(same_acct_subq, and_(
+            Transaction.account_id == same_acct_subq.c.account_id,
+            Transaction.date == same_acct_subq.c.date,
+            Transaction.amount == same_acct_subq.c.amount,
+            Transaction.name == same_acct_subq.c.name,
+        ))
+        .filter(*base_filter)
         .order_by(Transaction.date.desc(), Transaction.id.asc())
         .all()
     )
 
-    # Group them
     groups = {}
-    for txn in duplicates:
-        key = (txn.account_id, str(txn.date), str(txn.amount), txn.name)
+    same_acct_ids = set()
+    for txn in same_acct_txns:
+        key = ('acct', txn.account_id, str(txn.date), str(txn.amount), txn.name)
+        groups.setdefault(key, []).append(txn)
+        same_acct_ids.add(txn.id)
+
+    # ── Phase 2: cross-account duplicates ────────────────────────────────
+    # (date, amount, name) tuples that appear on 2+ *distinct* accounts.
+    # Catches supplementary-card duplicates where Plaid issues a separate
+    # plaid_transaction_id for each card but the underlying charge is the same.
+    cross_acct_subq = (
+        db.session.query(
+            Transaction.date,
+            Transaction.amount,
+            Transaction.name,
+        )
+        .filter(*base_filter)
+        .group_by(Transaction.date, Transaction.amount, Transaction.name)
+        .having(func.count(Transaction.account_id.distinct()) > 1)
+        .subquery()
+    )
+
+    cross_acct_txns = (
+        Transaction.query
+        .options(joinedload(Transaction.account), joinedload(Transaction.credential))
+        .join(cross_acct_subq, and_(
+            Transaction.date == cross_acct_subq.c.date,
+            Transaction.amount == cross_acct_subq.c.amount,
+            Transaction.name == cross_acct_subq.c.name,
+        ))
+        .filter(*base_filter)
+        .order_by(Transaction.date.desc(), Transaction.id.asc())
+        .all()
+    )
+
+    for txn in cross_acct_txns:
+        if txn.id in same_acct_ids:
+            continue  # already captured in a same-account group
+        key = ('cross', str(txn.date), str(txn.amount), txn.name)
         groups.setdefault(key, []).append(txn)
 
+    # ── Build result ──────────────────────────────────────────────────────
     result = []
-    for txns in groups.values():
-        # Priority sort (ascending — index 0 = keep):
-        #   1. Split parents first (0 < 1)
-        #   2. Posted before pending
-        #   3. Most-recent id when split (negate), oldest id when not split
+    for group_key, txns in groups.items():
+        is_cross = group_key[0] == 'cross'
+
         txns.sort(key=lambda t: (
             0 if t.has_split_children else 1,
             0 if not t.pending else 1,
-            -t.id if t.has_split_children else t.id,
+            # Cross-account: keep oldest credential (lowest credential_id).
+            # Same-account: keep most-recent id when split, oldest otherwise.
+            t.credential_id if is_cross else (-t.id if t.has_split_children else t.id),
         ))
         keep = txns[0]
         remove_candidates = txns[1:]
-        result.append({
-            'keep': keep,
-            'remove': remove_candidates,
-        })
+        result.append({'keep': keep, 'remove': remove_candidates})
 
     return result
 
