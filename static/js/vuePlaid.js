@@ -3149,8 +3149,11 @@ const app = new Vue({
                 const data = await resp.json();
                 this.maintenance.deduplicationResult = data;
                 this.maintenance.duplicateGroups = null;
-                // Refresh transactions list so the removed duplicates disappear
-                await this.fetchTransactions({ reset: true });
+                // Refresh categories (transaction counts changed) and transactions list
+                await Promise.all([
+                    this.fetchCustomCategories({ force: true }),
+                    this.fetchTransactions({ reset: true }),
+                ]);
             } catch (err) {
                 this.maintenance.scanError = 'Deduplication failed: ' + err.message;
             } finally {
