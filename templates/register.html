@@ -12,12 +12,18 @@
                 {% endfor %}
             {% endif %}
         {% endwith %}
-        <!-- Rest of your page content -->
     </div>
     <div class="container h-100" style="margin-top: 50px;">
         <div class="row align-items-center justify-content-center h-100">
             <div class="col-lg-6 text-center">
                 <div class="login-container mt-4">
+                    {% if registration_closed %}
+                    <div class="border p-4 rounded">
+                        <h5 class="mb-3">Registration is currently closed</h5>
+                        <p class="text-muted">New account registrations are not open at this time. Please check back later or contact the administrator.</p>
+                        <a href="{{ url_for('views.login') }}" class="btn btn-primary">Back to Login</a>
+                    </div>
+                    {% else %}
                     <form action="{{ url_for('views.register') }}" method="post" novalidate class="border p-4 rounded">
                         {{ form.hidden_tag() }}
                         <div class="form-group">
@@ -48,9 +54,9 @@
                             {% endif %}
                         </div>
                         <button type="submit" class="btn btn-primary">Register</button>
-                        <a href="https://exmint.me/app{{ suffix }}" class="btn btn-secondary" target="_top">Cancel</a> <!-- Cancel button -->
+                        <a href="{{ url_for('views.login') }}" class="btn btn-secondary">Cancel</a>
                     </form>
-                    
+                    {% endif %}
                 </div>
             </div>
         </div>

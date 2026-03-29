@@ -1,0 +1,118 @@
+<!-- admin.html -->
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="container" style="margin-top: 40px; margin-bottom: 60px;">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2 class="mb-0">Admin Panel</h2>
+        <a href="{{ url_for('views.dashboard') }}" class="btn btn-sm btn-outline-secondary">← Dashboard</a>
+    </div>
+
+    <!-- Registration Settings -->
+    <div class="card mb-4">
+        <div class="card-header font-weight-bold">Registration Settings</div>
+        <div class="card-body">
+            <p class="mb-3">
+                Registration is currently:
+                <span class="badge badge-{{ 'success' if registration_open else 'danger' }} ml-1">
+                    {{ 'Open' if registration_open else 'Closed' }}
+                </span>
+            </p>
+            <form action="{{ url_for('views.toggle_registration') }}" method="post">
+                {{ csrf_form.hidden_tag() }}
+                <button type="submit" class="btn btn-{{ 'danger' if registration_open else 'success' }}">
+                    {{ 'Close Registration' if registration_open else 'Open Registration' }}
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Pending Approvals -->
+    <div class="card mb-4">
+        <div class="card-header font-weight-bold">
+            Pending Approvals
+            {% if pending_users %}
+            <span class="badge badge-warning ml-1">{{ pending_users|length }}</span>
+            {% endif %}
+        </div>
+        <div class="card-body">
+            {% if pending_users %}
+            <table class="table table-sm table-hover mb-0">
+                <thead class="thead-light">
+                    <tr>
+                        <th>Email</th>
+                        <th style="width:180px;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for u in pending_users %}
+                    <tr>
+                        <td class="align-middle">{{ u.email }}</td>
+                        <td>
+                            <form action="{{ url_for('views.admin_approve_user', user_id=u.id) }}" method="post" style="display:inline">
+                                {{ csrf_form.hidden_tag() }}
+                                <button type="submit" class="btn btn-success btn-sm">Approve</button>
+                            </form>
+                            <form action="{{ url_for('views.admin_reject_user', user_id=u.id) }}" method="post" style="display:inline">
+                                {{ csrf_form.hidden_tag() }}
+                                <button type="submit" class="btn btn-warning btn-sm">Reject</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p class="text-muted mb-0">No pending registrations.</p>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- All Users -->
+    <div class="card">
+        <div class="card-header font-weight-bold">
+            All Users
+            <span class="badge badge-secondary ml-1">{{ all_users|length }}</span>
+        </div>
+        <div class="card-body p-0">
+            <table class="table table-sm table-hover mb-0">
+                <thead class="thead-light">
+                    <tr>
+                        <th>Email</th>
+                        <th>Status</th>
+                        <th>Role</th>
+                        <th style="width:100px;">Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for u in all_users %}
+                    <tr>
+                        <td class="align-middle">{{ u.email }}</td>
+                        <td class="align-middle">
+                            <span class="badge badge-{{
+                                'success' if u.status == 'Active' else
+                                'warning' if u.status == 'PendingApproval' else
+                                'secondary' if u.status == 'Rejected' else
+                                'light'
+                            }}">{{ u.status }}</span>
+                        </td>
+                        <td class="align-middle">{{ u.role }}</td>
+                        <td>
+                            {% if u.id == current_user.id %}
+                            <span class="text-muted small">(you)</span>
+                            {% else %}
+                            <form action="{{ url_for('views.admin_delete_user', user_id=u.id) }}" method="post"
+                                  onsubmit="return confirm('Delete {{ u.email }} and revoke all their Plaid connections? This cannot be undone.')">
+                                {{ csrf_form.hidden_tag() }}
+                                <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+                            </form>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

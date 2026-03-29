@@ -24,6 +24,26 @@ services:
         ipv4_address: ${FLASK_IP:-172.21.0.3}
     restart: always
 
+  cron:
+    container_name: ${FLASK_ENV:-dev}_cron
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env.${FLASK_ENV:-dev}
+    environment:
+      - FLASK_ENV=${FLASK_ENV:-dev}
+    volumes:
+      - .:/app
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      - "db-host:${DB_HOST:-172.21.0.1}"
+    entrypoint: ["/bin/sh", "/app/entrypoint_cron.sh"]
+    networks:
+      app-network:
+        ipv4_address: ${CRON_IP:-172.21.0.4}
+    restart: always
+
 networks:
   app-network:
     name: ${FLASK_ENV:-dev}_app_net

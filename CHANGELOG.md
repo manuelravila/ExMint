@@ -1,3 +1,28 @@
+## [1.3.0] - 2026-03-29
+
+### Added
+
+- **Admin panel** (`/admin`): accessible to users with `role='Admin'`. Provides a registration open/closed toggle, a pending-approval queue with one-click approve/reject, and a full user list with delete capability (Plaid connections are revoked before deletion).
+- **Registration approval workflow**: new registrations land in `PendingApproval` status. Admin receives an email with one-click approve/reject links (valid 7 days). Users are notified by email on approval or rejection. The workflow applies to all environments.
+- **Registration toggle**: admin can open or close registration from the admin panel at any time. The "Create an account" link is hidden in the login UI when registration is closed.
+- **Test-user nightly cleanup**: `cleanup_test_user.py` revokes all Plaid connections and wipes all transaction/account/credential data for the account in `TEST_USER_EMAIL`, leaving the user row intact. Runs at 23:55 UTC via the Docker cron service.
+- **Docker cron service**: new `cron` container in `docker-compose.yml` using the same app image. Configured via `crontab.docker` and `entrypoint_cron.sh`.
+- New environment variables: `ADMIN_EMAIL` (required for approval emails), `TEST_USER_EMAIL` (required for nightly cleanup), `CRON_IP` (Docker network IP for cron container).
+
+### Fixed
+
+- **Email on STAG**: `MAIL_*` variables were not present in the staging environment, causing `get_secret("MAIL_PASSWORD")` to raise and silently swallow the error. Added `.env.stag` template with SMTP credentials pre-filled.
+
+### Deployment notes
+
+1. Run `flask db upgrade` — adds the `app_settings` table and seeds `registration_open = 'true'`.
+2. Set your user's role to Admin (one-time, run from flask shell or direct SQL):
+   ```sql
+   UPDATE user SET role = 'Admin' WHERE email = 'your@email.com';
+   ```
+3. Add `ADMIN_EMAIL`, `TEST_USER_EMAIL`, and `CRON_IP` to `.env.stag` and `.env.main`.
+4. The cron container starts automatically with the stack — no post-receive hook changes needed.
+
 ## [1.2.0] - 2026-03-28
 
 ### Added

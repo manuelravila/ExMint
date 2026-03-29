@@ -151,6 +151,32 @@ class TransactionCategoryOverride(db.Model):
     transaction = db.relationship('Transaction', backref=db.backref('manual_override_record', uselist=False, cascade='all, delete-orphan'))
     custom_category = db.relationship('CustomCategory', back_populates='overrides', lazy=True)
 
+class AppSetting(db.Model):
+    """Key-value store for admin-controlled application settings."""
+    __tablename__ = 'app_settings'
+    key = db.Column(db.String(100), primary_key=True)
+    value = db.Column(db.String(500), nullable=False)
+
+
+def get_app_setting(key, default=''):
+    """Return the value of an AppSetting, or *default* if not found or DB unavailable."""
+    try:
+        s = db.session.get(AppSetting, key)
+        return s.value if s else default
+    except Exception:
+        return default
+
+
+def set_app_setting(key, value):
+    """Create or update an AppSetting row and commit."""
+    s = db.session.get(AppSetting, key)
+    if s:
+        s.value = str(value)
+    else:
+        db.session.add(AppSetting(key=key, value=str(value)))
+    db.session.commit()
+
+
 class Budget(db.Model):
     __tablename__ = 'budgets'
 
