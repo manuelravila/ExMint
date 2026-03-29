@@ -1,8 +1,41 @@
+# Python
 __pycache__/
 *.pyc
-logs/
+*.pyo
+*.pyd
 venv/
 .venv/
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# Keys & certificates
+*.key
+*.pem
+*.crt
+*.csr
+*.srl
+*.cnf
+dev_docker_key
+vps_key
+vps_key.pub
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs & runtime
+logs/
+secrets.lock
+*.log
+
+# Node
 excel_addin/dist/
 excel_addin/node_modules/
-secrets.lock
+
+# Misc
+tokens.csv
+tasks.json
