@@ -1,3 +1,9 @@
+## [1.1.5] - 2026-03-28
+
+### Fixed
+
+- After deduplication, custom categories are now force-refreshed alongside the transaction list. Previously, category transaction counts remained stale until the next page load, and a race between the post-dedup refresh and a user-initiated category filter could leave the filter silently ignored (showing all transactions). Both requests now run in parallel via `Promise.all`.
+
 ## [1.1.4] - 2026-03-28
 
 ### Added
