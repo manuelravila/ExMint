@@ -1,3 +1,17 @@
+## [1.2.0] - 2026-03-28
+
+### Added
+
+- **Cross-account duplicate detection.** The Maintenance → Duplicate Transactions scanner now detects duplicates across different accounts, not just within the same account. This catches the supplementary-card scenario where Plaid issues a separate `plaid_transaction_id` for each card (primary and supplementary) but the underlying charge is the same. The scanner keeps the transaction on the older credential and flags the rest for removal.
+- **Open-source release.** ExMint is now published under the GNU Affero General Public License v3.0. This release includes a new `README.md`, `LICENSE`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, GitHub issue and PR templates, and a GitHub Actions CI workflow (flake8 lint on push/PR to `dev`).
+
+### Changed
+
+- `secrets_manager.py` — Bitwarden Secrets Manager is now optional. `get_secret()` checks the plain environment variable first; BWS is only used when `BWS_ACCESS_TOKEN` is set. Self-hosters can configure ExMint with env vars alone.
+- `config.py` — Hardcoded personal identifiers removed. All database credentials read from environment variables (or BWS). `SESSION_COOKIE_SECURE` and `SESSION_COOKIE_SAMESITE` are now derived from whether SSL is actually active, fixing a login redirect loop when running without TLS in local dev.
+- `.env.example` added — documents every required environment variable with inline comments and generation commands for `SECRET_KEY` and `ENCRYPTION_KEY`.
+- `RUNBOOK.md` — personal details (IPs, usernames, paths) replaced with generic placeholders, suitable for public distribution.
+
 ## [1.1.5] - 2026-03-28
 
 ### Fixed
