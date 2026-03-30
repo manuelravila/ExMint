@@ -163,7 +163,8 @@ def login():
         return handle_login_request()
 
     form = LoginForm()
-    return render_template('index.html', form=form)
+    welcome_message = get_app_setting('login_welcome_message', '')
+    return render_template('index.html', form=form, welcome_message=welcome_message)
 
 
 def handle_login_request():
@@ -476,11 +477,26 @@ def admin_panel():
     pending_users = User.query.filter_by(status='PendingApproval').order_by(User.id.desc()).all()
     all_users = User.query.order_by(User.id.desc()).all()
     registration_open = get_app_setting('registration_open', 'true') == 'true'
+    welcome_message = get_app_setting('login_welcome_message', '')
     return render_template('admin.html',
                            csrf_form=csrf_form,
                            pending_users=pending_users,
                            all_users=all_users,
-                           registration_open=registration_open)
+                           registration_open=registration_open,
+                           welcome_message=welcome_message)
+
+
+@views.route('/admin/welcome-message', methods=['POST'])
+@admin_required
+def set_welcome_message():
+    csrf_form = FlaskForm()
+    if not csrf_form.validate_on_submit():
+        flash('Invalid request.', 'danger')
+        return redirect(url_for('views.admin_panel'))
+    message = request.form.get('welcome_message', '').strip()
+    set_app_setting('login_welcome_message', message)
+    flash('Welcome message updated.' if message else 'Welcome message cleared.', 'success')
+    return redirect(url_for('views.admin_panel'))
 
 
 @views.route('/admin/toggle-registration', methods=['POST'])

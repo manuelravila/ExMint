@@ -8,6 +8,9 @@
             <div class="col-lg-6 text-center">
                 <img src="{{ url_for('static', filename='images/logomed.png') }}" alt="Logo" class="img-fluid mb-4">
                 <div class="login-container mt-4">
+                    {% if welcome_message %}
+                    <div class="alert alert-info text-left mb-3" style="white-space: pre-wrap;">{{ welcome_message }}</div>
+                    {% endif %}
                     <form action="{{ url_for('views.login') }}" method="post" class="border p-4 rounded">
                         {{ form.hidden_tag() }}
                         <div class="form-group">

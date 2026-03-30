@@ -27,6 +27,24 @@
         </div>
     </div>
 
+    <!-- Welcome Message -->
+    <div class="card mb-4">
+        <div class="card-header font-weight-bold">Login Welcome Message</div>
+        <div class="card-body">
+            <p class="text-muted small mb-2">Shown as an info box on the login page. Leave blank to hide it.</p>
+            <form action="{{ url_for('views.set_welcome_message') }}" method="post">
+                {{ csrf_form.hidden_tag() }}
+                <div class="form-group mb-2">
+                    <textarea name="welcome_message" class="form-control" rows="3" placeholder="e.g. To test ExMint, log in using testuser@automatos.ca / password123">{{ welcome_message }}</textarea>
+                </div>
+                <button type="submit" class="btn btn-primary btn-sm">Save</button>
+                {% if welcome_message %}
+                <button type="submit" name="welcome_message" value="" class="btn btn-outline-secondary btn-sm ml-1">Clear</button>
+                {% endif %}
+            </form>
+        </div>
+    </div>
+
     <!-- Pending Approvals -->
     <div class="card mb-4">
         <div class="card-header font-weight-bold">
