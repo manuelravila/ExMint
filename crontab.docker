@@ -1,0 +1,7 @@
+# ExMint Docker crontab
+# Each job sources /etc/cron.env to pick up all variables injected by docker-compose.
+# Times are UTC.
+
+# Test-user nightly cleanup — 23:55 UTC every day.
+# Only does anything when TEST_USER_EMAIL is set (STAG only).
+55 23 * * * . /etc/cron.env ; cd /app && python /app/cleanup_test_user.py >> /var/log/exmint_cron.log 2>&1

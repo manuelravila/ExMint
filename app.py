@@ -77,6 +77,15 @@ def create_app():
     def inject_version_and_year():
         return {'config': {'VERSION': VERSION}, 'current_year': datetime.now().year}
 
+    # Inject registration_open into all templates
+    @app.context_processor
+    def inject_registration_open():
+        from models import get_app_setting
+        try:
+            return {'registration_open': get_app_setting('registration_open', 'true') == 'true'}
+        except Exception:
+            return {'registration_open': True}
+
     # User loader for Flask-Login
     @login_manager.user_loader
     def load_user(user_id):

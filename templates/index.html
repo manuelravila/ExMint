@@ -39,7 +39,9 @@
                     </form>
                     <div class="login-links mt-3">
                         <a href="{{ url_for('views.reset_password') }}">I forgot my password 🤦‍♂️</a><br>
+                        {% if registration_open %}
                         <a href="{{ url_for('views.register') }}">New to Exmint? Create an account 🙌</a>
+                        {% endif %}
                     </div>
                 </div>
             </div>

@@ -1576,9 +1576,10 @@ def create_link_token():
         'country_codes': ['CA', 'US'],
         'language': 'en',
         'redirect_uri': 'https://automatos.ca',
-        'webhook': current_app.config['PLAID_WEBHOOK_URL'],
         'update': {'account_selection_enabled': True},
     }
+    if current_app.config.get('PLAID_WEBHOOK_URL'):
+        link_token_request['webhook'] = current_app.config['PLAID_WEBHOOK_URL']
 
     if access_token:
         link_token_request['access_token'] = access_token

@@ -1,14 +1,18 @@
 # views.py
 from flask import current_app, render_template, redirect, url_for, flash, request, jsonify, Blueprint, session, make_response
 from flask_login import login_user, current_user, logout_user, login_required
+from flask_wtf import FlaskForm
 from extensions import mail
 from flask_mail import Message
 from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadSignature
 from forms import LoginForm, RegistrationForm, ProfileForm
-from models import User, db, Credential, Account, Transaction
+from models import (User, db, Credential, Account, Transaction,
+                    TransactionCategoryOverride, Budget, CustomCategory, CategoryRule,
+                    get_app_setting, set_app_setting)
 from werkzeug.security import generate_password_hash, check_password_hash
 from config import Config
 from datetime import datetime
+from functools import wraps
 
 views = Blueprint('views', __name__)
 
@@ -101,25 +105,28 @@ def register():
     if current_user.is_authenticated:
         return redirect(url_for('views.dashboard'))
 
+    if get_app_setting('registration_open', 'true') != 'true':
+        return render_template('register.html', title='Register',
+                               suffix=current_app.config.get('SUFFIX', ''),
+                               form=None, registration_closed=True)
+
     form = RegistrationForm()
     if form.validate_on_submit():
         email = form.email.data
         hashed_password = generate_password_hash(form.password.data)
-        
-        # Create new user with status 'Pending'; set username to email temporarily
-        user = User(email=email, password_hash=hashed_password, status='Pending')
+
+        user = User(email=email, password_hash=hashed_password, status='PendingApproval')
         db.session.add(user)
         db.session.commit()
-        
-        # Generate and send activation email using the helper
-        if not send_activation_email_to(email, "Activate Your ExMint Account"):
-            flash("Error sending activation email. Please try again.", "danger")
-            return redirect(url_for('views.register'))
-        
-        flash("Registration successful! Please check your email to activate your account.", "info")
+
+        send_admin_registration_notification(email)
+
+        flash("Registration request received! You'll be notified by email once your account is approved.", "info")
         return redirect(url_for('views.login'))
 
-    return render_template('register.html', title='Register', suffix=current_app.config.get('SUFFIX', ''), form=form)
+    return render_template('register.html', title='Register',
+                           suffix=current_app.config.get('SUFFIX', ''),
+                           form=form, registration_closed=False)
 
 
 @views.route('/activate/<token>')
@@ -174,7 +181,13 @@ def handle_login_request():
         user = User.query.filter(User.email == username_or_email).first()
         if user and check_password_hash(user.password_hash, password):
             # Check if user has activated their account
-            if user.status != 'Active':  # Add this check
+            if user.status == 'PendingApproval':
+                error_message = 'Your account is pending approval. You will be notified by email when it is approved.'
+                return handle_unsuccessful_login(error_message)
+            if user.status == 'Rejected':
+                error_message = 'Your registration was not approved. Please contact the administrator.'
+                return handle_unsuccessful_login(error_message)
+            if user.status != 'Active':
                 error_message = 'Account not activated. Please check your email for the activation link.'
                 return handle_unsuccessful_login(error_message)
             
@@ -234,9 +247,13 @@ def handle_unsuccessful_login(error_message):
 @views.route('/logout', methods=['GET', 'POST'])
 @login_required
 def logout():
-    # Mark all transactions as seen before logging out
+    # Only update transactions that haven't been marked as seen yet —
+    # avoids a full-table write when most rows are already up to date.
     now = datetime.utcnow()
-    Transaction.query.filter_by(user_id=current_user.id).update({
+    Transaction.query.filter(
+        Transaction.user_id == current_user.id,
+        db.or_(Transaction.seen_by_user == False, Transaction.is_new == True)
+    ).update({
         Transaction.seen_by_user: True,
         Transaction.is_new: False,
         Transaction.last_seen_by_user: now
@@ -345,3 +362,237 @@ def disable_account(account_id):
         db.session.commit()
         return jsonify({'success': True, 'message': 'Account disabled.'})
     return jsonify({'success': False, 'message': 'Account not found.'}), 404
+
+
+# ---------------------------------------------------------------------------
+# Admin helpers
+# ---------------------------------------------------------------------------
+
+def admin_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not current_user.is_authenticated:
+            return redirect(url_for('views.login', next=request.url))
+        if current_user.role != 'Admin':
+            flash('Access denied.', 'danger')
+            return redirect(url_for('views.dashboard'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+
+def _delete_user_data(user_id):
+    """Delete all data for a user in FK-safe order. Does NOT delete the User row itself."""
+    # 1. TransactionCategoryOverride (FK to transactions.id and custom_categories.id)
+    TransactionCategoryOverride.query.filter(
+        TransactionCategoryOverride.transaction_id.in_(
+            db.session.query(Transaction.id).filter_by(user_id=user_id)
+        )
+    ).delete(synchronize_session=False)
+    # 2. Clear split-child parent references to avoid self-referential FK constraint
+    Transaction.query.filter_by(user_id=user_id).update(
+        {'parent_transaction_id': None}, synchronize_session=False
+    )
+    # 3. Transactions (FK to account.id, credential.id, custom_categories.id)
+    Transaction.query.filter_by(user_id=user_id).delete(synchronize_session=False)
+    # 4. Accounts (FK to credential.id)
+    Account.query.filter(
+        Account.credential_id.in_(
+            db.session.query(Credential.id).filter_by(user_id=user_id)
+        )
+    ).delete(synchronize_session=False)
+    # 5. Credentials
+    Credential.query.filter_by(user_id=user_id).delete(synchronize_session=False)
+    # 6. Budgets
+    Budget.query.filter_by(user_id=user_id).delete(synchronize_session=False)
+    # 7. Category rules (FK to custom_categories.id)
+    CategoryRule.query.filter_by(user_id=user_id).delete(synchronize_session=False)
+    # 8. Custom categories
+    CustomCategory.query.filter_by(user_id=user_id).delete(synchronize_session=False)
+
+
+def send_admin_registration_notification(email):
+    """Send admin an email with one-click approve/reject links for a new registration."""
+    admin_email = current_app.config.get('ADMIN_EMAIL', '')
+    if not admin_email:
+        current_app.logger.warning('ADMIN_EMAIL not set — registration notification skipped for %s', email)
+        return
+    serializer = URLSafeTimedSerializer(current_app.config['SECRET_KEY'])
+    approve_token = serializer.dumps(email, salt='admin-approve-salt')
+    reject_token = serializer.dumps(email, salt='admin-reject-salt')
+    approve_url = url_for('views.admin_approve_via_email', token=approve_token, _external=True)
+    reject_url = url_for('views.admin_reject_via_email', token=reject_token, _external=True)
+    suffix = current_app.config.get('SUFFIX', '')
+    html_content = render_template('email_admin_registration.html',
+                                   email=email,
+                                   approve_url=approve_url,
+                                   reject_url=reject_url,
+                                   suffix=suffix)
+    msg = Message('New ExMint Registration Request',
+                  sender=current_app.config['MAIL_USERNAME'],
+                  recipients=[admin_email])
+    msg.html = html_content
+    try:
+        mail.send(msg)
+        current_app.logger.info('Admin registration notification sent for %s', email)
+    except Exception as e:
+        current_app.logger.error('Failed to send admin registration notification: %s', e)
+
+
+def send_user_approved_email(email):
+    suffix = current_app.config.get('SUFFIX', '')
+    login_url = url_for('views.login', _external=True)
+    html_content = render_template('email_user_approved.html', login_url=login_url, suffix=suffix)
+    msg = Message('Your ExMint Account Has Been Approved',
+                  sender=current_app.config['MAIL_USERNAME'],
+                  recipients=[email])
+    msg.html = html_content
+    try:
+        mail.send(msg)
+    except Exception as e:
+        current_app.logger.error('Failed to send approval email to %s: %s', email, e)
+
+
+def send_user_rejected_email(email):
+    suffix = current_app.config.get('SUFFIX', '')
+    html_content = render_template('email_user_rejected.html', suffix=suffix)
+    msg = Message('Your ExMint Registration Request',
+                  sender=current_app.config['MAIL_USERNAME'],
+                  recipients=[email])
+    msg.html = html_content
+    try:
+        mail.send(msg)
+    except Exception as e:
+        current_app.logger.error('Failed to send rejection email to %s: %s', email, e)
+
+
+# ---------------------------------------------------------------------------
+# Admin routes
+# ---------------------------------------------------------------------------
+
+@views.route('/admin')
+@admin_required
+def admin_panel():
+    csrf_form = FlaskForm()
+    pending_users = User.query.filter_by(status='PendingApproval').order_by(User.id.desc()).all()
+    all_users = User.query.order_by(User.id.desc()).all()
+    registration_open = get_app_setting('registration_open', 'true') == 'true'
+    return render_template('admin.html',
+                           csrf_form=csrf_form,
+                           pending_users=pending_users,
+                           all_users=all_users,
+                           registration_open=registration_open)
+
+
+@views.route('/admin/toggle-registration', methods=['POST'])
+@admin_required
+def toggle_registration():
+    current_val = get_app_setting('registration_open', 'true')
+    new_val = 'false' if current_val == 'true' else 'true'
+    set_app_setting('registration_open', new_val)
+    state = 'opened' if new_val == 'true' else 'closed'
+    flash(f'Registration has been {state}.', 'success')
+    return redirect(url_for('views.admin_panel'))
+
+
+@views.route('/admin/users/<int:user_id>/approve', methods=['POST'])
+@admin_required
+def admin_approve_user(user_id):
+    user = db.session.get(User, user_id)
+    if not user or user.status != 'PendingApproval':
+        flash('User not found or not pending approval.', 'warning')
+        return redirect(url_for('views.admin_panel'))
+    user.status = 'Active'
+    db.session.commit()
+    send_user_approved_email(user.email)
+    flash(f'{user.email} approved.', 'success')
+    return redirect(url_for('views.admin_panel'))
+
+
+@views.route('/admin/users/<int:user_id>/reject', methods=['POST'])
+@admin_required
+def admin_reject_user(user_id):
+    user = db.session.get(User, user_id)
+    if not user or user.status != 'PendingApproval':
+        flash('User not found or not pending approval.', 'warning')
+        return redirect(url_for('views.admin_panel'))
+    user.status = 'Rejected'
+    db.session.commit()
+    send_user_rejected_email(user.email)
+    flash(f'{user.email} rejected.', 'success')
+    return redirect(url_for('views.admin_panel'))
+
+
+@views.route('/admin/users/<int:user_id>/delete', methods=['POST'])
+@admin_required
+def admin_delete_user(user_id):
+    user = db.session.get(User, user_id)
+    if not user:
+        flash('User not found.', 'warning')
+        return redirect(url_for('views.admin_panel'))
+    if user.id == current_user.id:
+        flash('You cannot delete your own account.', 'danger')
+        return redirect(url_for('views.admin_panel'))
+
+    # Revoke active Plaid connections before wiping data
+    from core_views import deactivate_plaid_token
+    active_creds = Credential.query.filter_by(user_id=user.id, status='Active').all()
+    for cred in active_creds:
+        if cred.access_token:
+            deactivate_plaid_token(cred.access_token)
+
+    _delete_user_data(user.id)
+    deleted_email = user.email
+    db.session.delete(user)
+    db.session.commit()
+    flash(f'User {deleted_email} and all their data have been deleted.', 'success')
+    return redirect(url_for('views.admin_panel'))
+
+
+@views.route('/admin/approve/<token>')
+def admin_approve_via_email(token):
+    """One-click approve from email link — no login required."""
+    serializer = URLSafeTimedSerializer(current_app.config['SECRET_KEY'])
+    try:
+        email = serializer.loads(token, salt='admin-approve-salt', max_age=7 * 86400)
+    except (SignatureExpired, BadSignature):
+        flash('This approval link is invalid or has expired.', 'danger')
+        return redirect(url_for('views.login'))
+
+    user = User.query.filter_by(email=email).first()
+    if not user:
+        flash('User not found.', 'danger')
+        return redirect(url_for('views.login'))
+    if user.status != 'PendingApproval':
+        flash(f'{email} has already been processed (status: {user.status}).', 'info')
+        return redirect(url_for('views.login'))
+
+    user.status = 'Active'
+    db.session.commit()
+    send_user_approved_email(user.email)
+    flash(f'{email} has been approved and notified.', 'success')
+    return redirect(url_for('views.login'))
+
+
+@views.route('/admin/reject/<token>')
+def admin_reject_via_email(token):
+    """One-click reject from email link — no login required."""
+    serializer = URLSafeTimedSerializer(current_app.config['SECRET_KEY'])
+    try:
+        email = serializer.loads(token, salt='admin-reject-salt', max_age=7 * 86400)
+    except (SignatureExpired, BadSignature):
+        flash('This rejection link is invalid or has expired.', 'danger')
+        return redirect(url_for('views.login'))
+
+    user = User.query.filter_by(email=email).first()
+    if not user:
+        flash('User not found.', 'danger')
+        return redirect(url_for('views.login'))
+    if user.status != 'PendingApproval':
+        flash(f'{email} has already been processed (status: {user.status}).', 'info')
+        return redirect(url_for('views.login'))
+
+    user.status = 'Rejected'
+    db.session.commit()
+    send_user_rejected_email(user.email)
+    flash(f'{email} has been rejected and notified.', 'success')
+    return redirect(url_for('views.login'))

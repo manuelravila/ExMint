@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+<body style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+    <h2 style="color: #2C6B4F;">New ExMint Registration Request</h2>
+    <p>A new user has requested an account on ExMint{{ suffix }}:</p>
+    <p style="font-size: 1.1em; font-weight: bold;">{{ email }}</p>
+    <p>Use the buttons below to approve or reject this registration request. These links expire in 7 days.</p>
+    <div style="margin: 30px 0;">
+        <a href="{{ approve_url }}"
+           style="background-color:#28a745;color:#fff;padding:12px 24px;text-decoration:none;border-radius:4px;margin-right:12px;display:inline-block;">
+            Approve
+        </a>
+        <a href="{{ reject_url }}"
+           style="background-color:#ffc107;color:#333;padding:12px 24px;text-decoration:none;border-radius:4px;display:inline-block;">
+            Reject
+        </a>
+    </div>
+    <p style="font-size: 0.85em; color: #666;">
+        You can also manage all pending registrations from the
+        <a href="{{ approve_url.split('/admin/')[0] }}/admin">Admin Panel</a>.
+    </p>
+</body>
+</html>

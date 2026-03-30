@@ -87,6 +87,9 @@ class Config:
     MAIL_USE_TLS = True
     MAIL_USE_SSL = False
 
+    # Admin
+    ADMIN_EMAIL = os.getenv('ADMIN_EMAIL', '')
+
     @staticmethod
     def get_plaid_environment():
         if Config.PLAID_ENV == "sandbox":
