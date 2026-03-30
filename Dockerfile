@@ -14,9 +14,13 @@ RUN apt-get update && apt-get install -y \
     openssh-client \
     sshpass \
     jq \
+<<<<<<< HEAD
     net-tools \
     cron \
     && rm -rf /var/lib/apt/lists/*
+=======
+    net-tools
+>>>>>>> de3f4c7c2a9f9894c9802d2a88d7a698e2ff8f6e
 
 # Download Bitwarden Secrets Manager CLI binary and install it
 RUN wget https://github.com/bitwarden/sdk/releases/download/bws-v0.5.0/bws-x86_64-unknown-linux-gnu-0.5.0.zip \

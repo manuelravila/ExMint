@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 ## [1.3.1] - 2026-03-29
 
 ### Fixed
@@ -34,6 +35,8 @@
 3. Add `ADMIN_EMAIL`, `TEST_USER_EMAIL`, and `CRON_IP` to `.env.stag` and `.env.main`.
 4. The cron container starts automatically with the stack — no post-receive hook changes needed.
 
+=======
+>>>>>>> de3f4c7c2a9f9894c9802d2a88d7a698e2ff8f6e
 ## [1.2.0] - 2026-03-28
 
 ### Added

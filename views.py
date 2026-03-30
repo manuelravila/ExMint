@@ -6,6 +6,7 @@ from extensions import mail
 from flask_mail import Message
 from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadSignature
 from forms import LoginForm, RegistrationForm, ProfileForm
+<<<<<<< HEAD
 from models import (User, db, Credential, Account, Transaction,
                     TransactionCategoryOverride, Budget, CustomCategory, CategoryRule,
                     get_app_setting, set_app_setting)
@@ -13,6 +14,12 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from config import Config
 from datetime import datetime
 from functools import wraps
+=======
+from models import User, db, Credential, Account, Transaction
+from werkzeug.security import generate_password_hash, check_password_hash
+from config import Config
+from datetime import datetime
+>>>>>>> de3f4c7c2a9f9894c9802d2a88d7a698e2ff8f6e
 
 views = Blueprint('views', __name__)
 
@@ -114,6 +121,7 @@ def register():
     if form.validate_on_submit():
         email = form.email.data
         hashed_password = generate_password_hash(form.password.data)
+<<<<<<< HEAD
 
         user = User(email=email, password_hash=hashed_password, status='PendingApproval')
         db.session.add(user)
@@ -127,6 +135,23 @@ def register():
     return render_template('register.html', title='Register',
                            suffix=current_app.config.get('SUFFIX', ''),
                            form=form, registration_closed=False)
+=======
+        
+        # Create new user with status 'Pending'; set username to email temporarily
+        user = User(email=email, password_hash=hashed_password, status='Pending')
+        db.session.add(user)
+        db.session.commit()
+        
+        # Generate and send activation email using the helper
+        if not send_activation_email_to(email, "Activate Your ExMint Account"):
+            flash("Error sending activation email. Please try again.", "danger")
+            return redirect(url_for('views.register'))
+        
+        flash("Registration successful! Please check your email to activate your account.", "info")
+        return redirect(url_for('views.login'))
+
+    return render_template('register.html', title='Register', suffix=current_app.config.get('SUFFIX', ''), form=form)
+>>>>>>> de3f4c7c2a9f9894c9802d2a88d7a698e2ff8f6e
 
 
 @views.route('/activate/<token>')
@@ -181,6 +206,7 @@ def handle_login_request():
         user = User.query.filter(User.email == username_or_email).first()
         if user and check_password_hash(user.password_hash, password):
             # Check if user has activated their account
+<<<<<<< HEAD
             if user.status == 'PendingApproval':
                 error_message = 'Your account is pending approval. You will be notified by email when it is approved.'
                 return handle_unsuccessful_login(error_message)
@@ -188,6 +214,9 @@ def handle_login_request():
                 error_message = 'Your registration was not approved. Please contact the administrator.'
                 return handle_unsuccessful_login(error_message)
             if user.status != 'Active':
+=======
+            if user.status != 'Active':  # Add this check
+>>>>>>> de3f4c7c2a9f9894c9802d2a88d7a698e2ff8f6e
                 error_message = 'Account not activated. Please check your email for the activation link.'
                 return handle_unsuccessful_login(error_message)
             
@@ -247,6 +276,7 @@ def handle_unsuccessful_login(error_message):
 @views.route('/logout', methods=['GET', 'POST'])
 @login_required
 def logout():
+<<<<<<< HEAD
     # Only update transactions that haven't been marked as seen yet —
     # avoids a full-table write when most rows are already up to date.
     now = datetime.utcnow()
@@ -254,6 +284,11 @@ def logout():
         Transaction.user_id == current_user.id,
         db.or_(Transaction.seen_by_user == False, Transaction.is_new == True)
     ).update({
+=======
+    # Mark all transactions as seen before logging out
+    now = datetime.utcnow()
+    Transaction.query.filter_by(user_id=current_user.id).update({
+>>>>>>> de3f4c7c2a9f9894c9802d2a88d7a698e2ff8f6e
         Transaction.seen_by_user: True,
         Transaction.is_new: False,
         Transaction.last_seen_by_user: now
@@ -362,6 +397,7 @@ def disable_account(account_id):
         db.session.commit()
         return jsonify({'success': True, 'message': 'Account disabled.'})
     return jsonify({'success': False, 'message': 'Account not found.'}), 404
+<<<<<<< HEAD
 
 
 # ---------------------------------------------------------------------------
@@ -596,3 +632,5 @@ def admin_reject_via_email(token):
     send_user_rejected_email(user.email)
     flash(f'{email} has been rejected and notified.', 'success')
     return redirect(url_for('views.login'))
+=======
+>>>>>>> de3f4c7c2a9f9894c9802d2a88d7a698e2ff8f6e
