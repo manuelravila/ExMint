@@ -15,14 +15,20 @@ depends_on = None
 
 
 def upgrade():
-    op.create_table(
-        'app_settings',
-        sa.Column('key', sa.String(100), nullable=False),
-        sa.Column('value', sa.String(500), nullable=False),
-        sa.PrimaryKeyConstraint('key'),
-    )
-    # Seed default: registration is open
-    op.execute("INSERT INTO app_settings (key, value) VALUES ('registration_open', 'true')")
+    conn = op.get_bind()
+
+    # Idempotent: skip create if a partial previous run already created the table
+    if not sa.inspect(conn).has_table('app_settings'):
+        op.create_table(
+            'app_settings',
+            sa.Column('key', sa.String(100), nullable=False),
+            sa.Column('value', sa.String(500), nullable=False),
+            sa.PrimaryKeyConstraint('key'),
+        )
+
+    # `key` is a reserved word in MySQL — must be backtick-quoted in raw SQL.
+    # INSERT IGNORE is idempotent: no-op if the row already exists.
+    conn.execute(sa.text("INSERT IGNORE INTO app_settings (`key`, value) VALUES ('registration_open', 'true')"))
 
 
 def downgrade():

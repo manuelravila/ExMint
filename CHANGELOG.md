@@ -1,3 +1,14 @@
+## [1.3.1] - 2026-03-29
+
+### Fixed
+
+- **Plaid link token crash**: `PLAID_WEBHOOK_URL` being `None` (unset) caused a `TypeError` in the Plaid SDK when creating a link token. The webhook field is now only included in the request when the env var is configured.
+- **Slow logout**: logout was updating `seen_by_user`, `is_new`, and `last_seen_by_user` on every transaction unconditionally. It now only updates rows where those flags actually need changing, making logout near-instant when transactions are already marked as seen.
+- **`flask db upgrade` permission denied in dev**: `start.sh` was calling the venv entry-point scripts (`flask`, `gunicorn`) which lacked execute permission in the dev environment. Replaced with explicit `venv/bin/python -m flask` and `venv/bin/gunicorn` invocations.
+- **Migration failure on reserved word**: `INSERT INTO app_settings (key, value)` failed on MySQL because `key` is a reserved word. Fixed by backtick-quoting the column in raw SQL and made the migration idempotent to handle partial previous runs.
+- **Missing "ExMint: DB Upgrade" task**: `launch.json` referenced this VS Code task for the Prod config but it was never defined in `tasks.json`. Added the missing task.
+- **No link to Admin Panel**: Admin Panel was accessible by URL but had no entry point in the UI. Added it to the My Account dropdown, visible only to users with `role='Admin'`.
+
 ## [1.3.0] - 2026-03-29
 
 ### Added

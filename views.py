@@ -247,9 +247,13 @@ def handle_unsuccessful_login(error_message):
 @views.route('/logout', methods=['GET', 'POST'])
 @login_required
 def logout():
-    # Mark all transactions as seen before logging out
+    # Only update transactions that haven't been marked as seen yet —
+    # avoids a full-table write when most rows are already up to date.
     now = datetime.utcnow()
-    Transaction.query.filter_by(user_id=current_user.id).update({
+    Transaction.query.filter(
+        Transaction.user_id == current_user.id,
+        db.or_(Transaction.seen_by_user == False, Transaction.is_new == True)
+    ).update({
         Transaction.seen_by_user: True,
         Transaction.is_new: False,
         Transaction.last_seen_by_user: now

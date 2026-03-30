@@ -60,6 +60,10 @@
                         <a class="dropdown-item" href="#" data-toggle="modal" data-target="#profileModal">Edit Profile</a>
                         <a class="dropdown-item" href="#" data-toggle="modal" data-target="#myConnectionsModal" @click="fetchModalBanks">My Connections</a>
                         <a class="dropdown-item" href="#" @click.prevent="openMaintenanceModal">Maintenance</a>
+                        {% if current_user.role == 'Admin' %}
+                        <div class="dropdown-divider"></div>
+                        <a class="dropdown-item" href="{{ url_for('views.admin_panel') }}">Admin Panel</a>
+                        {% endif %}
                         <a class="dropdown-item" href="{{ url_for('views.logout') }}">Log out</a>
                     </div>
                 </div>
