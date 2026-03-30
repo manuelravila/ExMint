@@ -1,3 +1,15 @@
+## [1.3.2] - 2026-03-29
+
+### Added
+
+- **Login welcome message**: admins can set a short message (e.g. test credentials) that appears as an info box on the login page. Managed from the Admin Panel; leaving it blank hides the box. Stored in the existing `app_settings` table — no migration needed.
+
+### Fixed
+
+- **Admin email not sent on registration**: `ADMIN_EMAIL` was missing from `.env.stag` on the VPS, causing registration notifications to be silently skipped. Fixed by documenting the required env var and adding it to the staging environment.
+- **`start.sh` broke Docker deploy**: the 1.3.1 fix for dev (`venv/bin/python`) used a host-only path that doesn't exist inside Docker containers. `start.sh` now auto-detects whether the venv is present and falls back to system `python`/`gunicorn` when running in Docker.
+- **Committed merge conflict markers**: the `stag` merge commit accidentally committed raw conflict markers into 13 files instead of resolving them. All files have been corrected to their 1.3.1 HEAD versions.
+
 ## [1.3.1] - 2026-03-29
 
 ### Fixed
