@@ -1,10 +1,15 @@
 #!/bin/bash
 export PYTHONUNBUFFERED=1
 
-# Use the venv Python directly — avoids relying on the venv activation script
-# or the flask/gunicorn entry-point scripts having execute permission.
-PYTHON=/code/ExMint/venv/bin/python
-GUNICORN=/code/ExMint/venv/bin/gunicorn
+# Resolve Python/gunicorn: use the local venv when running outside Docker (dev host),
+# fall back to the system-installed binaries inside Docker containers.
+if [ -f /code/ExMint/venv/bin/python ]; then
+    PYTHON=/code/ExMint/venv/bin/python
+    GUNICORN=/code/ExMint/venv/bin/gunicorn
+else
+    PYTHON=python
+    GUNICORN=gunicorn
+fi
 
 
 # Trim any leading or trailing whitespace from FLASK_ENV
