@@ -1,3 +1,13 @@
+## [1.4.4] - 2026-06-27
+
+### Added
+
+- **Bulk category assign**: select multiple transactions using the new per-row checkboxes (with select-all for the current page) and assign an existing or new custom category in one action. The bulk controls appear in the sticky navbar when any rows are selected, replacing the search bar to remain accessible while scrolling. Selected rows are highlighted in blue.
+
+### Fixed
+
+- **Reconnect button persists after successful re-authentication**: after completing Plaid's update-mode flow, a successful `transactions_sync` now clears the `requires_update` flag directly, covering both manual syncs and webhook-triggered syncs.
+
 ## [1.4.3] - 2026-06-27
 
 ### Fixed
@@ -38,6 +48,19 @@
 - **Bootstrap modal opacity conflict**: changed from `v-show` to `v-if` + `:class` with the `show` class for reliable Bootstrap modal display.
 - **Plaid link token credentials**: production keys were being sent to sandbox API — added env var override support and configured sandbox credentials.
 - **Backend import endpoint**: fixed to read from multipart form data instead of JSON body (FormData + file uploads).
+=======
+## [1.3.3] - 2026-04-15
+
+### Added
+
+- **Bulk category assign**: select multiple transactions using the new per-row checkboxes (with select-all for the current page) and assign an existing or new custom category in one action. The bulk controls appear in the sticky navbar when any rows are selected, replacing the search bar to remain accessible while scrolling. Selected rows are highlighted in blue.
+
+### Fixed
+
+- **Reconnect button persists after successful re-authentication**: after completing Plaid's update-mode flow, the "Reconnect" button could remain visible even though the credential was valid and syncing correctly. A successful `transactions_sync` call now clears the `requires_update` flag directly, covering both manual syncs and webhook-triggered syncs.
+
+---
+>>>>>>> f033604c (feat: bulk category assign + fix reconnect button not clearing after re-auth)
 
 ## [1.3.2] - 2026-03-29
 
