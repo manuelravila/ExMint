@@ -1432,3 +1432,26 @@ body.mobile-sidebar-open {
     outline: none;
     border-radius: 0.5rem;
 }
+
+/* Bulk transaction selection */
+.bulk-select-col {
+    width: 2rem;
+    text-align: center;
+    padding-left: 0.75rem !important;
+    padding-right: 0.25rem !important;
+}
+
+.bulk-action-count {
+    font-size: 0.875rem;
+    color: #2b6cb0;
+    white-space: nowrap;
+}
+
+.bulk-category-input-wrapper {
+    min-width: 200px;
+}
+
+.transaction-row-selected td,
+.transaction-row-selected:hover td {
+    background-color: #ebf4ff !important;
+}

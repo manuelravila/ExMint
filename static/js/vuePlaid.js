@@ -209,6 +209,9 @@ const app = new Vue({
         editingTransactionCategoryId: null,
         editingTransactionCategoryValue: '',
         transactionCategoryBlurTimeout: null,
+        selectedTransactionIds: [],
+        bulkCategoryValue: '',
+        bulkCategoryApplying: false,
         transactionMenu: {
             visible: false,
             x: 0,
@@ -365,6 +368,19 @@ const app = new Vue({
                 return options.slice(0, 8);
             }
             return options.filter(option => option.toLowerCase().includes(query)).slice(0, 8);
+        },
+        areAllDisplayedTransactionsSelected: function() {
+            if (!this.displayedTransactions.length) return false;
+            return this.displayedTransactions.every(t => this.selectedTransactionIds.indexOf(t.id) !== -1);
+        },
+        selectedTransactionIdSet: function() {
+            return new Set(this.selectedTransactionIds);
+        },
+        filteredBulkCategorySuggestions: function() {
+            const query = (this.bulkCategoryValue || '').trim().toLowerCase();
+            const options = this.transactionCategoryOptions;
+            if (!query) return options.slice(0, 8);
+            return options.filter(o => o.toLowerCase().includes(query)).slice(0, 8);
         },
         splitModalRemainingCents: function() {
             if (!this.splitModal.visible) {
@@ -953,6 +969,89 @@ const app = new Vue({
                 this.transactionCategoryBlurTimeout = null;
             }
             this.saveTransactionCategoryEdit(transaction);
+        },
+        rowSelectionStyle: function(transactionId) {
+            return this.selectedTransactionIdSet.has(transactionId) ? { backgroundColor: '#bfdbfe' } : null;
+        },
+        toggleTransactionSelection: function(transactionId) {
+            const idx = this.selectedTransactionIds.indexOf(transactionId);
+            if (idx === -1) {
+                this.selectedTransactionIds.push(transactionId);
+            } else {
+                this.selectedTransactionIds.splice(idx, 1);
+            }
+        },
+        toggleAllDisplayedTransactionSelection: function() {
+            const displayedIds = this.displayedTransactions.map(t => t.id);
+            if (this.areAllDisplayedTransactionsSelected) {
+                this.selectedTransactionIds = this.selectedTransactionIds.filter(id => displayedIds.indexOf(id) === -1);
+            } else {
+                const toAdd = displayedIds.filter(id => this.selectedTransactionIds.indexOf(id) === -1);
+                this.selectedTransactionIds = this.selectedTransactionIds.concat(toAdd);
+            }
+        },
+        clearTransactionSelection: function() {
+            this.selectedTransactionIds = [];
+            this.bulkCategoryValue = '';
+        },
+        applyBulkCategoryAssign: async function(forceCreate) {
+            const trimmed = (this.bulkCategoryValue || '').trim();
+            if (!trimmed) {
+                alert('Please enter a category name.');
+                return;
+            }
+            if (trimmed.length < 3) {
+                alert('Category names must be at least 3 characters.');
+                return;
+            }
+            if (!this.selectedTransactionIds.length) return;
+
+            this.bulkCategoryApplying = true;
+            try {
+                const match = this.customCategories.find(cat => cat.name && cat.name.toLowerCase() === trimmed.toLowerCase());
+                const payload = { transaction_ids: this.selectedTransactionIds, label: trimmed };
+                if (match && match.color) payload.color = match.color;
+                if (forceCreate) payload.force_create = true;
+
+                let response = await fetch('/api/transactions/bulk-category', {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                let data = await response.json();
+
+                if (response.status === 409 && data.confirmation_required) {
+                    if (confirm(data.message)) {
+                        return this.applyBulkCategoryAssign(true);
+                    }
+                    return;
+                }
+
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to update categories.');
+                }
+
+                if (data.transactions) {
+                    data.transactions.forEach(updated => {
+                        const txn = this.transactions.find(t => t.id === updated.id);
+                        if (txn) Object.assign(txn, updated);
+                    });
+                }
+
+                await this.fetchCustomCategories({ force: true, suppressLoader: true, refresh: true });
+                if (this.dashboardLoaded) {
+                    await this.fetchDashboard({ suppressLoader: true, force: true });
+                }
+                this.clearTransactionSelection();
+            } catch (error) {
+                console.error('Error applying bulk category:', error);
+                alert(error.message || 'Failed to update categories.');
+            } finally {
+                this.bulkCategoryApplying = false;
+            }
+        },
+        applyBulkCategorySuggestion: function(option) {
+            this.bulkCategoryValue = option;
         },
         buildTransactionExportUrl: function(format) {
             const params = new URLSearchParams();

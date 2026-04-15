@@ -2065,6 +2065,8 @@ def _sync_credential_transactions(user, credential, from_webhook=False):
 
     if credential_error is None:
         credential.transactions_cursor = cursor or latest_cursor or credential.transactions_cursor
+        if credential.requires_update:
+            credential.requires_update = False
 
     return counts, credential_error
 
@@ -2579,6 +2581,123 @@ def update_transaction_category(transaction_id):
 
         override_map = _load_overrides([txn.id])
         return jsonify({'transaction': _serialize_transaction(txn, override_map)})
+
+    return _with_schema_retry(handler)
+
+
+@core.route('/api/transactions/bulk-category', methods=['PATCH'])
+@login_required
+def bulk_update_transaction_category():
+    ensure_category_schema()
+
+    def handler():
+        payload = request.get_json() or {}
+        transaction_ids = payload.get('transaction_ids', [])
+        raw_label = payload.get('label')
+        label = _normalize_category_name(raw_label)
+        explicit_color = payload.get('color')
+        force_create = payload.get('force_create', False)
+
+        if not transaction_ids or not isinstance(transaction_ids, list):
+            return jsonify({'error': 'transaction_ids must be a non-empty list.'}), 400
+        if len(transaction_ids) > 500:
+            return jsonify({'error': 'Cannot update more than 500 transactions at once.'}), 400
+
+        transactions = Transaction.query.options(
+            joinedload(Transaction.account),
+            joinedload(Transaction.credential),
+            joinedload(Transaction.custom_category)
+        ).filter(
+            Transaction.id.in_(transaction_ids),
+            Transaction.user_id == current_user.id
+        ).all()
+
+        if len(transactions) != len(set(transaction_ids)):
+            return jsonify({'error': 'One or more transactions not found.'}), 404
+
+        txn_ids = [t.id for t in transactions]
+
+        if not label:
+            overrides = TransactionCategoryOverride.query.filter(
+                TransactionCategoryOverride.transaction_id.in_(txn_ids)
+            ).all()
+            for override in overrides:
+                db.session.delete(override)
+            for txn in transactions:
+                txn.custom_category_id = None
+            db.session.flush()
+            apply_rules_to_transactions(current_user.id, transaction_ids=txn_ids)
+            db.session.commit()
+            override_map = _load_overrides(txn_ids)
+            return jsonify({'transactions': [_serialize_transaction(t, override_map) for t in transactions]})
+
+        normalized_color = None
+        if explicit_color:
+            try:
+                normalized_color = _normalize_color(explicit_color)
+            except ValueError:
+                normalized_color = None
+
+        existing_category = _find_custom_category(current_user.id, label)
+
+        if existing_category:
+            category = existing_category
+            if normalized_color and category.color != normalized_color:
+                category.color = normalized_color
+        else:
+            trimmed = _normalize_category_name(label)
+            if len(trimmed) < 3:
+                return jsonify({'error': 'Category name must be at least 3 characters.'}), 400
+
+            if not force_create:
+                for txn in transactions:
+                    plaid_categories = _extract_category_list(txn.category)
+                    fallback_label = ' / '.join(plaid_categories) if plaid_categories else None
+                    if fallback_label:
+                        candidate_trimmed = _normalize_category_name(fallback_label)
+                        if candidate_trimmed and trimmed.lower() == candidate_trimmed.lower():
+                            return jsonify({
+                                'confirmation_required': True,
+                                'message': 'An Automatic category with this name already exists. Do you want to create a new custom category with the same name?'
+                            }), 409
+
+            category = CustomCategory(
+                user_id=current_user.id,
+                name=trimmed,
+                color=normalized_color or DEFAULT_MANUAL_COLOR
+            )
+            db.session.add(category)
+            db.session.flush()
+
+        existing_overrides = {
+            o.transaction_id: o
+            for o in TransactionCategoryOverride.query.filter(
+                TransactionCategoryOverride.transaction_id.in_(txn_ids)
+            ).all()
+        }
+
+        for txn in transactions:
+            txn.custom_category_id = None
+            override = existing_overrides.get(txn.id)
+            if override is None:
+                override = TransactionCategoryOverride(transaction_id=txn.id, custom_category_id=category.id)
+                db.session.add(override)
+            else:
+                override.custom_category_id = category.id
+
+        db.session.flush()
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            current_app.logger.warning(
+                'Failed to bulk-assign custom category "%s" for user %s due to integrity error',
+                label, current_user.id, exc_info=True
+            )
+            return jsonify({'error': 'Could not save the category. Please try again.'}), 400
+
+        override_map = _load_overrides(txn_ids)
+        return jsonify({'transactions': [_serialize_transaction(t, override_map) for t in transactions]})
 
     return _with_schema_retry(handler)
 

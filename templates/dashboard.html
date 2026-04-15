@@ -24,6 +24,44 @@
                 <img src="{{ url_for('static', filename='images/logo.png') }}" alt="Logo" style="height: 30px;">
             </a>
             <div class="ml-auto d-flex align-items-center header-action-bar">
+                <template v-if="selectedTransactionIds.length">
+                    <span class="bulk-action-count mr-3">
+                        [[ selectedTransactionIds.length ]] selected
+                    </span>
+                    <div class="bulk-category-input-wrapper position-relative mr-2">
+                        <input
+                            type="text"
+                            class="form-control form-control-sm bulk-category-input"
+                            v-model="bulkCategoryValue"
+                            placeholder="Assign category…"
+                            @keydown.enter.prevent="applyBulkCategoryAssign(false)"
+                            @keydown.escape.prevent="bulkCategoryValue = ''"
+                        >
+                        <div v-if="filteredBulkCategorySuggestions.length && bulkCategoryValue.trim()" class="category-edit-dropdown">
+                            <button
+                                v-for="option in filteredBulkCategorySuggestions"
+                                :key="`navbar-bulk-option-${option}`"
+                                type="button"
+                                class="dropdown-item suggestion-item"
+                                @mousedown.prevent="applyBulkCategorySuggestion(option)"
+                            >
+                                [[ option ]]
+                            </button>
+                        </div>
+                    </div>
+                    <button
+                        class="btn btn-sm btn-primary mr-2"
+                        @click="applyBulkCategoryAssign(false)"
+                        :disabled="bulkCategoryApplying || !bulkCategoryValue.trim()"
+                    >
+                        <span v-if="bulkCategoryApplying"><i class="fas fa-spinner fa-spin mr-1"></i>Applying…</span>
+                        <span v-else>Apply</span>
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary" @click="clearTransactionSelection">
+                        Clear
+                    </button>
+                </template>
+                <template v-else>
                 <div class="header-search mr-3">
                     <div class="input-group input-group-sm">
                         <div class="input-group-prepend">
@@ -51,6 +89,7 @@
                 <button id="link-button" class="btn btn-outline-secondary mr-2" @click="openPlaidLink">
                     <i class="fas fa-university"></i> Connect
                 </button>
+                </template>
 
                 <div class="dropdown d-inline-block">
                     <button class="btn btn-outline-secondary dropdown-toggle" type="button" id="profileMenu" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
@@ -406,9 +445,18 @@
                     <div class="text-muted">Loading your transactions...</div>
                 </div>
                 <div v-else class="table-responsive transactions-table">
-                    <table class="table table-hover table-sm mb-0">
+                        <table class="table table-hover table-sm mb-0">
                         <thead class="thead-light">
                             <tr>
+                                <th scope="col" class="bulk-select-col">
+                                    <input
+                                        type="checkbox"
+                                        :checked="areAllDisplayedTransactionsSelected"
+                                        :indeterminate.prop="selectedTransactionIds.length > 0 && !areAllDisplayedTransactionsSelected"
+                                        @change="toggleAllDisplayedTransactionSelection"
+                                        title="Select all on this page"
+                                    >
+                                </th>
                                 <th scope="col" @click="setSort('date')" role="button">
                                     Date
                                     <i :class="['ml-1', sortIcon('date')]"></i>
@@ -442,14 +490,21 @@
                                 @touchcancel="handleTransactionTouchCancel()"
                                 :data-transaction-id="transaction.id"
                             >
-                                <td>[[ formatDate(transaction.date) ]]<span v-if="transaction.pending" class="badge badge-warning ml-2">Pending</span></td>
-                                <td><span v-if="transaction.is_new" class="badge badge-success mr-2">New</span>[[ transaction.name ]]</td>
-                                <td>[[ transaction.merchant_name || '—' ]]</td>
-                                <td>
+                                <td class="bulk-select-col" @click.stop :style="rowSelectionStyle(transaction.id)">
+                                    <input
+                                        type="checkbox"
+                                        :checked="selectedTransactionIds.indexOf(transaction.id) !== -1"
+                                        @change="toggleTransactionSelection(transaction.id)"
+                                    >
+                                </td>
+                                <td :style="rowSelectionStyle(transaction.id)">[[ formatDate(transaction.date) ]]<span v-if="transaction.pending" class="badge badge-warning ml-2">Pending</span></td>
+                                <td :style="rowSelectionStyle(transaction.id)"><span v-if="transaction.is_new" class="badge badge-success mr-2">New</span>[[ transaction.name ]]</td>
+                                <td :style="rowSelectionStyle(transaction.id)">[[ transaction.merchant_name || '—' ]]</td>
+                                <td :style="rowSelectionStyle(transaction.id)">
                                     <div>[[ transaction.account_name ]] <span class="text-muted" v-if="transaction.account_mask">••[[ transaction.account_mask ]]</span></div>
                                     <small class="text-muted">[[ transaction.institution_name ]]</small>
                                 </td>
-                                <td class="transaction-category-cell">
+                                <td class="transaction-category-cell" :style="rowSelectionStyle(transaction.id)">
                                     <div v-if="editingTransactionCategoryId === transaction.id" class="category-edit-wrapper">
                                         <input
                                             type="text"
@@ -487,15 +542,15 @@
                                         [[ transaction.custom_category ]]
                                     </span>
                                 </td>
-                                <td class="text-right font-weight-bold">[[ formatCurrency(transaction.amount, transaction.iso_currency_code) ]]</td>
+                                <td class="text-right font-weight-bold" :style="rowSelectionStyle(transaction.id)">[[ formatCurrency(transaction.amount, transaction.iso_currency_code) ]]</td>
                             </tr>
                             <tr v-if="!selectedAccountIds.length">
-                                <td colspan="6" class="text-center text-muted py-5">
+                                <td colspan="7" class="text-center text-muted py-5">
                                     Select at least one account to view transactions.
                                 </td>
                             </tr>
                             <tr v-else-if="!displayedTransactions.length">
-                                <td colspan="6" class="text-center text-muted py-5">
+                                <td colspan="7" class="text-center text-muted py-5">
                                     No transactions match the current filters.
                                 </td>
                             </tr>
