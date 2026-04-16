@@ -1861,15 +1861,13 @@ const app = new Vue({
             newRow.isNew = true;
             this.budgets.unshift(newRow);
             this.budgetsError = null;
-            this.openBudgetCategoryDropdown(newRow);
             this.budgetsLoaded = true;
             this.markBudgetDirty(newRow);
             this.$nextTick(() => {
-                const ref = this.$refs[`budgetCategoryInput-${newRow.localId}`];
-                const input = Array.isArray(ref) ? ref[0] : ref;
-                if (input && typeof input.focus === 'function') {
-                    input.focus();
-                    input.select();
+                const ref = this.$refs[`budgetCategorySelect-${newRow.localId}`];
+                const el = Array.isArray(ref) ? ref[0] : ref;
+                if (el && typeof el.focus === 'function') {
+                    el.focus();
                 }
             });
         },

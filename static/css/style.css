@@ -1026,8 +1026,10 @@ body.mobile-sidebar-open {
     position: relative;
 }
 
-.budget-category-wrapper {
-    position: relative;
+.budget-category-label {
+    display: block;
+    padding: 0.25rem 0;
+    font-size: 0.875rem;
 }
 
 .dashboard-tabs,

@@ -1,3 +1,11 @@
+## [1.3.8] - 2026-04-16
+
+### Changed
+
+- **Budget category field replaced with native `<select>`**: the custom typeahead dropdown was unreliable inside a `<table>` because absolutely-positioned elements are clipped by table layout contexts regardless of overflow settings. New budget rows now use a native `<select>` populated with custom categories that don't already have a budget. Saved budget rows show the category as plain text (category is fixed after saving).
+
+---
+
 ## [1.3.7] - 2026-04-16
 
 ### Fixed

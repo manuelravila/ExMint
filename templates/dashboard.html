@@ -1093,34 +1093,21 @@
                                     }"
                                 >
                                     <td class="budget-category-cell">
-                                        <div class="budget-category-wrapper">
-                                            <input
-                                                type="text"
-                                                class="form-control form-control-sm"
-                                                :ref="`budgetCategoryInput-${budget.localId}`"
-                                                v-model="budget.category_label"
-                                                @focus="openBudgetCategoryDropdown(budget)"
-                                                @input="handleBudgetCategoryInput(budget)"
-                                                @blur="onBudgetCategoryBlur"
-                                                placeholder="Select category"
-                                                :disabled="!!budget.id"
-                                                :title="budget.id ? 'Category is fixed after saving' : ''"
-                                            >
-                                            <div
-                                                v-if="budgetCategoryDropdown.rowId === budget.localId && budgetCategoryDropdown.items.length"
-                                                class="category-edit-dropdown"
-                                            >
-                                                <button
-                                                    v-for="option in budgetCategoryDropdown.items"
-                                                    :key="`budget-category-${budget.localId}-${option}`"
-                                                    type="button"
-                                                    class="dropdown-item suggestion-item"
-                                                    @mousedown.prevent="applyBudgetCategorySuggestion(option, budget)"
-                                                >
-                                                    [[ option ]]
-                                                </button>
-                                            </div>
-                                        </div>
+                                        <select
+                                            v-if="!budget.id"
+                                            class="form-control form-control-sm"
+                                            :ref="`budgetCategorySelect-${budget.localId}`"
+                                            v-model="budget.category_label"
+                                            @change="markBudgetDirty(budget)"
+                                        >
+                                            <option value="" disabled>Select category…</option>
+                                            <option
+                                                v-for="cat in availableBudgetCategories"
+                                                :key="cat"
+                                                :value="cat"
+                                            >[[ cat ]]</option>
+                                        </select>
+                                        <span v-else class="budget-category-label">[[ budget.category_label ]]</span>
                                     </td>
                                     <td>
                                         <select class="form-control form-control-sm" v-model="budget.frequency" @change="markBudgetDirty(budget)">
