@@ -1003,9 +1003,14 @@ body.mobile-sidebar-open {
     border-radius: 0.75rem;
 }
 
+.budgets-table {
+    overflow-x: auto;
+    overflow-y: visible;
+}
+
 .budgets-table table {
     border-radius: 0.5rem;
-    overflow: hidden;
+    overflow: visible;
     border: 1px solid #e2e8f0;
 }
 

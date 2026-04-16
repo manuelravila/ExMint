@@ -2030,7 +2030,6 @@ const app = new Vue({
             }
             this.budgetCategoryBlurTimeout = window.setTimeout(() => {
                 this.closeBudgetCategoryDropdown();
-                this.discardBudgetRowIfEmpty();
             }, 120);
         },
         cancelBudgetBlur: function() {

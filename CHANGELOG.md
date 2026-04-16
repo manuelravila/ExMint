@@ -1,3 +1,14 @@
+## [1.3.6] - 2026-04-16
+
+### Fixed
+
+- **Budget category dropdown clipped**: the dropdown was rendered but immediately hidden by `overflow: hidden` on `.budgets-table table`. The table now uses `overflow: visible`, and the `.budgets-table` wrapper overrides Bootstrap's `table-responsive` to keep `overflow-y: visible`.
+- **New budget row discarded when clicking Amount field**: `onBudgetCategoryBlur` was calling `discardBudgetRowIfEmpty`, which removed any new row whose amount was still 0 — i.e. always, before the user had a chance to fill it in. The auto-discard is removed from the blur handler entirely.
+- **New budget row discarded when Amount field blurred**: same issue via `@blur="discardBudgetRowIfEmpty"` on the amount input; removed.
+- **Create/Cancel buttons on new budget rows**: the save/delete icons are now labelled "Create" and "Cancel" for unsaved rows, making the form intent explicit.
+
+---
+
 ## [1.3.5] - 2026-04-16
 
 ### Added

@@ -1141,7 +1141,6 @@
                                             step="0.01"
                                             v-model="budget.amount"
                                             @input="markBudgetDirty(budget)"
-                                            @blur="discardBudgetRowIfEmpty"
                                             placeholder="0.00"
                                         >
                                     </td>
@@ -1158,7 +1157,10 @@
                                                 :disabled="budget.saving || !budget.isDirty"
                                                 @click="saveBudgetRow(budget)"
                                             >
-                                                <span v-if="!budget.saving"><i class="fas fa-save"></i></span>
+                                                <span v-if="!budget.saving">
+                                                    <span v-if="!budget.id"><i class="fas fa-check mr-1"></i>Create</span>
+                                                    <span v-else><i class="fas fa-save"></i></span>
+                                                </span>
                                                 <span v-else><i class="fas fa-spinner fa-spin"></i></span>
                                             </button>
                                             <button
@@ -1166,7 +1168,8 @@
                                                 :disabled="budget.saving"
                                                 @click="deleteBudgetRow(budget)"
                                             >
-                                                <i class="fas fa-trash-alt"></i>
+                                                <span v-if="!budget.id">Cancel</span>
+                                                <i v-else class="fas fa-trash-alt"></i>
                                             </button>
                                         </div>
                                     </td>
