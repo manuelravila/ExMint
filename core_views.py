@@ -1876,9 +1876,15 @@ def _persist_transactions_from_payload(user, credential, data, from_webhook=Fals
 
     missing_account_ids = incoming_account_ids.difference(account_map.keys())
     if missing_account_ids:
-        fetched_accounts = Account.query.filter(
-            Account.plaid_account_id.in_(missing_account_ids)
-        ).all()
+        fetched_accounts = (
+            Account.query
+            .join(Credential)
+            .filter(
+                Account.plaid_account_id.in_(missing_account_ids),
+                Credential.user_id == user.id,
+            )
+            .all()
+        )
         account_map.update({account.plaid_account_id: account for account in fetched_accounts})
 
     for payload in payload_by_action['removed']:
@@ -1916,6 +1922,14 @@ def _persist_transactions_from_payload(user, credential, data, from_webhook=Fals
                 continue
 
             transaction = Transaction.query.filter_by(plaid_transaction_id=plaid_transaction_id).first()
+
+            # Don't revive transactions that were explicitly removed by the dedup
+            # tool.  Plaid may keep sending 'modified' updates for a transaction
+            # we've chosen to discard; honouring them would undo every dedup run.
+            if (transaction is not None
+                    and transaction.is_removed
+                    and transaction.last_action in ('maintenance_dedup', 'maintenance_dedup_cascade')):
+                continue
 
             if transaction is None:
                 transaction = Transaction(

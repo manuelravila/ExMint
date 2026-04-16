@@ -1,3 +1,20 @@
+## [1.3.5] - 2026-04-16
+
+### Added
+
+- **Budget category dropdown**: the Category field when adding a new budget now shows a dropdown of all available custom categories. Categories that already have a budget are excluded, enforcing the one-budget-per-category constraint. The full list appears on focus and filters as you type; the field is locked (disabled) on saved budget rows so the category cannot be accidentally changed.
+
+---
+
+## [1.3.4] - 2026-04-16
+
+### Fixed
+
+- **Recurring duplicates after deduplication**: after using the deduplication tool to remove a duplicate transaction, a subsequent Plaid sync could revive it when Plaid sent a `modified` update for that same `plaid_transaction_id`. `_persist_transactions_from_payload` now skips any transaction whose `last_action` is `maintenance_dedup` or `maintenance_dedup_cascade`, so dedup removals are permanent.
+- **Fallback account query not scoped to user**: in `_persist_transactions_from_payload`, when a transaction's Plaid account ID was not in the local account map, the fallback query looked up accounts globally (no user filter). The query now joins through `Credential` and filters by `user_id`, preventing cross-user account matches.
+
+---
+
 ## [1.3.3] - 2026-04-15
 
 ### Added

@@ -336,6 +336,18 @@ const app = new Vue({
             });
             return Array.from(unique.values()).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
         },
+        availableBudgetCategories: function() {
+            // Custom categories that don't yet have a saved budget — used to populate
+            // the category dropdown when adding a new budget row.
+            const budgeted = new Set(
+                this.budgets
+                    .filter(b => b.id)
+                    .map(b => (b.category_label || '').trim().toLowerCase())
+            );
+            return this.transactionCategoryOptions.filter(
+                opt => !budgeted.has((opt || '').trim().toLowerCase())
+            );
+        },
         customCategoryFilterOptions: function() {
             return this.customCategories
                 .filter(category => category && category.id && category.name)
@@ -1975,13 +1987,17 @@ const app = new Vue({
             this.cancelBudgetBlur();
         },
         updateBudgetCategorySuggestions: function(budget) {
-            const options = this.transactionCategoryOptions || [];
-            let items = options;
-            const query = (budget.category_label || '').trim().toLowerCase();
-            if (query) {
-                items = options.filter(option => option.toLowerCase().includes(query));
+            // Existing budgets have a fixed category — no dropdown needed.
+            if (budget.id) {
+                this.budgetCategoryDropdown.items = [];
+                return;
             }
-            this.budgetCategoryDropdown.items = items.slice(0, 8);
+            const options = this.availableBudgetCategories || [];
+            const query = (budget.category_label || '').trim().toLowerCase();
+            const items = query
+                ? options.filter(option => option.toLowerCase().includes(query))
+                : options;
+            this.budgetCategoryDropdown.items = items;
             this.cancelBudgetBlur();
         },
         applyBudgetCategorySuggestion: function(option, budget) {

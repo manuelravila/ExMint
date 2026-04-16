@@ -3,7 +3,7 @@
 **Reported:** 2026-04-15
 **Environment:** Production
 **Severity:** Medium (data integrity risk post-reconnection)
-**Status:** Open
+**Status:** Partially fixed (v1.3.4)
 
 ---
 
@@ -114,10 +114,29 @@ another credential, preventing the second credential from being saved at all.
 
 ---
 
+## v1.3.4 Partial Fix
+
+Two issues were fixed that made this bug worse in practice:
+
+1. **Recurring duplicates after dedup (fixed):** `_persist_transactions_from_payload`
+   previously set `is_removed = False` unconditionally for every `added`/`modified`
+   payload. This meant any transaction removed by the dedup tool would be silently
+   revived the next time Plaid sent a `modified` update for it (e.g. pending→posted).
+   Fixed by skipping transactions whose `last_action` is `maintenance_dedup` or
+   `maintenance_dedup_cascade`.
+
+2. **Fallback account query not user-scoped (fixed):** The fallback query that resolves
+   unknown Plaid account IDs now joins through `Credential` and filters by `user_id`.
+
+The underlying account-mapping and FK-mismatch issue (Options A/B/C) is still open.
+
+---
+
 ## Notes
 
 - The reconnect flag (`requires_update`) is tracked correctly per-credential — this is
-  not a bug.
+  not a bug.  If `requires_update=True` clears after a manual sync, it means Plaid's
+  token is actually valid again (the auth issue was transient on Plaid's side).
 - The 0 transactions shown on the first connection is expected (cursor is current).
 - The true risk window is: second credential reconnected → sync runs → data mismatch
   written to DB. Monitor logs for the warning:

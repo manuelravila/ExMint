@@ -1103,6 +1103,8 @@
                                                 @input="handleBudgetCategoryInput(budget)"
                                                 @blur="onBudgetCategoryBlur"
                                                 placeholder="Select category"
+                                                :disabled="!!budget.id"
+                                                :title="budget.id ? 'Category is fixed after saving' : ''"
                                             >
                                             <div
                                                 v-if="budgetCategoryDropdown.rowId === budget.localId && budgetCategoryDropdown.items.length"
