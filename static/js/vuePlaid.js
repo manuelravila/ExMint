@@ -571,6 +571,9 @@ const app = new Vue({
                 if (!this.budgetsLoaded || (!this.budgets.length && !this.budgetsLoading)) {
                     await this.fetchBudgets();
                 }
+                if (!this.customCategoriesLoaded) {
+                    await this.fetchCustomCategories({ suppressLoader: true });
+                }
             } else if (pane === 'dashboard') {
                 if (!this.dashboardLoaded || !this.dashboardData || !this.dashboardData.balances.groups.length) {
                     await this.fetchDashboard();

@@ -1,3 +1,11 @@
+## [1.3.7] - 2026-04-16
+
+### Fixed
+
+- **Budget category dropdown empty**: custom categories were never fetched when navigating directly to the Budgets pane. `setActivePane('budgets')` now loads custom categories (suppressed loader) alongside budgets, so the dropdown is always populated.
+
+---
+
 ## [1.3.6] - 2026-04-16
 
 ### Fixed
