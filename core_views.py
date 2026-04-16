@@ -2208,6 +2208,15 @@ def mark_transactions_as_seen():
 
     return jsonify({'status': 'success'})
 
+@core.route('/api/session/ping', methods=['GET'])
+@login_required
+def session_ping():
+    """Lightweight endpoint used by the frontend heartbeat to keep the
+    session alive and detect expiry (returns 401 via the unauthorized
+    handler when the session has expired)."""
+    return jsonify({'ok': True})
+
+
 @core.route('/api/accounts', methods=['GET'])
 @login_required
 def get_accounts():

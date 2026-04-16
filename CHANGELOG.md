@@ -1,3 +1,11 @@
+## [1.3.10] - 2026-04-16
+
+### Fixed
+
+- **Session expiry not detected on idle dashboard**: the 1.3.9 interceptor only fired when the user actively triggered an API call. Added a session heartbeat (`/api/session/ping`) that fires every 4 minutes so the session stays alive while the tab is open, and a `visibilitychange` listener that pings immediately when the user switches back to the tab after being away. When the ping returns 401 the existing interceptor handles the redirect.
+
+---
+
 ## [1.3.9] - 2026-04-16
 
 ### Added

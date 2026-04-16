@@ -15,6 +15,29 @@
     };
 }());
 
+// Session heartbeat.
+// Pings the server every 4 minutes so the session stays alive while the
+// tab is open.  Also fires immediately when the user returns to the tab
+// after being away (visibilitychange).  The global fetch interceptor above
+// already handles the 401 → redirect, so no extra logic is needed here.
+(function () {
+    var INTERVAL_MS = 4 * 60 * 1000; // 4 minutes — well under the 15-min lifetime
+
+    function ping() {
+        fetch('/api/session/ping').catch(function () {
+            // Network offline — ignore, the interceptor handles 401.
+        });
+    }
+
+    setInterval(ping, INTERVAL_MS);
+
+    document.addEventListener('visibilitychange', function () {
+        if (!document.hidden) {
+            ping(); // user switched back to this tab
+        }
+    });
+}());
+
 Vue.component('line-chart', {
   extends: window.VueChartJs.Line,
   props: ['chartData', 'options'],
