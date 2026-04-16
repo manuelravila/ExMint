@@ -1,3 +1,12 @@
+## [1.3.9] - 2026-04-16
+
+### Added
+
+- **Automatic redirect on session expiry**: when the Flask session expires, any API call from the dashboard now receives a JSON 401 response (via a custom `unauthorized_handler`) instead of an HTML redirect that the SPA couldn't interpret. A global `fetch` interceptor in `vuePlaid.js` catches every 401 and immediately navigates the page to `/login?session_expired=1`, so the user sees the login screen rather than a broken dashboard.
+- **Session-expired toast on login page**: when redirected due to session expiry, the login page now shows a dismissible Bootstrap Toast ("Your session has expired. Please log in again.") anchored to the top-right corner, replacing the previously unformatted flash alert that rendered at the top of the page.
+
+---
+
 ## [1.3.8] - 2026-04-16
 
 ### Changed

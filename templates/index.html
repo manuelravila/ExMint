@@ -3,6 +3,22 @@
 
 {% block content %}
 
+    <!-- Session-expired toast (shown via JS when ?session_expired=1 is in the URL) -->
+    <div aria-live="polite" aria-atomic="true" style="position: fixed; top: 1.25rem; right: 1.25rem; z-index: 9999;">
+        <div id="sessionExpiredToast" class="toast" role="alert" aria-live="assertive" aria-atomic="true" data-delay="7000">
+            <div class="toast-header bg-warning">
+                <i class="fas fa-clock mr-2"></i>
+                <strong class="mr-auto">Session Expired</strong>
+                <button type="button" class="ml-2 mb-1 close" data-dismiss="toast" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+            </div>
+            <div class="toast-body">
+                Your session has expired. Please log in again.
+            </div>
+        </div>
+    </div>
+
     <div class="container h-100" style="margin-top: 50px;">
         <div class="row align-items-center justify-content-center h-100">
             <div class="col-lg-6 text-center">
@@ -50,4 +66,12 @@
             </div>
         </div>
     </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    if (new URLSearchParams(window.location.search).get('session_expired') === '1') {
+        $('#sessionExpiredToast').toast('show');
+    }
+</script>
 {% endblock %}

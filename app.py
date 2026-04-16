@@ -92,6 +92,16 @@ def create_app():
         from models import User
         return db.session.get(User, int(user_id))
 
+    # Custom unauthorized handler: API routes return JSON 401 so the SPA
+    # can detect session expiry and redirect cleanly.  All other routes
+    # redirect to the login page as normal.
+    @login_manager.unauthorized_handler
+    def unauthorized():
+        from flask import request, jsonify, redirect, url_for
+        if request.path.startswith('/api/'):
+            return jsonify({'error': 'session_expired'}), 401
+        return redirect(url_for('views.login', next=request.url))
+
     # Pass the Plaid client to the core_routes blueprint
     app.plaid_client = plaid_client
 

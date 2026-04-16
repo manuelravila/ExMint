@@ -1,4 +1,20 @@
 //vuePlaid.js
+
+// Global session-expiry guard.  Any API call that returns 401 means the
+// Flask session has expired.  Redirect immediately so the user sees the
+// login page rather than a confusing broken dashboard.
+(function () {
+    var _fetch = window.fetch;
+    window.fetch = async function () {
+        var response = await _fetch.apply(this, arguments);
+        if (response.status === 401) {
+            window.location.href = '/login?session_expired=1';
+            return new Promise(function () {}); // never resolves — callers won't run error code
+        }
+        return response;
+    };
+}());
+
 Vue.component('line-chart', {
   extends: window.VueChartJs.Line,
   props: ['chartData', 'options'],
