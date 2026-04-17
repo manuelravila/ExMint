@@ -1778,6 +1778,12 @@ def handle_token_and_accounts():
         # Clear any update flags and run an initial sync so that Plaid webhooks can begin firing.
         credential.requires_update = False
 
+        # For reconnect flows, commit the flag clear before attempting the sync.
+        # If the sync raises an exception its rollback would otherwise discard this
+        # change, leaving the reconnect button visible even though re-auth succeeded.
+        if is_refresh:
+            db.session.commit()
+
         ensure_category_schema()
         sync_summary = {'added': 0, 'modified': 0, 'removed': 0}
         sync_errors = []
@@ -1791,29 +1797,34 @@ def handle_token_and_accounts():
         except plaid.ApiException as exc:
             current_app.logger.exception("Initial Plaid sync failed for credential %s: %s", credential.id, exc)
             db.session.rollback()
-            return jsonify({
-                'status': 'error',
-                'message': 'Bank connection created but failed to sync transactions.',
-                'error': str(exc)
-            }), 502
+            if not is_refresh:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Bank connection created but failed to sync transactions.',
+                    'error': str(exc)
+                }), 502
+            # Reconnect auth already succeeded; sync will retry on the next webhook or manual trigger.
+            sync_errors.append({'error_code': 'SYNC_FAILED', 'error_message': str(exc)})
         except Exception as exc:
             current_app.logger.exception("Unexpected error during initial Plaid sync for credential %s: %s", credential.id, exc)
             db.session.rollback()
-            return jsonify({
-                'status': 'error',
-                'message': 'Bank connection created but failed to sync transactions.',
-                'error': str(exc)
-            }), 500
+            if not is_refresh:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Bank connection created but failed to sync transactions.',
+                    'error': str(exc)
+                }), 500
+            # Reconnect auth already succeeded; sync will retry on the next webhook or manual trigger.
+            sync_errors.append({'error_message': str(exc)})
 
         category_summary = None
         has_category_rules = CategoryRule.query.filter_by(user_id=credential.user_id).first() is not None
         if has_category_rules:
             category_summary = apply_category_rules(credential.user_id)
 
-        # For reconnect flows the user has just successfully completed Plaid's
-        # update-mode flow, so the credential is valid.  Re-apply the flag here
-        # so a transient ITEM_LOGIN_REQUIRED error inside the sync cannot leave
-        # the button visible after a successful re-authentication.
+        # Re-ensure the flag is clear and commit.  After a rollback the in-memory credential
+        # is expired and will reload from DB (already False); setting it here is a no-op on
+        # the happy path and a safety net after a recovered sync failure.
         if is_refresh:
             credential.requires_update = False
 

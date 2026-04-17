@@ -1,3 +1,11 @@
+## [1.3.11] - 2026-04-16
+
+### Fixed
+
+- **Reconnect button persists after successful re-authentication**: after completing Plaid's update-mode flow, `requires_update = False` was not committed to the DB until after the post-reconnect transaction sync. If the sync threw an exception, `db.session.rollback()` discarded the uncommitted flag change, leaving `requires_update = True` in the DB — so the button remained visible even after a page refresh. Fix: for reconnect flows (`is_refresh=True`), the flag clear is now committed immediately before the sync attempt. If the sync fails, the reconnect button disappears correctly (the auth succeeded) and the sync will retry on the next Plaid webhook or manual trigger.
+
+---
+
 ## [1.3.10] - 2026-04-16
 
 ### Fixed
