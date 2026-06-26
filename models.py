@@ -177,6 +177,29 @@ def set_app_setting(key, value):
     db.session.commit()
 
 
+class CsvImportTemplate(db.Model):
+    __tablename__ = 'csv_import_templates'
+
+    id = db.Column(db.Integer, primary_key=True)
+    label = db.Column(db.String(255), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    header_hash = db.Column(db.String(64), nullable=False)
+    header_names = db.Column(db.Text, nullable=False)  # JSON list
+    mappings = db.Column(db.Text, nullable=False)  # JSON dict: csv_header -> field_name
+    bank_name = db.Column(db.String(255), nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    user = db.relationship('User', backref=db.backref('csv_templates', lazy=True))
+
+    __table_args__ = (
+        db.UniqueConstraint('user_id', 'label', name='uq_csv_template_user_label'),
+    )
+
+    def __repr__(self):
+        return f'<CsvImportTemplate {self.label}>'
+
+
 class Budget(db.Model):
     __tablename__ = 'budgets'
 

@@ -1432,3 +1432,17 @@ body.mobile-sidebar-open {
     outline: none;
     border-radius: 0.5rem;
 }
+
+/* Vue-controlled modals: Bootstrap .fade sets opacity=0, but v-show only toggles display.
+   This makes the CSV import modal visible when Vue shows it. */
+#csvImportModal[style*="display: block"] {
+    opacity: 1 !important;
+    display: block !important;
+}
+
+/* Force CSV modal visibility regardless of Bootstrap state */
+#csvImportModal.show,
+#csvImportModal[class*=" show"] {
+    display: block !important;
+    opacity: 1 !important;
+}

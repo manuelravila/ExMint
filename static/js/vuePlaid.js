@@ -288,6 +288,30 @@ const app = new Vue({
             totalDuplicates: 0,
             scanError: null,
             deduplicationResult: null,
+        },
+        csvImport: {
+            modalVisible: false,
+            step: 1,
+            file: null,
+            fileName: '',
+            accountId: null,
+            headers: [],
+            sampleValues: {},
+            autoMapping: {},
+            userMapping: {},
+            hasTemplate: false,
+            templateLabel: '',
+            preview: [],
+            rowCount: 0,
+            importing: false,
+            result: null,
+            error: null,
+            saveTemplate: false,
+            newTemplateLabel: '',
+            dragOver: false,
+            mappingErrors: {},
+            showToast: false,
+            toastMessage: '',
         }
     },
     computed: {
@@ -388,6 +412,31 @@ const app = new Vue({
                 return false;
             }
             return this.splitModal.errors.length === 0;
+        },
+        hasActiveTransactionFilters: function() {
+            return !!(this.filters.search || this.filters.startDate || this.filters.endDate || this.filters.customCategoryId || this.filters.amountMin || this.filters.amountMax);
+        },
+        hasAccountNumberMapping: function() {
+            var values = Object.values(this.csvImport.userMapping);
+            return values.indexOf('account_number') !== -1;
+        },
+        hasValidMapping: function() {
+            if (!this.csvImport.headers.length) return false;
+            var mappedCount = 0;
+            var hasDate = false;
+            var hasAmount = false;
+            var self = this;
+            this.csvImport.headers.forEach(function(h) {
+                var v = self.csvImport.userMapping[h];
+                if (v && v !== '') {
+                    mappedCount++;
+                    if (v === 'date') hasDate = true;
+                    if (v === 'amount' || v === 'debit' || v === 'credit' || v === 'amount_cad' || v === 'amount_usd') hasAmount = true;
+                }
+            });
+            if (!hasDate || !hasAmount) return false;
+            if (!this.hasAccountNumberMapping && !this.csvImport.accountId) return false;
+            return mappedCount >= 2;
         },
         hasNewTransactions: function() {
             return this.transactions.some(txn => txn.is_new);
@@ -3172,7 +3221,205 @@ const app = new Vue({
             } else {
                 console.error("Plaid Link handler is not defined");
             }
-        }
+        },
+
+        // ── CSV Import methods ──────────────────────────────────────────────
+        openCsvImport: function() {
+            this.csvImport.modalVisible = true;
+            this.csvImport.step = 1;
+            this.csvImport.file = null;
+            this.csvImport.fileName = '';
+            // Use Bootstrap's jQuery modal to handle CSS/backdrop properly
+            var self = this;
+            setTimeout(function() {
+                $('#csvImportModal').modal('show');
+                $('#csvImportModal').on('hidden.bs.modal', function() {
+                    self.csvImport.modalVisible = false;
+                });
+            }, 50);
+            this.csvImport.accountId = null;
+            this.csvImport.headers = [];
+            this.csvImport.sampleValues = {};
+            this.csvImport.autoMapping = {};
+            this.csvImport.userMapping = {};
+            this.csvImport.hasTemplate = false;
+            this.csvImport.templateLabel = '';
+            this.csvImport.preview = [];
+            this.csvImport.rowCount = 0;
+            this.csvImport.result = null;
+            this.csvImport.error = null;
+            this.csvImport.saveTemplate = false;
+            this.csvImport.newTemplateLabel = '';
+            this.csvImport.dragOver = false;
+        },
+
+        handleCsvFileSelect: function(event) {
+            var file = event.target.files[0];
+            if (!file) return;
+            this.csvImport.file = file;
+            this.csvImport.fileName = file.name;
+            this.autoAnalyzeCsv();
+        },
+
+        handleCsvDrop: function(event) {
+            this.csvImport.dragOver = false;
+            var file = event.dataTransfer.files[0];
+            if (!file) return;
+            this.csvImport.file = file;
+            this.csvImport.fileName = file.name;
+            this.autoAnalyzeCsv();
+        },
+
+        autoAnalyzeCsv: async function() {
+            this.csvImport.importing = true;
+            this.csvImport.error = null;
+            try {
+                const formData = new FormData();
+                formData.append('file', this.csvImport.file);
+
+                const resp = await fetch('/api/transactions/import-csv/analyze', {
+                    method: 'POST',
+                    body: formData,
+                });
+                const data = await resp.json();
+
+                if (data.error) {
+                    this.csvImport.error = data.error;
+                    return;
+                }
+
+                // Build sample values from preview rows
+                var samples = {};
+                if (data.preview && data.preview.length) {
+                    var firstRow = data.preview[0];
+                    data.headers.forEach(function(h) {
+                        samples[h] = firstRow[h] || '';
+                    });
+                }
+
+                this.csvImport.headers = data.headers;
+                this.csvImport.sampleValues = samples;
+                this.csvImport.autoMapping = data.auto_mapping;
+                this.csvImport.userMapping = Object.assign({}, data.auto_mapping);
+                this.csvImport.hasTemplate = data.has_template;
+                this.csvImport.templateLabel = data.template_label || '';
+                this.csvImport.preview = data.preview || [];
+                this.csvImport.rowCount = data.row_count;
+                this.csvImport.step = 2;
+            } catch (err) {
+                this.csvImport.error = 'Failed to analyze CSV: ' + err.message;
+            } finally {
+                this.csvImport.importing = false;
+            }
+        },
+
+        updateCsvMapping: function(header, field) {
+            this.$set(this.csvImport.userMapping, header, field);
+        },
+
+        isFieldTaken: function(field, currentHeader) {
+            if (!field) return false;
+            var currentVal = this.csvImport.userMapping[currentHeader];
+            if (field === currentVal) return false;
+            var values = Object.values(this.csvImport.userMapping);
+            return values.indexOf(field) !== -1;
+        },
+
+        executeCsvImport: async function() {
+            console.log("[DEBUG] executeCsvImport called, hasAccountNumberMapping=", this.hasAccountNumberMapping, "accountId=", this.csvImport.accountId);
+            
+            // Clear previous errors
+            this.csvImport.mappingErrors = {};
+            this.csvImport.showToast = false;
+            
+            // Validate mapping and highlight issues
+            var errors = [];
+            var newErrors = {};
+            var hasDate = false;
+            var hasAmount = false;
+            
+            var self = this;
+            this.csvImport.headers.forEach(function(h) {
+                var v = self.csvImport.userMapping[h];
+                if (v === 'date') hasDate = true;
+                if (v === 'amount' || v === 'debit' || v === 'credit' || v === 'amount_cad' || v === 'amount_usd') hasAmount = true;
+            });
+            
+            if (!hasDate) {
+                errors.push("A Date column must be mapped.");
+                this.csvImport.headers.forEach(function(h) {
+                    if (self.csvImport.userMapping[h] === 'date' || !self.csvImport.userMapping[h]) {
+                        newErrors[h] = 'missing-date';
+                    }
+                });
+            }
+            if (!hasAmount) {
+                errors.push("An Amount column must be mapped (Amount, Debit/Credit, or CAD/USD).");
+                this.csvImport.headers.forEach(function(h) {
+                    if (!self.csvImport.userMapping[h]) {
+                        newErrors[h] = 'missing-amount';
+                    }
+                });
+            }
+            if (!this.hasAccountNumberMapping && !this.csvImport.accountId) {
+                errors.push("Select a destination account or map an Account Number column.");
+            }
+            
+            if (errors.length > 0) {
+                this.csvImport.mappingErrors = newErrors;
+                this.csvImport.toastMessage = errors.join(' ');
+                this.csvImport.showToast = true;
+                var self2 = this;
+                setTimeout(function() { self2.csvImport.showToast = false; }, 6000);
+                return;
+            }
+            
+            this.csvImport.importing = true;
+            this.csvImport.error = null;
+
+            try {
+                const formData = new FormData();
+                formData.append('file', this.csvImport.file);
+                // If account_number is mapped, let backend route per-row; otherwise send fallback account_id
+                if (!this.hasAccountNumberMapping) {
+                    if (!this.csvImport.accountId) {
+                        this.csvImport.error = 'Please select a destination account.';
+                        return;
+                    }
+                    formData.append('account_id', this.csvImport.accountId);
+                }
+                formData.append('mapping', JSON.stringify(this.csvImport.userMapping));
+                formData.append('save_template', this.csvImport.saveTemplate ? 'true' : 'false');
+                if (this.csvImport.saveTemplate && this.csvImport.newTemplateLabel) {
+                    formData.append('template_label', this.csvImport.newTemplateLabel);
+                }
+
+                const resp = await fetch('/api/transactions/import-csv/import', {
+                    method: 'POST',
+                    body: formData,
+                });
+                const data = await resp.json();
+
+                if (data.error) {
+                    this.csvImport.error = data.error;
+                    return;
+                }
+
+                this.csvImport.result = data;
+                this.csvImport.step = 3;
+
+                // Refresh transactions after import
+                await this.fetchTransactions();
+            } catch (err) {
+                this.csvImport.error = 'Import failed: ' + err.message;
+            } finally {
+                this.csvImport.importing = false;
+            }
+        },
+
+        closeCsvImport: function() {
+            $('#csvImportModal').modal('hide');
+        },
     },
     watch: {
         selectedSpendingYear: function() {

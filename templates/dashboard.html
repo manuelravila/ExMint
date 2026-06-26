@@ -51,6 +51,9 @@
                 <button id="link-button" class="btn btn-outline-secondary mr-2" @click="openPlaidLink">
                     <i class="fas fa-university"></i> Connect
                 </button>
+                <button class="btn btn-outline-secondary mr-2" @click="openCsvImport">
+                    <i class="fas fa-file-upload"></i> Upload
+                </button>
 
                 <div class="dropdown d-inline-block">
                     <button class="btn btn-outline-secondary dropdown-toggle" type="button" id="profileMenu" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
@@ -1643,6 +1646,218 @@
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- CSV Import Modal -->
+    <div class="modal fade" id="csvImportModal" tabindex="-1" role="dialog" aria-labelledby="csvImportModalLabel" aria-hidden="true" v-if="csvImport.modalVisible" :class="{ show: csvImport.modalVisible }">
+        <div class="modal-dialog modal-lg" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="csvImportModalLabel">
+                        <span v-if="csvImport.step === 1">Import CSV</span>
+                        <span v-else-if="csvImport.step === 2">Map Columns</span>
+                        <span v-else>Import Results</span>
+                    </h5>
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                </div>
+
+                <!-- Step 1: Drag & Drop Upload - auto analyzes on selection -->
+                <div v-show="csvImport.step === 1">
+                    <div class="modal-body">
+                        <div v-if="csvImport.error" class="alert alert-danger">[[ csvImport.error ]]</div>
+                        <div class="upload-zone"
+                            @click="$refs.csvFileInput.click()"
+                            @dragover.prevent="csvImport.dragOver = true"
+                            @dragleave.prevent="csvImport.dragOver = false"
+                            @drop.prevent="handleCsvDrop"
+                            :class="{ 'upload-zone-active': csvImport.dragOver, 'upload-zone-loading': csvImport.importing }"
+                            style="border: 2px dashed #ccc; border-radius: 8px; padding: 40px 20px; text-align: center; cursor: pointer; transition: all 0.2s;">
+                            <input type="file" ref="csvFileInput" id="csvFileInput" class="d-none" accept=".csv" @change="handleCsvFileSelect">
+                            <div v-if="!csvImport.importing">
+                                <i class="fas fa-cloud-upload-alt" style="font-size: 48px; color: #6c757d;"></i>
+                                <p class="mt-3 mb-1"><strong>Drop your CSV file here</strong></p>
+                                <p class="text-muted small mb-0">or click to browse &middot; Downloaded transaction CSV from your bank</p>
+                            </div>
+                            <div v-else>
+                                <i class="fas fa-spinner fa-spin" style="font-size: 48px; color: #007bff;"></i>
+                                <p class="mt-3 mb-0"><strong>Analysing CSV...</strong></p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                    </div>
+                </div>
+
+                <!-- Step 2: Column Mapping with samples + conditional account selector -->
+                <div v-show="csvImport.step === 2">
+                    <div class="modal-body">
+                        <div v-if="csvImport.error" class="alert alert-danger">[[ csvImport.error ]]</div>
+
+                        <div v-if="csvImport.hasTemplate" class="alert alert-info">
+                            <i class="fas fa-save"></i> A saved template "[[ csvImport.templateLabel ]]" was found. The mapping below is pre-filled.
+                        </div>
+
+                        <!-- Toast notification for validation errors -->
+                        <div v-if="csvImport.showToast" class="alert alert-danger alert-dismissible fade show py-2 mb-3" role="alert">
+                            <i class="fas fa-exclamation-circle mr-1"></i>
+                            [[ csvImport.toastMessage ]]
+                            <button type="button" class="close py-1" @click="csvImport.showToast = false" aria-label="Close">
+                                <span aria-hidden="true">&times;</span>
+                            </button>
+                        </div>
+
+                        <p class="text-muted">
+                            [[ csvImport.rowCount ]] rows found in [[ csvImport.fileName ]]. Map each CSV column to a transaction field.
+                        </p>
+
+                        <!-- Mapping Table with Sample Values -->
+                        <div class="table-responsive">
+                            <table class="table table-sm table-bordered">
+                                <thead class="thead-light">
+                                    <tr>
+                                        <th style="width: 25%;">CSV Column</th>
+                                        <th style="width: 30%;">Sample Value</th>
+                                        <th style="width: 30%;">Maps To</th>
+                                        <th style="width: 15%;">Auto</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr v-for="(header, idx) in csvImport.headers" :key="header"
+                                        :class="{ 'table-danger': csvImport.mappingErrors[header] }">
+                                        <td><strong>[[ header ]]</strong>
+                                            <span v-if="csvImport.mappingErrors[header]" class="badge badge-danger ml-1">!</span>
+                                        </td>
+                                        <td><code class="small">[[ csvImport.sampleValues[header] || '—' ]]</code></td>
+                                        <td>
+                                            <select class="form-control form-control-sm"
+                                                :value="csvImport.userMapping[header] || ''"
+                                                @change="updateCsvMapping(header, $event.target.value)">
+                                                <option value="">— Skip —</option>
+                                                <option value="date" :disabled="isFieldTaken('date', header)">Date</option>
+                                                <option value="description" :disabled="isFieldTaken('description', header)">Description</option>
+                                                <option value="merchant" :disabled="isFieldTaken('merchant', header)">Merchant</option>
+                                                <option value="debit" :disabled="isFieldTaken('debit', header)">Debit Amount</option>
+                                                <option value="credit" :disabled="isFieldTaken('credit', header)">Credit Amount</option>
+                                                <option value="amount" :disabled="isFieldTaken('amount', header)">Amount (single column, +/- values)</option>
+                                                <option value="amount_cad" :disabled="isFieldTaken('amount_cad', header)">Amount (CAD)</option>
+                                                <option value="amount_usd" :disabled="isFieldTaken('amount_usd', header)">Amount (USD)</option>
+                                                <option value="check_number" :disabled="isFieldTaken('check_number', header)">Check / Reference #</option>
+                                                <option value="category" :disabled="isFieldTaken('category', header)">Category</option>
+                                                <option value="account_number" :disabled="isFieldTaken('account_number', header)">Account Number</option>
+                                                <option value="balance" :disabled="isFieldTaken('balance', header)">Balance</option>
+                                            </select>
+                                        </td>
+                                        <td>
+                                            <span v-if="csvImport.autoMapping[header]" class="badge badge-success badge-sm" title="Auto-detected">&#10003;</span>
+                                            <span v-else class="text-muted small">—</span>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <!-- Conditional Account Selector (only when no account_number mapped) -->
+                        <div v-if="!csvImport.hasAccountNumberMapping" class="card mt-3 border-warning">
+                            <div class="card-body py-2">
+                                <div class="d-flex align-items-center">
+                                    <i class="fas fa-exclamation-triangle text-warning mr-2"></i>
+                                    <span class="small text-muted">No account number column mapped. All transactions will go to:</span>
+                                </div>
+                                <select class="form-control form-control-sm mt-2" v-model.number="csvImport.accountId">
+                                    <option value="" disabled>— Select destination account —</option>
+                                    <template v-for="bank in banks">
+                                        <optgroup :label="bank.institution_name">
+                                            <option v-for="acct in bank.accounts" :key="acct.id" :value="acct.id" v-if="acct.is_enabled">
+                                                [[ acct.name ]] <span v-if="acct.mask">(****[[ acct.mask ]])</span>
+                                            </option>
+                                        </optgroup>
+                                    </template>
+                                </select>
+                            </div>
+                        </div>
+                        <div v-else class="alert alert-success py-2">
+                            <i class="fas fa-check-circle mr-1"></i>
+                            <strong>Account Number</strong> column detected — transactions will be routed to matching accounts automatically.
+                        </div>
+
+                        <!-- Preview -->
+                        <div v-if="csvImport.preview.length" class="mt-3">
+                            <p class="text-muted mb-1"><strong>Preview (first [[ csvImport.preview.length ]] rows):</strong></p>
+                            <div class="table-responsive">
+                                <table class="table table-sm table-bordered">
+                                    <thead class="thead-light">
+                                        <tr>
+                                            <th v-for="header in csvImport.headers" :key="'ph-'+header">[[ header ]]</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr v-for="(row, idx) in csvImport.preview" :key="'pr-'+idx">
+                                            <td v-for="header in csvImport.headers" :key="'pd-'+idx+'-'+header">[[ row[header] ]]</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Save Template Option -->
+                        <div class="form-group mt-3">
+                            <div class="form-check">
+                                <input type="checkbox" class="form-check-input" id="saveCsvTemplate" v-model="csvImport.saveTemplate">
+                                <label class="form-check-label" for="saveCsvTemplate">Save this mapping as a template for future imports</label>
+                            </div>
+                            <div v-if="csvImport.saveTemplate" class="mt-2">
+                                <input type="text" class="form-control" placeholder="Template name (e.g. TD Chequing)" v-model="csvImport.newTemplateLabel">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" @click="csvImport.step = 1">Back</button>
+                        <button type="button" class="btn btn-primary" @click="executeCsvImport" :disabled="csvImport.importing">
+                            <span v-if="csvImport.importing"><i class="fas fa-spinner fa-spin"></i> Importing...</span>
+                            <span v-else><i class="fas fa-upload"></i> Import [[ csvImport.rowCount ]] Transactions</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Step 3: Results -->
+                <div v-show="csvImport.step === 3">
+                    <div class="modal-body">
+                        <div v-if="csvImport.result">
+                            <div class="text-center mb-4">
+                                <i class="fas fa-check-circle text-success" style="font-size: 3rem;"></i>
+                                <h4 class="mt-2">Import Complete</h4>
+                            </div>
+                            <table class="table table-sm">
+                                <tr>
+                                    <td><strong>New transactions imported</strong></td>
+                                    <td class="text-success">[[ csvImport.result.inserted ]]</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Pending transactions updated</strong></td>
+                                    <td class="text-warning">[[ csvImport.result.updated ]]</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Duplicates skipped</strong></td>
+                                    <td class="text-muted">[[ csvImport.result.skipped ]]</td>
+                                </tr>
+                            </table>
+                            <div v-if="csvImport.result.errors && csvImport.result.errors.length" class="alert alert-warning mt-3">
+                                <strong>[[ csvImport.result.total_errors ]] errors:</strong>
+                                <ul class="mb-0">
+                                    <li v-for="(err, idx) in csvImport.result.errors" :key="'err-'+idx">[[ err ]]</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-primary" @click="closeCsvImport">Done</button>
+                    </div>
                 </div>
             </div>
         </div>

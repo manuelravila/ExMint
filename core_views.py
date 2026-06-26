@@ -9,7 +9,8 @@ from models import (
     CustomCategory,
     CategoryRule,
     TransactionCategoryOverride,
-    Budget
+    Budget,
+    CsvImportTemplate,
 )
 from plaid.model.item_remove_request import ItemRemoveRequest
 from plaid.model.accounts_get_request import AccountsGetRequest
@@ -1599,10 +1600,9 @@ def handle_token_and_accounts():
     is_refresh = data.get('is_refresh', False)
 
     try:
-        # Fetch the webhook URL from the environment (via Config)
-        webhook_url = current_app.config['PLAID_WEBHOOK_URL']
-        if not webhook_url:
-            return jsonify({'error': 'Webhook URL is not configured in the environment.'}), 500
+        # Webhook URL is optional — skip webhook setup if not configured
+        webhook_url = current_app.config.get('PLAID_WEBHOOK_URL', '')
+        has_webhook = bool(webhook_url)
 
         if is_refresh:
             credential = db.session.get(Credential, credential_id)
@@ -1614,20 +1614,23 @@ def handle_token_and_accounts():
 
             access_token = credential.access_token
 
-            # Update the webhook for the existing item
-            webhook_update_request = {
-                'client_id': current_app.config['PLAID_CLIENT_ID'],
-                'secret': current_app.config['PLAID_SECRET'],
-                'access_token': access_token,
-                'webhook': webhook_url
-            }
-            webhook_update_response = current_app.plaid_client.item_webhook_update(webhook_update_request)
-            webhook_update_data = webhook_update_response.to_dict()
+            # Update the webhook for the existing item (only if webhook URL is configured)
+            if has_webhook:
+                webhook_update_request = {
+                    'client_id': current_app.config['PLAID_CLIENT_ID'],
+                    'secret': current_app.config['PLAID_SECRET'],
+                    'access_token': access_token,
+                    'webhook': webhook_url
+                }
+                webhook_update_response = current_app.plaid_client.item_webhook_update(webhook_update_request)
+                webhook_update_data = webhook_update_response.to_dict()
 
-            item_id = webhook_update_data['item']['item_id']
-            credential.item_id = item_id
-            db.session.commit()
-            current_app.logger.info('Credential %s refreshed, item_id=%s', credential_id, item_id)
+                item_id = webhook_update_data['item']['item_id']
+                credential.item_id = item_id
+                db.session.commit()
+                current_app.logger.info('Credential %s refreshed, item_id=%s', credential_id, item_id)
+            else:
+                current_app.logger.info('Credential %s refreshed (no webhook configured)', credential_id)
 
         else:
             public_token = data['public_token']
@@ -3592,3 +3595,533 @@ def maintenance_backup():
     response = current_app.response_class(output.getvalue(), mimetype='text/csv')
     response.headers['Content-Disposition'] = f'attachment; filename="{filename}"'
     return response
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CSV Import — analyse headers, auto-detect mapping, import transactions
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_CSV_FIELD_ALIASES = {
+    'date': [
+        'date', 'transaction date', 'posting date', 'post date', 'value date',
+        'trade date', 'trans date', 'trans. date', 'transaction_date',
+        'posted date', 'dated', 'entry date', 'effective date',
+    ],
+    'description': [
+        'description', 'memo', 'narration', 'details', 'transaction',
+        'transaction description', 'transaction_description', 'payee',
+        'merchant', 'name', 'transaction name', 'payee name', 'vendor',
+        'particulars', 'reference', 'remarks', 'narrative', 'notes',
+        'transaction details', 'merchant name', 'merchant_name',
+    ],
+    'debit': [
+        'debit', 'debit amount', 'withdrawal', 'debit ($)', 'withdrawals',
+        'withdrawal amount', 'charge', 'outflow', 'debit_amount',
+        'debit_amount_', 'debited', 'paid out', 'payment', 'spend',
+        'expense', 'paid', 'withdrawal amount',
+    ],
+    'credit': [
+        'credit', 'credit amount', 'deposit', 'credit ($)', 'deposits',
+        'deposit amount', 'inflow', 'credit_amount', 'credited',
+        'paid in', 'received', 'refund', 'repayment',
+    ],
+    'account_number': [
+        'account', 'account number', 'account #', 'account no',
+        'account no.', 'account_number', 'accountno', 'acct',
+        'acct #', 'account number', 'card number', 'card #',
+    ],
+    'check_number': [
+        'check', 'check number', 'check #', 'cheque', 'cheque number',
+        'cheque #', 'ref', 'reference', 'chq', 'chq #', 'tran id',
+        'transaction id', 'transaction id#', 'transaction id #',
+    ],
+    'category': [
+        'category', 'type', 'transaction type', 'classification',
+        'txn type', 'trans type', 'transaction_type',
+    ],
+    'balance': [
+        'balance', 'running balance', 'available balance',
+        'closing balance', 'opening balance', 'ledger balance',
+    ],
+}
+
+
+def _normalise_header(name):
+    """Strip whitespace, collapse multiple spaces, lowercase."""
+    return ' '.join(name.strip().lower().split())
+
+
+def _compute_header_hash(headers):
+    """SHA-256 of sorted, normalised header names."""
+    normalised = sorted(_normalise_header(h) for h in headers)
+    return hashlib.sha256('|'.join(normalised).encode()).hexdigest()
+
+
+def _auto_detect_mapping(headers):
+    """
+    Given a list of CSV column headers (strings), attempt to auto-detect
+    the best field mapping. Returns a dict: normalised_header -> field_name.
+    """
+    normalised = [_normalise_header(h) for h in headers]
+    mapping = {}
+    used_fields = set()
+
+    # Build reverse lookup: normalised alias -> canonical field
+    alias_to_field = {}
+    for field, aliases in _CSV_FIELD_ALIASES.items():
+        for alias in aliases:
+            normalised_alias = _normalise_header(alias)
+            alias_to_field[normalised_alias] = field
+
+    for idx, norm in enumerate(normalised):
+        # Direct match
+        if norm in alias_to_field:
+            field = alias_to_field[norm]
+            if field not in used_fields:
+                mapping[headers[idx]] = field
+                used_fields.add(field)
+                continue
+
+        # Substring match (e.g. "Transaction Amount" -> "amount")
+        matched = False
+        for field, aliases in _CSV_FIELD_ALIASES.items():
+            if field in used_fields:
+                continue
+            for alias in aliases:
+                normalised_alias = _normalise_header(alias)
+                # Check if either string contains the other
+                if norm in normalised_alias or normalised_alias in norm:
+                    mapping[headers[idx]] = field
+                    used_fields.add(field)
+                    matched = True
+                    break
+            if matched:
+                break
+
+        if not matched:
+            mapping[headers[idx]] = None  # unmapped
+
+    return mapping
+
+
+def _parse_date(value):
+    """Try to parse a date string, return date object or None."""
+    if not value or not value.strip():
+        return None
+    value = value.strip()
+    for fmt in ('%Y-%m-%d', '%m/%d/%Y', '%d/%m/%Y', '%m-%d-%Y', '%d-%m-%Y',
+                '%Y/%m/%d', '%m.%d.%Y', '%d.%m.%Y', '%Y%m%d',
+                '%b %d, %Y', '%B %d, %Y', '%d-%b-%Y', '%d-%b-%y',
+                '%m/%d/%y', '%d/%m/%y'):
+        try:
+            return datetime.strptime(value, fmt).date()
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
+def _parse_amount(value):
+    """Parse a monetary string to Decimal. Handles $, ,, (), negative."""
+    if not value or not value.strip():
+        return None
+    cleaned = value.strip()
+    # Remove currency symbols and spaces
+    for sym in ('$', '€', '£', '¥', 'USD', 'CAD', 'EUR', 'GBP', ','):
+        cleaned = cleaned.replace(sym, '')
+    cleaned = cleaned.strip()
+    # Handle parenthetical negatives: (123.45) -> -123.45
+    if cleaned.startswith('(') and cleaned.endswith(')'):
+        cleaned = '-' + cleaned[1:-1]
+    try:
+        return Decimal(cleaned)
+    except (InvalidOperation, TypeError):
+        return None
+
+
+def _preview_rows(rows, max_rows=3):
+    """Return the first N rows as a list of dicts for preview."""
+    return rows[:max_rows]
+
+
+@core.route('/api/transactions/import-csv/analyze', methods=['POST'])
+@login_required
+def csv_import_analyze():
+    """
+    Upload a CSV file for analysis. Returns:
+      - headers: list of column header strings
+      - auto_mapping: dict of header -> field (or null if unmapped)
+      - has_template: whether a saved template matches this header signature
+      - template_label: the matched template's label, if any
+      - preview: first 3 rows of data
+      - row_count: total number of data rows
+    """
+    if 'file' not in request.files:
+        return jsonify(error='No file provided'), 400
+
+    file = request.files['file']
+    if not file.filename:
+        return jsonify(error='Empty filename'), 400
+
+    try:
+        content = file.stream.read().decode('utf-8-sig')
+    except UnicodeDecodeError:
+        try:
+            file.stream.seek(0)
+            content = file.stream.read().decode('latin-1')
+        except Exception as e:
+            return jsonify(error=f'Cannot decode file: {str(e)}'), 400
+
+    reader = csv.DictReader(StringIO(content))
+    if not reader.fieldnames:
+        return jsonify(error='CSV has no headers'), 400
+
+    headers = reader.fieldnames
+    rows = list(reader)
+
+    if not rows:
+        return jsonify(error='CSV has no data rows'), 400
+
+    # Auto-detect mapping
+    auto_mapping = _auto_detect_mapping(headers)
+
+    # Check for a saved template matching this header signature
+    header_hash = _compute_header_hash(headers)
+    template = CsvImportTemplate.query.filter_by(
+        user_id=current_user.id,
+        header_hash=header_hash,
+    ).first()
+
+    # Apply saved template mapping if available (overrides auto-detect)
+    if template:
+        saved_mappings = json.loads(template.mappings)
+        auto_mapping.update({h: saved_mappings.get(h) for h in headers if h in saved_mappings})
+
+    return jsonify(
+        headers=headers,
+        auto_mapping=auto_mapping,
+        has_template=template is not None,
+        template_label=template.label if template else None,
+        preview=_preview_rows(rows[:5]),
+        row_count=len(rows),
+    )
+
+
+@core.route('/api/transactions/import-csv/import', methods=['POST'])
+@login_required
+def csv_import_execute():
+    """
+    Execute the CSV import with the user-supplied mapping.
+    Accepts multipart/form-data (FormData from frontend).
+    Fields:
+      - account_id: int (optional if account_number is in the mapping)
+      - mapping: str (JSON dict of csv_header -> field_name)
+      - save_template: str ('true'/'false')
+      - template_label: str (required if save_template=true)
+      - file: the CSV file
+
+    Returns:
+      - inserted: count of new transactions
+      - skipped: count of duplicates skipped
+      - updated: count of pending transactions replaced
+      - errors: list of row-level errors
+    """
+    # Read fields from multipart form (not JSON — frontend sends FormData)
+    account_id = request.form.get('account_id', type=int)
+    mapping_raw = request.form.get('mapping', '{}')
+    save_template = request.form.get('save_template', 'false').lower() == 'true'
+    template_label = request.form.get('template_label', '')
+
+    try:
+        mapping = json.loads(mapping_raw)
+    except (json.JSONDecodeError, TypeError):
+        return jsonify(error='Invalid mapping JSON'), 400
+
+    if not mapping:
+        return jsonify(error='mapping is required'), 400
+    if save_template and not template_label:
+        return jsonify(error='template_label is required when save_template=True'), 400
+
+    # Check if account_number is in the mapping
+    has_account_number_routing = any(f == 'account_number' for f in mapping.values())
+
+    # Validate account (required if no account_number routing)
+    default_account = None
+    if not has_account_number_routing:
+        if not account_id:
+            return jsonify(error='account_id is required when account_number is not mapped'), 400
+        default_account = Account.query.join(Credential).filter(
+            Account.id == account_id,
+            Credential.user_id == current_user.id,
+            Account.status == 'Active',
+        ).first()
+        if not default_account:
+            return jsonify(error='Account not found or not active'), 404
+    elif account_id:
+        # account_id provided as fallback — validate it
+        default_account = Account.query.join(Credential).filter(
+            Account.id == account_id,
+            Credential.user_id == current_user.id,
+            Account.status == 'Active',
+        ).first()
+
+    # Re-read the file from the request (stored as original file data)
+    # The frontend should re-send the file or we need to have cached it.
+    # Simpler approach: frontend sends the file again in the import step,
+    # or we change the protocol to accept file + mapping in one call.
+
+    # For now, also support the file being sent with the import request.
+    if 'file' in request.files:
+        file = request.files['file']
+        try:
+            content = file.stream.read().decode('utf-8-sig')
+        except UnicodeDecodeError:
+            file.stream.seek(0)
+            content = file.stream.read().decode('latin-1')
+    elif 'csv_content' in request.form:
+        content = request.form['csv_content']
+    else:
+        return jsonify(error='No file or csv_content provided. Re-upload the file or include csv_content.'), 400
+
+    reader = csv.DictReader(StringIO(content))
+    if not reader.fieldnames:
+        return jsonify(error='CSV has no headers'), 400
+
+    rows = list(reader)
+    if not rows:
+        return jsonify(error='CSV has no data rows'), 400
+
+    # Build reverse field -> header lookup
+    header_to_field = mapping  # header_name -> field_name
+
+    inserted = 0
+    skipped = 0
+    updated = 0
+    errors = []
+
+    credential_id = default_account.credential_id if default_account else None
+
+    # ── Multi-account support ───────────────────────────────────────────────
+    # If the CSV has an account_number column mapped, build a quick lookup of
+    # the user's active accounts by mask (last 4 digits).  For each row, if the
+    # CSV account number matches an existing account, route that row there.
+    # This lets a user import a CSV that contains multiple accounts at once.
+    account_number_header = None
+    account_by_mask = {}
+    for h, f in header_to_field.items():
+        if f == 'account_number':
+            account_number_header = h
+            break
+
+    if account_number_header:
+        # Fetch ALL active accounts for this user
+        all_user_accounts = Account.query.join(Credential).filter(
+            Credential.user_id == current_user.id,
+            Account.status == 'Active',
+        ).all()
+        for acct in all_user_accounts:
+            if acct.mask:
+                # Store by raw mask, last 4 chars, and any short variant
+                account_by_mask[acct.mask] = acct.id
+                account_by_mask[acct.mask.lstrip('0')] = acct.id
+
+    for row_idx, row in enumerate(rows):
+        try:
+            # Extract values from CSV using the mapping
+            date_val = None
+            name_val = None
+            debit_val = None
+            credit_val = None
+            amount_val = None
+            amount_cad_val = None
+            amount_usd_val = None
+            merchant_val = None
+            check_val = None
+            category_val = None
+            currency_code = None
+
+            for header, field in header_to_field.items():
+                raw = row.get(header, '').strip()
+                if not raw:
+                    continue
+
+                if field == 'date':
+                    date_val = _parse_date(raw)
+                elif field == 'description':
+                    name_val = raw
+                elif field == 'debit':
+                    debit_val = _parse_amount(raw)
+                elif field == 'credit':
+                    credit_val = _parse_amount(raw)
+                elif field == 'amount':
+                    amount_val = _parse_amount(raw)
+                elif field == 'amount_cad':
+                    amount_cad_val = _parse_amount(raw)
+                elif field == 'amount_usd':
+                    amount_usd_val = _parse_amount(raw)
+                elif field == 'merchant':
+                    merchant_val = raw
+                elif field == 'check_number':
+                    check_val = raw
+                elif field == 'category':
+                    category_val = raw
+
+            # Determine amount: CAD/USD columns take priority over debit/credit
+            if amount_cad_val is not None:
+                amount = amount_cad_val
+                currency_code = 'CAD'
+            elif amount_usd_val is not None:
+                amount = amount_usd_val
+                currency_code = 'USD'
+            elif debit_val is not None and credit_val is not None:
+                # Both present: debit is negative, credit is positive
+                amount = -(abs(debit_val)) if debit_val != 0 else credit_val
+            elif debit_val is not None:
+                amount = -(abs(debit_val))
+            elif credit_val is not None:
+                amount = abs(credit_val)
+            elif amount_val is not None:
+                amount = amount_val
+            else:
+                errors.append(f'Row {row_idx + 2}: no amount column mapped')
+                continue
+
+            if date_val is None:
+                errors.append(f'Row {row_idx + 2}: invalid or missing date')
+                continue
+
+            if not name_val:
+                name_val = 'Imported Transaction'
+
+            # Use merchant column if mapped, otherwise fall back to description
+            if not merchant_val:
+                merchant_val = name_val
+
+            # ── Multi-account: resolve account for this row ─────────────────
+            row_account_id = account_id
+            row_credential_id = credential_id
+            if account_number_header:
+                raw_acct = row.get(account_number_header, '').strip()
+                if raw_acct:
+                    # Try exact match, then last 4 chars
+                    lookup_key = raw_acct.replace(' ', '').replace('-', '').replace('*', '')
+                    matched_acct_id = account_by_mask.get(lookup_key)
+                    if matched_acct_id is None and len(lookup_key) >= 4:
+                        # Try last 4 chars only
+                        last4 = lookup_key[-4:]
+                        matched_acct_id = account_by_mask.get(last4)
+                        if matched_acct_id is None:
+                            # Also try without leading zeros
+                            matched_acct_id = account_by_mask.get(last4.lstrip('0'))
+                    if matched_acct_id:
+                        row_account_id = matched_acct_id
+                        # Resolve the credential for this account
+                        matched_acct = Account.query.get(matched_acct_id)
+                        if matched_acct:
+                            row_credential_id = matched_acct.credential_id
+
+            # Generate unique synthetic ID
+            synthetic_id = f'csv_{uuid4().hex}'
+
+            # Dedup: check for existing (account_id, date, amount, name)
+            existing = Transaction.query.filter_by(
+                account_id=row_account_id,
+                date=date_val,
+                amount=amount,
+                name=name_val,
+                is_removed=False,
+            ).first()
+
+            if existing:
+                if existing.pending:
+                    # Overwrite pending transaction
+                    existing.plaid_transaction_id = synthetic_id
+                    existing.merchant_name = merchant_val
+                    existing.category = category_val
+                    existing.pending = False
+                    existing.is_new = True
+                    existing.last_action = 'csv_import'
+                    updated += 1
+                else:
+                    # Skip — existing posted transaction
+                    skipped += 1
+                    continue
+            else:
+                txn = Transaction(
+                    plaid_transaction_id=synthetic_id,
+                    user_id=current_user.id,
+                    credential_id=row_credential_id,
+                    account_id=row_account_id,
+                    name=name_val,
+                    amount=amount,
+                    date=date_val,
+                    category=category_val,
+                    merchant_name=merchant_val,
+                    iso_currency_code=currency_code,
+                    pending=False,
+                    is_new=True,
+                    last_action='csv_import',
+                )
+                db.session.add(txn)
+                inserted += 1
+
+            # Commit every 50 rows to avoid long transactions
+            if (inserted + updated + skipped) % 50 == 0:
+                db.session.commit()
+
+        except Exception as e:
+            errors.append(f'Row {row_idx + 2}: {str(e)}')
+            continue
+
+    db.session.commit()
+
+    # Apply category rules to the newly imported transactions
+    if inserted + updated > 0:
+        apply_category_rules(current_user.id)
+
+    # Save template if requested
+    if save_template and inserted + updated > 0:
+        header_hash = _compute_header_hash(reader.fieldnames)
+        existing_template = CsvImportTemplate.query.filter_by(
+            user_id=current_user.id,
+            label=template_label,
+        ).first()
+
+        if existing_template:
+            existing_template.mappings = json.dumps(mapping)
+            existing_template.header_names = json.dumps(reader.fieldnames)
+            existing_template.header_hash = header_hash
+            existing_template.bank_name = (default_account.credential.institution_name if default_account and default_account.credential else None)
+        else:
+            tmpl = CsvImportTemplate(
+                label=template_label,
+                user_id=current_user.id,
+                header_hash=header_hash,
+                header_names=json.dumps(reader.fieldnames),
+                mappings=json.dumps(mapping),
+                bank_name=(default_account.credential.institution_name if default_account and default_account.credential else None),
+            )
+            db.session.add(tmpl)
+        db.session.commit()
+
+    return jsonify(
+        inserted=inserted,
+        skipped=skipped,
+        updated=updated,
+        errors=errors[:20],  # limit error reporting
+        total_errors=len(errors),
+    )
+
+
+@core.route('/api/transactions/import-csv/templates', methods=['GET'])
+@login_required
+def csv_import_get_templates():
+    """Return saved CSV import templates for the current user."""
+    templates = CsvImportTemplate.query.filter_by(user_id=current_user.id).all()
+    return jsonify(templates=[{
+        'id': t.id,
+        'label': t.label,
+        'bank_name': t.bank_name,
+        'header_names': json.loads(t.header_names),
+        'mappings': json.loads(t.mappings),
+        'created_at': t.created_at.isoformat() if t.created_at else None,
+    } for t in templates])

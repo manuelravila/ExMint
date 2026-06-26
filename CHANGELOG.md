@@ -1,3 +1,24 @@
+## [1.4.0] - 2026-06-26
+
+### Added
+
+- **CSV import redesign**: drag-and-drop upload zone with auto-analysis on file selection. Mapping table now shows sample values and auto-detection indicators.
+- **Multi-account CSV routing**: when an "Account Number" column is mapped, transactions are automatically routed to the correct account by matching last 4 digits of the account number.
+- **New mapping fields**: Merchant (separate from Description), Amount (CAD), and Amount (USD) with proper `iso_currency_code` tagging.
+- **Field conflict prevention**: once a field is mapped, it becomes disabled in all other column dropdowns to prevent duplicates.
+- **Inline validation**: Import button is always clickable — validation errors show a red toast with specific instructions and highlight problematic rows.
+- **Plaid Sandbox for dev**: dev environment now uses Plaid Sandbox with dedicated credentials, keeping production isolated.
+- **Category rules on CSV import**: automatic categorization rules are now applied to CSV-imported transactions, matching Plaid sync behavior.
+- **Webhook URL made optional**: `handle_token_and_accounts` no longer crashes when `PLAID_WEBHOOK_URL` is unset.
+
+### Fixed
+
+- **Preview showing headers instead of data**: `_preview_rows` was zipping dict keys instead of values — now returns raw `DictReader` rows.
+- **Modal backdrop not clearing**: import completion now uses Bootstrap's `.modal('hide')` which properly removes the backdrop and restores page interactivity.
+- **Bootstrap modal opacity conflict**: changed from `v-show` to `v-if` + `:class` with the `show` class for reliable Bootstrap modal display.
+- **Plaid link token credentials**: production keys were being sent to sandbox API — added env var override support and configured sandbox credentials.
+- **Backend import endpoint**: fixed to read from multipart form data instead of JSON body (FormData + file uploads).
+
 ## [1.3.2] - 2026-03-29
 
 ### Added

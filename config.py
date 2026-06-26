@@ -64,6 +64,9 @@ class Config:
         _key = os.getenv("SSL_KEY_PATH", "/app/dev_exmint_me.key")
         SSL_CONTEXT = (_cert, _key) if os.path.exists(_cert) and os.path.exists(_key) else None
 
+    # Allow PLAID_ENV override via environment variable (e.g. .env.dev can set PLAID_ENV=production)
+    PLAID_ENV = os.getenv("PLAID_ENV", PLAID_ENV)
+
     # Session cookie settings
     # SECURE=True and SAMESITE=None are required for HTTPS deployments.
     # In dev without SSL, SECURE must be False or the browser silently drops
