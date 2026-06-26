@@ -3626,9 +3626,9 @@ _CSV_FIELD_ALIASES = {
         'paid in', 'received', 'refund', 'repayment',
     ],
     'account_number': [
-        'account', 'account number', 'account #', 'account no',
+        'account number', 'account #', 'account no',
         'account no.', 'account_number', 'accountno', 'acct',
-        'acct #', 'account number', 'card number', 'card #',
+        'acct #', 'card number', 'card #',
     ],
     'check_number': [
         'check', 'check number', 'check #', 'cheque', 'cheque number',
@@ -3752,7 +3752,12 @@ def _parse_amount(value):
 
 def _preview_rows(rows, max_rows=3):
     """Return the first N rows as a list of dicts for preview."""
-    return rows[:max_rows]
+    result = []
+    for row in rows[:max_rows]:
+        # Strip any None keys (empty CSV columns) to prevent JSON serialization errors
+        clean = {k: v for k, v in row.items() if k is not None}
+        result.append(clean)
+    return result
 
 
 @core.route('/api/transactions/import-csv/analyze', methods=['POST'])
