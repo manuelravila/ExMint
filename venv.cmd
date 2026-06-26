@@ -1,0 +1,3 @@
+@echo off
+echo Starting virtual environment...
+call .\venv\Scripts\activate

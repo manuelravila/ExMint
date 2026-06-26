@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ExMint — Self-hosted personal finance</title>
+  <link rel="icon" href="images/favicon.ico" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --green:      #2c8f19;
+      --green-dark: #236814;
+      --green-light:#e6f4ea;
+      --blue:       #36bbff;
+      --blue-dim:   rgba(54,187,255,.12);
+      --dark:       #0d1117;
+      --dark-2:     #161b22;
+      --dark-3:     #21262d;
+      --border:     #30363d;
+      --text:       #e6edf3;
+      --muted:      #8b949e;
+      --white:      #ffffff;
+      --radius:     10px;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      background: var(--dark);
+      color: var(--text);
+      line-height: 1.6;
+    }
+
+    /* ── NAV ── */
+    nav {
+      position: sticky; top: 0; z-index: 100;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 2rem;
+      height: 64px;
+      background: rgba(13,17,23,.85);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+    }
+    .nav-logo { display: flex; align-items: center; gap: .75rem; text-decoration: none; }
+    .nav-logo img { height: 32px; }
+    .nav-logo span { font-weight: 700; font-size: 1.1rem; color: var(--white); letter-spacing: -.02em; }
+    .nav-links { display: flex; align-items: center; gap: 1.5rem; }
+    .nav-links a {
+      color: var(--muted); text-decoration: none; font-size: .9rem; font-weight: 500;
+      transition: color .2s;
+    }
+    .nav-links a:hover { color: var(--white); }
+    .btn-nav {
+      display: flex; align-items: center; gap: .4rem;
+      background: var(--green); color: var(--white) !important;
+      padding: .45rem 1rem; border-radius: 6px; font-size: .85rem !important;
+      transition: background .2s !important;
+    }
+    .btn-nav:hover { background: var(--green-dark) !important; color: var(--white) !important; }
+
+    /* ── HERO ── */
+    .hero {
+      position: relative; overflow: hidden;
+      padding: 7rem 2rem 6rem;
+      text-align: center;
+    }
+    .hero::before {
+      content: '';
+      position: absolute; inset: 0;
+      background: radial-gradient(ellipse 80% 50% at 50% -10%, rgba(44,143,25,.25) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .hero-badge {
+      display: inline-flex; align-items: center; gap: .5rem;
+      background: var(--blue-dim); color: var(--blue);
+      border: 1px solid rgba(54,187,255,.25);
+      padding: .3rem .9rem; border-radius: 999px;
+      font-size: .8rem; font-weight: 600; letter-spacing: .03em;
+      margin-bottom: 1.75rem;
+    }
+    .hero h1 {
+      font-size: clamp(2.4rem, 6vw, 4rem);
+      font-weight: 800; letter-spacing: -.04em;
+      line-height: 1.1;
+      color: var(--white);
+      max-width: 700px; margin: 0 auto 1.25rem;
+    }
+    .hero h1 span { color: var(--green); }
+    .hero p {
+      font-size: clamp(1rem, 2vw, 1.2rem);
+      color: var(--muted); max-width: 560px;
+      margin: 0 auto 2.5rem;
+    }
+    .hero-cta { display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
+    .btn-primary {
+      display: inline-flex; align-items: center; gap: .5rem;
+      background: var(--green); color: var(--white);
+      padding: .75rem 1.75rem; border-radius: var(--radius);
+      font-weight: 600; font-size: 1rem; text-decoration: none;
+      transition: background .2s, transform .15s;
+    }
+    .btn-primary:hover { background: var(--green-dark); transform: translateY(-1px); }
+    .btn-secondary {
+      display: inline-flex; align-items: center; gap: .5rem;
+      background: var(--dark-3); color: var(--text);
+      border: 1px solid var(--border);
+      padding: .75rem 1.75rem; border-radius: var(--radius);
+      font-weight: 600; font-size: 1rem; text-decoration: none;
+      transition: border-color .2s, transform .15s;
+    }
+    .btn-secondary:hover { border-color: var(--muted); transform: translateY(-1px); }
+
+    /* ── SCREENSHOT ── */
+    .screenshot-wrap {
+      max-width: 960px; margin: 4rem auto 0;
+      padding: 0 2rem;
+    }
+    .screenshot-frame {
+      background: var(--dark-2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 24px 80px rgba(0,0,0,.5);
+    }
+    .frame-bar {
+      display: flex; align-items: center; gap: .5rem;
+      padding: .75rem 1rem;
+      background: var(--dark-3);
+      border-bottom: 1px solid var(--border);
+    }
+    .frame-dot { width: 12px; height: 12px; border-radius: 50%; }
+    .frame-dot:nth-child(1) { background: #ff5f57; }
+    .frame-dot:nth-child(2) { background: #febc2e; }
+    .frame-dot:nth-child(3) { background: #28c840; }
+    .frame-url {
+      flex: 1; margin: 0 1rem;
+      background: var(--dark); border: 1px solid var(--border);
+      border-radius: 6px; padding: .2rem .75rem;
+      font-size: .75rem; color: var(--muted);
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .frame-content {
+      padding: 2.5rem;
+      display: grid; grid-template-columns: 220px 1fr;
+      gap: 1.5rem; min-height: 340px;
+    }
+    .mock-sidebar {
+      background: var(--green-light); border-radius: 8px;
+      padding: 1rem; display: flex; flex-direction: column; gap: .75rem;
+    }
+    .mock-sidebar-header {
+      font-size: .7rem; font-weight: 700; color: #2c6b4f;
+      text-transform: uppercase; letter-spacing: .08em; margin-bottom: .25rem;
+    }
+    .mock-bank {
+      background: white; border-radius: 6px; padding: .6rem .75rem;
+      font-size: .75rem; color: #333;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .mock-bank-name { font-weight: 600; color: #1f4d35; }
+    .mock-bank-bal { color: var(--green); font-weight: 700; font-size: .8rem; }
+    .mock-main { display: flex; flex-direction: column; gap: 1rem; }
+    .mock-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: .75rem; }
+    .mock-stat {
+      background: var(--dark-3); border: 1px solid var(--border);
+      border-radius: 8px; padding: .75rem 1rem;
+    }
+    .mock-stat-label { font-size: .65rem; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+    .mock-stat-val { font-size: 1.1rem; font-weight: 700; color: var(--white); margin-top: .15rem; }
+    .mock-stat-val.green { color: var(--green); }
+    .mock-stat-val.blue  { color: var(--blue); }
+    .mock-txns { background: var(--dark-3); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; flex: 1; }
+    .mock-txn-header {
+      display: grid; grid-template-columns: 80px 1fr 100px 90px;
+      gap: .5rem; padding: .5rem 1rem;
+      font-size: .65rem; color: var(--muted); text-transform: uppercase; letter-spacing: .06em;
+      border-bottom: 1px solid var(--border);
+    }
+    .mock-txn-row {
+      display: grid; grid-template-columns: 80px 1fr 100px 90px;
+      gap: .5rem; padding: .55rem 1rem;
+      font-size: .75rem; align-items: center;
+      border-bottom: 1px solid rgba(48,54,61,.5);
+    }
+    .mock-txn-row:last-child { border-bottom: none; }
+    .mock-date { color: var(--muted); }
+    .mock-desc { color: var(--text); font-weight: 500; }
+    .mock-cat { display: inline-block; padding: .15rem .5rem; border-radius: 999px; font-size: .65rem; font-weight: 600; }
+    .cat-green { background: rgba(44,143,25,.2); color: #5cb85c; }
+    .cat-blue  { background: rgba(54,187,255,.15); color: var(--blue); }
+    .cat-gray  { background: var(--dark); color: var(--muted); }
+    .mock-amount { text-align: right; font-weight: 600; color: #ff6b6b; }
+    .mock-amount.pos { color: var(--green); }
+
+    /* ── SECTION SHARED ── */
+    section { padding: 5rem 2rem; }
+    .section-label {
+      text-align: center; font-size: .8rem; font-weight: 700;
+      letter-spacing: .1em; text-transform: uppercase;
+      color: var(--green); margin-bottom: .75rem;
+    }
+    .section-title {
+      text-align: center; font-size: clamp(1.6rem, 4vw, 2.4rem);
+      font-weight: 800; letter-spacing: -.03em; color: var(--white);
+      margin-bottom: .75rem;
+    }
+    .section-sub {
+      text-align: center; color: var(--muted);
+      max-width: 520px; margin: 0 auto 3rem; font-size: .95rem;
+    }
+
+    /* ── FEATURES ── */
+    .features { background: var(--dark-2); }
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1.25rem; max-width: 1100px; margin: 0 auto;
+    }
+    .feature-card {
+      background: var(--dark); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 1.5rem;
+      transition: border-color .2s, transform .2s;
+    }
+    .feature-card:hover { border-color: var(--green); transform: translateY(-2px); }
+    .feature-icon {
+      font-size: 1.75rem; margin-bottom: .75rem;
+      width: 48px; height: 48px; display: flex; align-items: center; justify-content: center;
+      background: var(--green-light); border-radius: 10px;
+    }
+    .feature-card h3 { font-size: 1rem; font-weight: 700; color: var(--white); margin-bottom: .4rem; }
+    .feature-card p { font-size: .875rem; color: var(--muted); line-height: 1.6; }
+
+    /* ── QUICKSTART ── */
+    .quickstart-inner {
+      max-width: 760px; margin: 0 auto;
+      background: var(--dark-2); border: 1px solid var(--border);
+      border-radius: 12px; overflow: hidden;
+    }
+    .code-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: .75rem 1.25rem;
+      background: var(--dark-3); border-bottom: 1px solid var(--border);
+      font-size: .8rem; color: var(--muted);
+    }
+    .code-header span { font-family: 'JetBrains Mono', monospace; }
+    pre {
+      padding: 1.5rem 1.25rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: .82rem; line-height: 1.8;
+      color: var(--text); overflow-x: auto;
+    }
+    .c-comment { color: #8b949e; }
+    .c-cmd     { color: var(--blue); }
+    .c-str     { color: #a5d6ff; }
+    .c-flag    { color: #d2a8ff; }
+
+    /* ── STACK ── */
+    .stack { background: var(--dark-2); }
+    .stack-pills {
+      display: flex; flex-wrap: wrap; justify-content: center; gap: .75rem;
+      max-width: 800px; margin: 0 auto;
+    }
+    .pill {
+      display: flex; align-items: center; gap: .5rem;
+      background: var(--dark); border: 1px solid var(--border);
+      padding: .5rem 1.1rem; border-radius: 999px;
+      font-size: .875rem; font-weight: 500; color: var(--text);
+      transition: border-color .2s;
+    }
+    .pill:hover { border-color: var(--green); }
+    .pill-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
+    .pill-dot.blue { background: var(--blue); }
+
+    /* ── SUPPORT ── */
+    .support-cards {
+      display: flex; gap: 1.25rem; justify-content: center; flex-wrap: wrap;
+      max-width: 700px; margin: 0 auto;
+    }
+    .support-card {
+      flex: 1; min-width: 260px; max-width: 320px;
+      background: var(--dark-2); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 2rem 1.5rem;
+      text-align: center; text-decoration: none;
+      transition: border-color .2s, transform .2s;
+    }
+    .support-card:hover { border-color: var(--green); transform: translateY(-2px); }
+    .support-icon { font-size: 2.25rem; margin-bottom: .75rem; }
+    .support-card h3 { font-size: 1rem; font-weight: 700; color: var(--white); margin-bottom: .4rem; }
+    .support-card p { font-size: .85rem; color: var(--muted); }
+
+    /* ── FOOTER ── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 2rem;
+      text-align: center;
+      color: var(--muted); font-size: .85rem;
+    }
+    footer a { color: var(--muted); text-decoration: none; transition: color .2s; }
+    footer a:hover { color: var(--green); }
+    .footer-inner { display: flex; flex-direction: column; align-items: center; gap: .75rem; }
+    .footer-links { display: flex; gap: 1.5rem; flex-wrap: wrap; justify-content: center; }
+
+    /* ── RESPONSIVE ── */
+    @media (max-width: 700px) {
+      .frame-content { grid-template-columns: 1fr; }
+      .mock-sidebar { display: none; }
+      .mock-txn-header, .mock-txn-row { grid-template-columns: 70px 1fr 80px; }
+      .mock-txn-header > *:nth-child(3),
+      .mock-txn-row > *:nth-child(3) { display: none; }
+      nav { padding: 0 1rem; }
+      .nav-links { gap: 1rem; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <a href="#" class="nav-logo">
+    <img src="images/logomed.png" alt="ExMint" />
+    <span>ExMint</span>
+  </a>
+  <div class="nav-links">
+    <a href="#features">Features</a>
+    <a href="#quickstart">Quickstart</a>
+    <a href="#support">Support</a>
+    <a href="https://github.com/manuelravila/ExMint" target="_blank" rel="noopener" class="btn-nav">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>
+      GitHub
+    </a>
+  </div>
+</nav>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="hero-badge">
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>
+    Open Source · AGPL v3
+  </div>
+  <h1>Your finances,<br/><span>your server.</span></h1>
+  <p>Self-hosted personal finance dashboard. Connect your banks via Plaid, track spending, set budgets — on infrastructure you own.</p>
+  <div class="hero-cta">
+    <a href="https://github.com/manuelravila/ExMint" target="_blank" rel="noopener" class="btn-primary">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>
+      View on GitHub
+    </a>
+    <a href="https://exmint-app.automatos.ca" target="_blank" rel="noopener" class="btn-secondary">
+      Live Demo
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+    </a>
+  </div>
+
+  <!-- MOCK UI -->
+  <div class="screenshot-wrap">
+    <div class="screenshot-frame">
+      <div class="frame-bar">
+        <div class="frame-dot"></div>
+        <div class="frame-dot"></div>
+        <div class="frame-dot"></div>
+        <div class="frame-url">exmint-app.automatos.ca/dashboard</div>
+      </div>
+      <div class="frame-content">
+        <div class="mock-sidebar">
+          <div class="mock-sidebar-header">Connected Banks</div>
+          <div class="mock-bank"><span class="mock-bank-name">Scotiabank</span><span class="mock-bank-bal">+$4,821</span></div>
+          <div class="mock-bank"><span class="mock-bank-name">RBC Royal Bank</span><span class="mock-bank-bal">+$1,203</span></div>
+          <div class="mock-bank"><span class="mock-bank-name">American Express</span><span class="mock-bank-bal">-$392</span></div>
+        </div>
+        <div class="mock-main">
+          <div class="mock-stats">
+            <div class="mock-stat">
+              <div class="mock-stat-label">Net Balance</div>
+              <div class="mock-stat-val green">$5,632</div>
+            </div>
+            <div class="mock-stat">
+              <div class="mock-stat-label">This Month</div>
+              <div class="mock-stat-val">-$1,847</div>
+            </div>
+            <div class="mock-stat">
+              <div class="mock-stat-label">Transactions</div>
+              <div class="mock-stat-val blue">95</div>
+            </div>
+          </div>
+          <div class="mock-txns">
+            <div class="mock-txn-header">
+              <span>Date</span><span>Description</span><span>Category</span><span>Amount</span>
+            </div>
+            <div class="mock-txn-row">
+              <span class="mock-date">Mar 20</span>
+              <span class="mock-desc">Amazon Payments</span>
+              <span class="mock-cat cat-blue">Shopping</span>
+              <span class="mock-amount">-$39.54</span>
+            </div>
+            <div class="mock-txn-row">
+              <span class="mock-date">Mar 18</span>
+              <span class="mock-desc">Tree W Restaurant</span>
+              <span class="mock-cat cat-green">Dining</span>
+              <span class="mock-amount">-$138.08</span>
+            </div>
+            <div class="mock-txn-row">
+              <span class="mock-date">Mar 19</span>
+              <span class="mock-desc">Payroll Deposit</span>
+              <span class="mock-cat cat-gray">Income</span>
+              <span class="mock-amount pos">+$1,823</span>
+            </div>
+            <div class="mock-txn-row">
+              <span class="mock-date">Mar 17</span>
+              <span class="mock-desc">Dollar Tree</span>
+              <span class="mock-cat cat-green">Shops</span>
+              <span class="mock-amount">-$5.93</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FEATURES -->
+<section class="features" id="features">
+  <div class="section-label">Features</div>
+  <h2 class="section-title">Everything you need, nothing you don't</h2>
+  <p class="section-sub">Built for people who want full control over their financial data without handing it to a SaaS company.</p>
+  <div class="features-grid">
+    <div class="feature-card">
+      <div class="feature-icon">🏦</div>
+      <h3>Bank Connectivity</h3>
+      <p>Link accounts at thousands of institutions via Plaid Link. Real-time updates through webhooks, manual sync on demand.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🏷️</div>
+      <h3>Custom Categories</h3>
+      <p>Create color-coded categories and auto-apply rules. Override individual transactions. Split one charge across multiple buckets.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">📊</div>
+      <h3>Spending Reports</h3>
+      <p>Pivot spending by year → month → category. Click any category row to jump straight to those filtered transactions.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">📈</div>
+      <h3>Cash Flow Chart</h3>
+      <p>12-month net income vs. expense line chart, filterable by category to track any budget item over time.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🎯</div>
+      <h3>Budgets</h3>
+      <p>Set monthly targets per category. See 6-month averages and current-month actuals side by side to stay on track.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🔒</div>
+      <h3>Private by Design</h3>
+      <p>Your data never leaves your server. Plaid tokens encrypted at rest with Fernet. Deploy via Docker in minutes.</p>
+    </div>
+  </div>
+</section>
+
+<!-- QUICKSTART -->
+<section id="quickstart">
+  <div class="section-label">Get Started</div>
+  <h2 class="section-title">Up in under five minutes</h2>
+  <p class="section-sub">All you need is Docker, a database, and a free Plaid sandbox account.</p>
+  <div class="quickstart-inner">
+    <div class="code-header">
+      <span>bash</span>
+      <span>Docker Quickstart</span>
+    </div>
+    <pre><span class="c-comment"># 1. Clone the repo</span>
+<span class="c-cmd">git clone</span> <span class="c-str">https://github.com/manuelravila/ExMint.git</span>
+<span class="c-cmd">cd</span> ExMint
+
+<span class="c-comment"># 2. Configure your environment</span>
+<span class="c-cmd">cp</span> .env.example .env.dev
+<span class="c-comment">#    → Fill in DB credentials, Plaid keys, and SECRET_KEY</span>
+
+<span class="c-comment"># 3. Run migrations</span>
+<span class="c-cmd">docker-compose</span> <span class="c-flag">--env-file</span> .env.dev <span class="c-flag">-p</span> exmint-dev run <span class="c-flag">--rm</span> flask-app flask db upgrade
+
+<span class="c-comment"># 4. Start the app</span>
+<span class="c-cmd">docker-compose</span> <span class="c-flag">--env-file</span> .env.dev <span class="c-flag">-p</span> exmint-dev up <span class="c-flag">-d</span> <span class="c-flag">--build</span>
+
+<span class="c-comment"># Open http://localhost:5000 → register → connect a bank ✓</span></pre>
+  </div>
+</section>
+
+<!-- STACK -->
+<section class="stack">
+  <div class="section-label">Tech Stack</div>
+  <h2 class="section-title">Built on solid foundations</h2>
+  <p class="section-sub">No exotic dependencies. Standard tools you already know.</p>
+  <div class="stack-pills">
+    <div class="pill"><div class="pill-dot"></div>Python 3.13</div>
+    <div class="pill"><div class="pill-dot"></div>Flask 3</div>
+    <div class="pill"><div class="pill-dot"></div>SQLAlchemy</div>
+    <div class="pill"><div class="pill-dot blue"></div>Vue.js</div>
+    <div class="pill"><div class="pill-dot blue"></div>Bootstrap</div>
+    <div class="pill"><div class="pill-dot blue"></div>Chart.js</div>
+    <div class="pill"><div class="pill-dot"></div>MySQL / MariaDB</div>
+    <div class="pill"><div class="pill-dot"></div>Alembic</div>
+    <div class="pill"><div class="pill-dot blue"></div>Plaid API</div>
+    <div class="pill"><div class="pill-dot"></div>Docker</div>
+    <div class="pill"><div class="pill-dot"></div>Gunicorn</div>
+  </div>
+</section>
+
+<!-- SUPPORT -->
+<section id="support">
+  <div class="section-label">Support the Project</div>
+  <h2 class="section-title">Keep ExMint free & open</h2>
+  <p class="section-sub">ExMint is built and maintained in spare time. If it saves you money on a finance app subscription, consider buying the dev a coffee.</p>
+  <div class="support-cards">
+    <a href="https://www.buymeacoffee.com/manuelravila" target="_blank" rel="noopener" class="support-card">
+      <div class="support-icon">☕</div>
+      <h3>Buy Me a Coffee</h3>
+      <p>One-time or monthly support via Buy Me a Coffee</p>
+    </a>
+    <a href="https://www.paypal.com/paypalme/manuelravila" target="_blank" rel="noopener" class="support-card">
+      <div class="support-icon">💙</div>
+      <h3>PayPal</h3>
+      <p>Send a one-time contribution via PayPal</p>
+    </a>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <div class="footer-inner">
+    <img src="images/logosmall.png" alt="ExMint" style="height:28px;opacity:.6;" />
+    <div class="footer-links">
+      <a href="https://github.com/manuelravila/ExMint" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/manuelravila/ExMint/blob/main/LICENSE" target="_blank" rel="noopener">AGPL v3</a>
+      <a href="https://github.com/manuelravila/ExMint/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener">Contributing</a>
+      <a href="https://github.com/manuelravila/ExMint/issues" target="_blank" rel="noopener">Report a Bug</a>
+    </div>
+    <span>© 2026 ExMint Contributors — Released under the GNU Affero General Public License v3.0</span>
+  </div>
+</footer>
+
+</body>
+</html>
