@@ -3643,6 +3643,18 @@ _CSV_FIELD_ALIASES = {
         'balance', 'running balance', 'available balance',
         'closing balance', 'opening balance', 'ledger balance',
     ],
+    'amount_cad': [
+        'amount cad', 'cad $', 'cad$', 'cad amount', 'amount (cad)',
+        'cad', 'canadian $', 'canadian dollars', 'cad amount',
+    ],
+    'amount_usd': [
+        'amount usd', 'us $', 'us$', 'usd amount', 'amount (usd)',
+        'usd', 'american $', 'us dollars', 'usd amount',
+    ],
+    'merchant': [
+        'merchant', 'merchant name', 'merchant_name', 'vendor',
+        'payee', 'payee name', 'store', 'shop',
+    ],
 }
 
 
@@ -3797,8 +3809,8 @@ def csv_import_analyze():
         auto_mapping.update({h: saved_mappings.get(h) for h in headers if h in saved_mappings})
 
     return jsonify(
-        headers=headers,
-        auto_mapping=auto_mapping,
+        headers=[h for h in headers if h is not None],
+        auto_mapping={k: v for k, v in auto_mapping.items() if k is not None},
         has_template=template is not None,
         template_label=template.label if template else None,
         preview=_preview_rows(rows[:5]),
