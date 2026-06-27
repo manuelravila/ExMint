@@ -2844,6 +2844,7 @@ const app = new Vue({
             }
 
             const requestToken = ++this.transactionsRequestToken;
+            this.selectedTransactionIds = [];
 
             if (!skipLoadingState) {
                 this.loading = true;
