@@ -75,7 +75,7 @@ class Config:
     SESSION_COOKIE_SECURE = _ssl_active
     SESSION_COOKIE_SAMESITE = "None" if _ssl_active else "Lax"
     SESSION_COOKIE_PATH = "/"
-    PERMANENT_SESSION_LIFETIME = 900  # 15 minutes
+    PERMANENT_SESSION_LIFETIME = 86400  # 24 hours (was 15 min — too short for finance app)
 
     # Plaid credentials
     PLAID_CLIENT_ID = get_secret("PLAID_CLIENT_ID")

@@ -30,6 +30,15 @@ def create_app():
     db.init_app(app)
     migrate.init_app(app, db)
 
+    # API-friendly unauthorized handler (returns JSON 401 instead of 302 redirect)
+    @login_manager.unauthorized_handler
+    def unauthorized():
+        from flask import request as _req, jsonify as _jsonify, redirect as _redirect, url_for as _url_for
+        if _req.path.startswith('/api/'):
+            return _jsonify({'error': 'Authentication required. Please log in again.'}), 401
+        # For non-API routes, redirect to login page (Flask-Login default behavior)
+        return _redirect(_url_for(login_manager.login_view, next=_req.path))
+
     # Configure CORS
     cors_origins = [
         "http://localhost:5000",  # Local dev URL without sandbox
