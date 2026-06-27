@@ -417,8 +417,14 @@ const app = new Vue({
             return !!(this.filters.search || this.filters.startDate || this.filters.endDate || this.filters.customCategoryId || this.filters.amountMin || this.filters.amountMax);
         },
         hasAccountNumberMapping: function() {
-            var values = Object.values(this.csvImport.userMapping);
-            return values.indexOf('account_number') !== -1;
+            var self = this;
+            var found = false;
+            this.csvImport.headers.forEach(function(h) {
+                if (self.csvImport.userMapping[h] === 'account_number') {
+                    found = true;
+                }
+            });
+            return found;
         },
         hasValidMapping: function() {
             if (!this.csvImport.headers.length) return false;
