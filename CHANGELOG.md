@@ -1,10 +1,16 @@
+## [1.4.3] - 2026-06-27
+
+### Fixed
+
+- **Deployment pipeline**: `deploy-prod.sh` properly syncs all branches and rebuilds PROD container.
+- **Session expiry handling**: API endpoints now return JSON 401 instead of 302 HTML redirect when session expires (fixes "Unexpected token '<'" error on category changes).
+- **Increased session lifetime** from 15 min to 24 hours to prevent premature logout during idle periods.
+
 ## [1.4.2] - 2026-06-27
 
 ### Fixed
 
 - **Removed debug console logs** from CSV import flow (fix confirmed working).
-- **Session expiry handling**: API endpoints now return JSON 401 instead of 302 HTML redirect when session expires (fixes "Unexpected token '<'" error on category changes).
-- **Increased session lifetime** from 15 min to 24 hours to prevent premature logout during idle periods.
 
 ## [1.4.1] - 2026-06-27
 
