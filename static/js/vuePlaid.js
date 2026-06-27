@@ -424,7 +424,6 @@ const app = new Vue({
                     found = true;
                 }
             });
-            console.log("[DEBUG] hasAccountNumberMapping headers=", this.csvImport.headers, "userMapping=", JSON.stringify(this.csvImport.userMapping), "result=", found);
             return found;
         },
         hasValidMapping: function() {
@@ -3333,7 +3332,6 @@ const app = new Vue({
         },
 
         executeCsvImport: async function() {
-            console.log("[DEBUG] executeCsvImport called, hasAccountNumberMapping=", this.hasAccountNumberMapping, "accountId=", this.csvImport.accountId);
             
             // Clear previous errors
             this.csvImport.mappingErrors = {};

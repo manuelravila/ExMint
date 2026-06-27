@@ -1,3 +1,9 @@
+## [1.4.2] - 2026-06-27
+
+### Fixed
+
+- **Removed debug console logs** from CSV import flow (fix confirmed working).
+
 ## [1.4.1] - 2026-06-27
 
 ### Fixed
