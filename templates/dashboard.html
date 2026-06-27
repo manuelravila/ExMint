@@ -1906,7 +1906,7 @@
 {% block scripts %}
     <script src="https://cdn.jsdelivr.net/npm/chart.js@2.7.1/dist/Chart.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/vue-chartjs@3.5.1/dist/vue-chartjs.min.js"></script>
-    <script src="{{ url_for('static', filename='js/vuePlaid.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/vuePlaid.js') }}?v={{ config.VERSION }}"></script>
     <script type="text/javascript">
         $(document).ready(function() {
             // Check if the my connections modal should be open
