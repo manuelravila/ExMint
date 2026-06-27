@@ -424,6 +424,7 @@ const app = new Vue({
                     found = true;
                 }
             });
+            console.log("[DEBUG] hasAccountNumberMapping headers=", this.csvImport.headers, "userMapping=", JSON.stringify(this.csvImport.userMapping), "result=", found);
             return found;
         },
         hasValidMapping: function() {

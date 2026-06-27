@@ -1,3 +1,9 @@
+## [1.4.1] - 2026-06-27
+
+### Fixed
+
+- **Yellow warning box not disappearing**: template was referencing `csvImport.hasAccountNumberMapping` (non-existent data property) instead of `hasAccountNumberMapping` (computed property). The computed was never evaluated so the warning always showed, even with Account Number correctly mapped.
+
 ## [1.4.0] - 2026-06-26
 
 ### Added
