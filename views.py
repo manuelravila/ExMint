@@ -95,7 +95,8 @@ def dashboard_data():
         banks_data.append({
             'id': bank.id,
             'institution_name': bank.institution_name,
-            'requires_update': bank.requires_update
+            'requires_update': bank.requires_update,
+            'soft_disconnected': bank.soft_disconnected
         })
 
     return jsonify({'banks': banks_data})

@@ -81,6 +81,7 @@ class Credential(db.Model):
     institution_name = db.Column(db.String(100))
     access_token = db.Column(EncryptedType(db.String, key))
     requires_update = db.Column(db.Boolean, default=False, nullable=False)
+    soft_disconnected = db.Column(db.Boolean, default=False, nullable=False)
     transactions_cursor = db.Column(db.String(512), nullable=True)
 
 class Account(db.Model):

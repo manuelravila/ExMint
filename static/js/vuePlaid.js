@@ -3261,6 +3261,24 @@ const app = new Vue({
                 alert('An error occurred while removing the bank connection.');
             }
         },
+        softDisconnectBank: async function(bank) {
+            if (!confirm(`Pause ${bank.institution_name}?\n\n• Online sync via Plaid will stop\n• Accounts and history stay visible\n• You can still import CSV transactions\n• Reconnect anytime via My Connections`)) {
+                return;
+            }
+            try {
+                const response = await fetch(`/api/soft_disconnect_bank/${bank.id}`, { method: 'POST' });
+                const data = await response.json();
+                if (data.success) {
+                    await this.refreshData();
+                    $('#myConnectionsModal').modal('hide');
+                } else {
+                    alert(data.message || 'Failed to pause bank connection.');
+                }
+            } catch (error) {
+                console.error('Error pausing bank:', error);
+                alert('An error occurred while pausing the bank connection.');
+            }
+        },
         openMaintenanceModal: function() {
             // Reset state each time the modal is opened
             this.maintenance.duplicateGroups = null;

@@ -1240,6 +1240,322 @@ def revoke_api_key(key_id):
 
 
 # ---------------------------------------------------------------------------
+#  CSV Import via API (API key auth)
+# ---------------------------------------------------------------------------
+
+import csv as _csv
+from io import StringIO as _StringIO
+from functools import wraps
+
+
+@api_v1.route('/transactions/import-csv/analyze', methods=['POST'])
+@require_api_auth
+def api_csv_import_analyze():
+    """Analyze CSV text or file — returns headers, auto-mapping, preview.
+
+    Accepts:
+      - JSON: {\"csv_content\": \"date,amount,...\\n2024-01-01,...\"}
+      - multipart/form-data with a `file` field (same as UI)
+    """
+    if 'file' in request.files:
+        return csv_import_analyze()
+
+    data = request.get_json(silent=True) or {}
+    csv_text = data.get('csv_content', '')
+    if not csv_text:
+        return jsonify(error='csv_content required'), 400
+
+    # Manually replicate the analyze logic for JSON input
+    from core_views import _auto_detect_mapping, _compute_header_hash, _preview_rows
+    from models import CsvImportTemplate
+
+    try:
+        content = csv_text.encode('utf-8-sig').decode('utf-8-sig')
+    except UnicodeDecodeError:
+        return jsonify(error='Cannot decode CSV'), 400
+
+    reader = _csv.DictReader(_StringIO(content))
+    if not reader.fieldnames:
+        return jsonify(error='CSV has no headers'), 400
+
+    headers = [h for h in reader.fieldnames if h is not None]
+    rows = list(reader)
+    if not rows:
+        return jsonify(error='CSV has no data rows'), 400
+
+    auto_mapping = _auto_detect_mapping(headers)
+
+    header_hash = _compute_header_hash(headers)
+    template = CsvImportTemplate.query.filter_by(
+        user_id=g.api_user.id,
+        header_hash=header_hash,
+    ).first()
+
+    if template:
+        saved = json.loads(template.mappings)
+        auto_mapping.update({h: saved.get(h) for h in headers if h in saved})
+
+    return jsonify(
+        headers=headers,
+        auto_mapping={k: v for k, v in auto_mapping.items() if k is not None},
+        has_template=template is not None,
+        template_label=template.label if template else None,
+        preview=_preview_rows(rows[:5]),
+        row_count=len(rows),
+    )
+
+
+@api_v1.route('/transactions/import-csv/import', methods=['POST'])
+@require_api_auth
+def api_csv_import_execute():
+    """Execute a CSV import with the given mapping.
+
+    Accepts JSON:
+      - csv_content: raw CSV text (required)
+      - mapping: dict of csv_header -> field_name (required)
+      - account_id: int (optional if account_number in mapping)
+      - save_template: bool (optional)
+      - template_label: str (required if save_template=true)
+    """
+    data = request.get_json(silent=True) or {}
+    csv_text = data.get('csv_content', '')
+    mapping = data.get('mapping', {})
+    account_id = data.get('account_id')
+    save_template = data.get('save_template', False)
+    template_label = data.get('template_label', '')
+
+    if not csv_text:
+        return jsonify(error='csv_content required'), 400
+    if not mapping:
+        return jsonify(error='mapping required'), 400
+
+    # Reuse core_views helpers
+    from core_views import (
+        _parse_date, _parse_amount, _auto_detect_mapping,
+        _compute_header_hash,
+    )
+
+    try:
+        content = csv_text.encode('utf-8-sig').decode('utf-8-sig')
+    except UnicodeDecodeError:
+        return jsonify(error='Cannot decode CSV'), 400
+
+    reader = _csv.DictReader(_StringIO(content))
+    if not reader.fieldnames:
+        return jsonify(error='CSV has no headers'), 400
+
+    headers = [h for h in reader.fieldnames if h is not None]
+    rows = list(reader)
+    if not rows:
+        return jsonify(error='CSV has no data rows'), 400
+
+    header_to_field = mapping
+
+    has_account_number_routing = any(f == 'account_number' for f in mapping.values())
+
+    default_account = None
+    if not has_account_number_routing:
+        if not account_id:
+            return jsonify(error='account_id required when account_number not mapped'), 400
+        default_account = Account.query.join(Credential).filter(
+            Account.id == account_id,
+            Credential.user_id == g.api_user.id,
+            Account.status == 'Active',
+        ).first()
+        if not default_account:
+            return jsonify(error='Account not found or not active'), 404
+    elif account_id:
+        default_account = Account.query.join(Credential).filter(
+            Account.id == account_id,
+            Credential.user_id == g.api_user.id,
+            Account.status == 'Active',
+        ).first()
+
+    inserted = 0
+    skipped = 0
+    updated = 0
+    errors = []
+
+    credential_id = default_account.credential_id if default_account else None
+
+    # Multi-account routing by mask
+    account_number_header = None
+    account_by_mask = {}
+    for h, f in header_to_field.items():
+        if f == 'account_number':
+            account_number_header = h
+            break
+
+    if account_number_header:
+        all_user_accounts = Account.query.join(Credential).filter(
+            Credential.user_id == g.api_user.id,
+            Account.status == 'Active',
+        ).all()
+        for acct in all_user_accounts:
+            if acct.mask:
+                account_by_mask[acct.mask] = acct.id
+                account_by_mask[acct.mask.lstrip('0')] = acct.id
+
+    for row_idx, row in enumerate(rows):
+        try:
+            date_val = None
+            name_val = None
+            debit_val = None
+            credit_val = None
+            amount_val = None
+            amount_cad_val = None
+            amount_usd_val = None
+            merchant_val = None
+            currency_code = None
+
+            for header, field in header_to_field.items():
+                raw = row.get(header, '').strip()
+                if not raw:
+                    continue
+                if field == 'date':
+                    date_val = _parse_date(raw)
+                elif field == 'description':
+                    name_val = raw
+                elif field == 'debit':
+                    debit_val = _parse_amount(raw)
+                elif field == 'credit':
+                    credit_val = _parse_amount(raw)
+                elif field == 'amount':
+                    amount_val = _parse_amount(raw)
+                elif field == 'amount_cad':
+                    amount_cad_val = _parse_amount(raw)
+                    currency_code = 'CAD'
+                elif field == 'amount_usd':
+                    amount_usd_val = _parse_amount(raw)
+                    currency_code = 'USD'
+                elif field == 'merchant':
+                    merchant_val = raw
+
+            final_amount = None
+            if amount_cad_val is not None:
+                final_amount = amount_cad_val
+                currency_code = 'CAD'
+            elif amount_usd_val is not None:
+                final_amount = amount_usd_val
+                currency_code = 'USD'
+            elif debit_val is not None and credit_val is not None:
+                final_amount = -(abs(debit_val)) if debit_val != 0 else credit_val
+            elif debit_val is not None:
+                final_amount = -(abs(debit_val))
+            elif credit_val is not None:
+                final_amount = abs(credit_val)
+            elif amount_val is not None:
+                final_amount = amount_val
+
+            if date_val is None or name_val is None or final_amount is None:
+                errors.append({'row': row_idx + 2, 'error': 'Missing required fields'})
+                continue
+
+            target_account_id = None
+            if account_number_header:
+                csv_acct = row.get(account_number_header, '').strip()
+                lookup_key = csv_acct[-4:] if len(csv_acct) >= 4 else csv_acct
+                lookup_key = lookup_key.replace('-', '').replace(' ', '')
+                matched_acct_id = account_by_mask.get(lookup_key)
+                if matched_acct_id:
+                    target_account_id = matched_acct_id
+                    matched_acct = Account.query.get(matched_acct_id)
+                    if matched_acct:
+                        credential_id = matched_acct.credential_id
+                else:
+                    last4 = csv_acct[-4:].replace('-', '').replace(' ', '')
+                    matched_acct_id = account_by_mask.get(last4)
+                    if matched_acct_id:
+                        target_account_id = matched_acct_id
+                        matched_acct = Account.query.get(matched_acct_id)
+                        if matched_acct:
+                            credential_id = matched_acct.credential_id
+
+            if not target_account_id and default_account:
+                target_account_id = default_account.id
+
+            if not target_account_id:
+                errors.append({'row': row_idx + 2, 'error': 'Could not determine target account'})
+                continue
+
+            existing = Transaction.query.filter(
+                Transaction.account_id == target_account_id,
+                Transaction.date == date_val,
+                Transaction.amount == final_amount,
+                Transaction.name == name_val,
+                Transaction.is_removed.is_(False),
+            ).first()
+
+            if existing:
+                if existing.pending:
+                    existing.amount = final_amount
+                    existing.name = name_val
+                    if merchant_val:
+                        existing.merchant_name = merchant_val
+                    existing.pending = False
+                    existing.is_removed = False
+                    existing.is_new = True
+                    updated += 1
+                else:
+                    skipped += 1
+                continue
+
+            from uuid import uuid4
+            new_txn = Transaction(
+                plaid_transaction_id=f'csv_{uuid4().hex}',
+                user_id=g.api_user.id,
+                credential_id=credential_id,
+                account_id=target_account_id,
+                name=name_val,
+                amount=final_amount,
+                iso_currency_code=currency_code or 'CAD',
+                merchant_name=merchant_val or name_val,
+                date=date_val,
+                pending=False,
+                is_new=True,
+            )
+            db.session.add(new_txn)
+            inserted += 1
+
+        except Exception as exc:
+            current_app.logger.exception('CSV import row %s error: %s', row_idx + 2, exc)
+            errors.append({'row': row_idx + 2, 'error': str(exc)})
+
+    if inserted > 0 or updated > 0:
+        apply_category_rules(g.api_user.id)
+
+    db.session.commit()
+
+    # Save template if requested
+    if save_template and template_label:
+        from models import CsvImportTemplate
+        header_hash = _compute_header_hash(headers)
+        existing_tpl = CsvImportTemplate.query.filter_by(
+            user_id=g.api_user.id,
+            header_hash=header_hash,
+        ).first()
+        if existing_tpl:
+            existing_tpl.mappings = json.dumps(mapping)
+            existing_tpl.updated_at = datetime.utcnow()
+        else:
+            db.session.add(CsvImportTemplate(
+                label=template_label,
+                user_id=g.api_user.id,
+                header_hash=header_hash,
+                header_names=json.dumps(headers),
+                mappings=json.dumps(mapping),
+            ))
+        db.session.commit()
+
+    return jsonify(
+        inserted=inserted,
+        skipped=skipped,
+        updated=updated,
+        errors=errors,
+    )
+
+
+# ---------------------------------------------------------------------------
 #  Helpers
 # ---------------------------------------------------------------------------
 

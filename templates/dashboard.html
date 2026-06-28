@@ -229,6 +229,7 @@
                                 <label class="sr-only" :for="`bank-${bank.id}`">Toggle [[ bank.institution_name ]]</label>
                             </div>
                             <span class="institution-name">[[ bank.institution_name ]]</span>
+                            <span v-if="bank.soft_disconnected" class="badge badge-secondary ml-1" style="font-size: 0.65rem;">CSV Only</span>
                             <button
                                 v-if="bank.requires_update"
                                 type="button"
@@ -1586,9 +1587,13 @@
                         <div class="modal-body">
                             <ul>
                                 <li v-for="bank in banks" :key="bank.id" class="list-group-item d-flex justify-content-between align-items-center">
-                                    <span class="bank-name">[[ bank.institution_name ]]</span>
+                                    <span class="bank-name">[[ bank.institution_name ]]
+                                        <span v-if="bank.soft_disconnected" class="badge badge-secondary ml-1">CSV Only</span>
+                                    </span>
                                     <div class="button-group">
-                                        <button class="btn btn-secondary btn-sm mr-2" @click="startReconnect(bank.id)">Reconnect</button>
+                                        <button v-if="bank.soft_disconnected" class="btn btn-success btn-sm mr-2" @click="startReconnect(bank.id)">Reconnect</button>
+                                        <button v-else class="btn btn-secondary btn-sm mr-2" @click="startReconnect(bank.id)">Reconnect</button>
+                                        <button v-if="!bank.soft_disconnected" class="btn btn-warning btn-sm mr-2" @click="softDisconnectBank(bank)">Pause</button>
                                         <button class="btn btn-danger btn-sm" @click="removeBank(bank)">Remove</button>
                                     </div>
                                 </li>

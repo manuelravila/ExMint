@@ -1635,14 +1635,44 @@ def handle_token_and_accounts():
         else:
             public_token = data['public_token']
             institution_name = data.get('institution_name', 'Unknown')
+            is_reconnect = False
             exchange_request = ItemPublicTokenExchangeRequest(public_token=public_token)
             exchange_response = current_app.plaid_client.item_public_token_exchange(exchange_request)
             access_token = exchange_response['access_token']
             item_id = exchange_response['item_id']
             current_app.logger.info('New Plaid connection created, item_id=%s', item_id)
 
+            # ── Reconnect a soft-disconnected (paused) institution ──────────
+            # If there's already a soft-disconnected credential for this institution,
+            # update it in-place instead of creating a duplicate. This keeps the
+            # same credential ID so accounts and transactions are naturally linked.
+            paused_cred = Credential.query.filter_by(
+                user_id=current_user.id,
+                institution_name=institution_name,
+                soft_disconnected=True,
+            ).first()
+            if paused_cred:
+                current_app.logger.info(
+                    'Reconnecting paused credential %s (%s)',
+                    paused_cred.id, institution_name
+                )
+                paused_cred.access_token = access_token
+                paused_cred.item_id = item_id
+                paused_cred.soft_disconnected = False
+                paused_cred.requires_update = False
+                db.session.flush()
+                credential = paused_cred
+                credential_id = credential.id
+                # Fetch accounts from Plaid for the account sync below
+                accounts_response = current_app.plaid_client.accounts_get(
+                    AccountsGetRequest(access_token=access_token)
+                )
+                accounts_data = accounts_response.to_dict().get('accounts', [])
+                # Reconnect complete — skip duplicate guard and new-credential creation
+                is_reconnect = True
+
             # Fast path: exact same Plaid item re-submitted (item_id already stored).
-            if Credential.query.filter_by(user_id=current_user.id, item_id=item_id).first():
+            if not is_reconnect and Credential.query.filter_by(user_id=current_user.id, item_id=item_id).first():
                 current_app.logger.warning(
                     'Duplicate connection attempt blocked for user=%s item_id=%s',
                     current_user.id, item_id
@@ -1652,54 +1682,55 @@ def handle_token_and_accounts():
                              'Use the reconnect option to refresh it instead.'
                 }), 409
 
-            # Fetch the account list before persisting anything so we can run the duplicate
-            # guard without a second round-trip to Plaid later (reused in the sync loop).
-            accounts_response = current_app.plaid_client.accounts_get(
-                AccountsGetRequest(access_token=access_token)
-            )
-            accounts_data = accounts_response.to_dict().get('accounts', [])
-
-            # Duplicate guard: block only when every account Plaid returned is already
-            # stored under another credential for this user at the same institution.
-            # A legitimate second connection (e.g., a couple sharing one ExMint account)
-            # would include at least one account whose mask/name is not yet in our DB.
-            def _account_already_exists(acct):
-                m, n = acct.get('mask'), acct.get('name')
-                if not m:
-                    return False  # no mask — cannot determine, assume new
-                return bool(
-                    Account.query.join(Credential)
-                    .filter(
-                        Credential.user_id == current_user.id,
-                        Credential.institution_name == institution_name,
-                        Account.mask == m,
-                        Account.name == n,
-                        Account.status == 'Active',  # Revoked accounts must not block re-connection
-                    ).first()
+            if not is_reconnect:
+                # Fetch the account list before persisting anything so we can run the duplicate
+                # guard without a second round-trip to Plaid later (reused in the sync loop).
+                accounts_response = current_app.plaid_client.accounts_get(
+                    AccountsGetRequest(access_token=access_token)
                 )
+                accounts_data = accounts_response.to_dict().get('accounts', [])
 
-            if accounts_data and all(_account_already_exists(a) for a in accounts_data):
-                deactivate_plaid_token(access_token)
-                current_app.logger.warning(
-                    'Duplicate connection attempt blocked for user=%s institution=%r item_id=%s',
-                    current_user.id, institution_name, item_id
+                # Duplicate guard: block only when every account Plaid returned is already
+                # stored under another credential for this user at the same institution.
+                # A legitimate second connection (e.g., a couple sharing one ExMint account)
+                # would include at least one account whose mask/name is not yet in our DB.
+                def _account_already_exists(acct):
+                    m, n = acct.get('mask'), acct.get('name')
+                    if not m:
+                        return False  # no mask — cannot determine, assume new
+                    return bool(
+                        Account.query.join(Credential)
+                        .filter(
+                            Credential.user_id == current_user.id,
+                            Credential.institution_name == institution_name,
+                            Account.mask == m,
+                            Account.name == n,
+                            Account.status == 'Active',  # Revoked accounts must not block re-connection
+                        ).first()
+                    )
+
+                if accounts_data and all(_account_already_exists(a) for a in accounts_data):
+                    deactivate_plaid_token(access_token)
+                    current_app.logger.warning(
+                        'Duplicate connection attempt blocked for user=%s institution=%r item_id=%s',
+                        current_user.id, institution_name, item_id
+                    )
+                    return jsonify({
+                        'error': f'{institution_name} is already connected. '
+                                 'Use the reconnect option to refresh it instead.'
+                    }), 409
+
+                credential = Credential(
+                    user_id=current_user.id,
+                    access_token=access_token,
+                    institution_name=institution_name,
+                    item_id=item_id,
+                    requires_update=False
                 )
-                return jsonify({
-                    'error': f'{institution_name} is already connected. '
-                             'Use the reconnect option to refresh it instead.'
-                }), 409
+                db.session.add(credential)
+                db.session.commit()
 
-            credential = Credential(
-                user_id=current_user.id,
-                access_token=access_token,
-                institution_name=institution_name,
-                item_id=item_id,
-                requires_update=False
-            )
-            db.session.add(credential)
-            db.session.commit()
-
-            credential_id = credential.id
+                credential_id = credential.id
 
         # For new credentials, accounts were already fetched inside the else branch above
         # as part of the duplicate guard.  For the is_refresh path, fetch them now.
@@ -2116,7 +2147,9 @@ def sync_transactions():
     ensure_category_schema()
     def handler():
         user = current_user
-        active_credentials = Credential.query.filter_by(user_id=user.id, status='Active').all()
+        active_credentials = Credential.query.filter_by(
+            user_id=user.id, status='Active', soft_disconnected=False
+        ).all()
 
         summary = []
         errors = []
@@ -2241,6 +2274,7 @@ def get_banks():
             'id': bank.id,
             'institution_name': bank.institution_name,
             'requires_update': bank.requires_update,
+            'soft_disconnected': bank.soft_disconnected,
             'accounts': accounts_data
         })
 
@@ -3226,6 +3260,46 @@ def fetch_balances():
         return jsonify({"balances": balances})
     except plaid.ApiException as e:
         return jsonify(json.loads(e.body)), e.status
+
+@core.route('/api/soft_disconnect_bank/<int:bank_id>', methods=['POST'])
+@login_required
+def soft_disconnect_bank(bank_id):
+    """Soft-disconnect (pause) an institution.
+
+    - Calls Plaid /item/remove to stop charges
+    - Nulls the access_token
+    - Sets soft_disconnected = True
+    - Does NOT touch accounts or transactions — they stay visible in the dashboard
+    """
+    credential = Credential.query.filter_by(id=bank_id, user_id=current_user.id).first()
+
+    if not credential:
+        return jsonify({'success': False, 'message': 'Credential not found'}), 404
+
+    if credential.soft_disconnected:
+        return jsonify({'success': True, 'message': 'Already soft-disconnected'}), 200
+
+    # Remove the Plaid item to stop charges (best-effort — token may already be invalid)
+    if credential.access_token:
+        success, plaid_response = deactivate_plaid_token(credential.access_token)
+        if not success:
+            current_app.logger.warning(
+                'Plaid item_remove failed for credential %s (proceeding): %s',
+                bank_id, plaid_response
+            )
+
+    credential.access_token = None
+    credential.soft_disconnected = True
+    credential.requires_update = False
+    db.session.commit()
+
+    current_app.logger.info(
+        'Soft-disconnected credential %s (%s)',
+        bank_id, credential.institution_name
+    )
+    session['connections_modal_open'] = True
+    return jsonify({'success': True, 'message': 'Institution paused. Accounts and historical data retained.'}), 200
+
 
 @core.route('/api/remove_bank/<int:bank_id>', methods=['DELETE'])
 @login_required
