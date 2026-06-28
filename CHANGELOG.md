@@ -1,3 +1,13 @@
+## [1.5.1] - 2026-06-28
+
+### Added
+
+- **Soft Disconnect (Pause Institution)**: pause an institution's Plaid connection while keeping accounts visible and CSV import working. Plaid item is removed (stops charges), access token nulled, but the institution stays on the dashboard with all historical transactions.
+- **Pause button** in My Connections modal — yellow button between Reconnect and Remove for active institutions. Paused institutions show a "CSV Only" badge and the Pause button is replaced with a green Reconnect button.
+- **Sync skips paused institutions** — no more `ITEM_LOGIN_REQUIRED` errors for soft-disconnected credentials.
+- **Reconnect support** — reconnecting a paused institution via Plaid Link updates the existing credential in-place (new access_token, item_id, soft_disconnected=False), keeping all historical accounts and transactions.
+- **API v1 CSV import endpoints** — `POST /api/v1/transactions/import-csv/analyze` and `POST /api/v1/transactions/import-csv/import` with API key auth. Accept JSON with `csv_content` (raw CSV text) or multipart file upload.
+
 ## [1.5.0] - 2026-06-27
 
 ### Added
