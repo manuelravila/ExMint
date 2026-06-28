@@ -4,7 +4,7 @@ A machine-oriented API layer that mirrors the UI's core actions.
 Designed for programmatic access: sync, query, categorize.
 """
 
-from flask import Blueprint, jsonify, request, current_app
+from flask import Blueprint, jsonify, request, current_app, g
 from flask_login import login_required, current_user
 from models import (
     db,
@@ -14,14 +14,18 @@ from models import (
     CustomCategory,
     CategoryRule,
     TransactionCategoryOverride,
+    ApiKey,
 )
 from sqlalchemy import and_, or_, func, asc, desc
 from sqlalchemy.orm import joinedload, aliased
 from decimal import Decimal
 from datetime import datetime, date
 import json
+import hashlib
+import secrets
 from uuid import uuid4
 import plaid
+from werkzeug.security import check_password_hash
 
 from config import Config
 from version import __version__ as VERSION
@@ -57,13 +61,71 @@ from core_views import (
 
 api_v1 = Blueprint('api_v1', __name__, url_prefix='/api/v1')
 
+# ---------------------------------------------------------------------------
+#  API Key authentication
+# ---------------------------------------------------------------------------
+
+def _hash_api_key(raw_key):
+    """Hash a raw API key for storage using SHA-256."""
+    return hashlib.sha256(raw_key.encode()).hexdigest()
+
+
+def _generate_api_key():
+    """Generate a secure random API key with a readable prefix."""
+    raw = secrets.token_hex(32)  # 64 hex chars = 256 bits
+    prefix = raw[:8]  # first 8 chars for identification
+    return f"exm_{prefix}_{raw[8:]}", raw, prefix
+
+
+def _lookup_api_user(raw_key):
+    """Look up a user by API key. Returns the User or None."""
+    if not raw_key:
+        return None
+    key_hash = _hash_api_key(raw_key)
+    record = ApiKey.query.filter_by(key_hash=key_hash, is_active=True).first()
+    if record:
+        record.last_used_at = datetime.utcnow()
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+        from models import User
+        return db.session.get(User, record.user_id)
+    return None
+
+
+def require_api_auth(f):
+    """Decorator that authenticates via X-API-Key header or Flask-Login session.
+
+    The resolved user is available as ``g.api_user`` for endpoint use.
+    Returns 401 JSON if neither method provides a valid user.
+    """
+    from functools import wraps
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        api_key = request.headers.get('X-API-Key')
+        if api_key:
+            user = _lookup_api_user(api_key)
+            if user is None:
+                return jsonify({'error': 'Invalid or inactive API key.'}), 401
+            g.api_user = user
+            return f(*args, **kwargs)
+
+        # Fall back to Flask-Login session auth
+        if current_user.is_authenticated:
+            g.api_user = current_user._get_current_object()
+            return f(*args, **kwargs)
+
+        return jsonify({'error': 'Authentication required. Provide X-API-Key header or log in.'}), 401
+    return decorated
+
 
 # ---------------------------------------------------------------------------
 #  Sync
 # ---------------------------------------------------------------------------
 
 @api_v1.route('/sync', methods=['POST'])
-@login_required
+@require_api_auth
 def sync_all():
     """Sync transactions for all active institutions.
 
@@ -90,7 +152,7 @@ def sync_all():
     ensure_category_schema()
 
     def handler():
-        user = current_user
+        user = g.api_user
         active_creds = Credential.query.filter_by(
             user_id=user.id, status='Active'
         ).all()
@@ -164,7 +226,7 @@ def sync_all():
 # ---------------------------------------------------------------------------
 
 @api_v1.route('/transactions', methods=['GET'])
-@login_required
+@require_api_auth
 def get_transactions():
     """Query transactions with the same filters as the UI.
 
@@ -190,7 +252,7 @@ def get_transactions():
     ensure_category_schema()
 
     def handler():
-        user_id = current_user.id
+        user_id = g.api_user.id
         args = request.args
 
         # Parse base filters using the same parser core_views uses.
@@ -274,7 +336,7 @@ def get_transactions():
 
 
 @api_v1.route('/transactions/uncategorized', methods=['GET'])
-@login_required
+@require_api_auth
 def get_uncategorized():
     """Shortcut: get uncategorized transactions in a date range.
 
@@ -289,7 +351,7 @@ def get_uncategorized():
     ensure_category_schema()
 
     def handler():
-        user_id = current_user.id
+        user_id = g.api_user.id
         args = request.args
         end = _parse_date(args.get('end_date')) or date.today()
         start = _parse_date(args.get('start_date')) or (
@@ -353,7 +415,7 @@ def get_uncategorized():
 # ---------------------------------------------------------------------------
 
 @api_v1.route('/transactions/<int:transaction_id>/category', methods=['PATCH'])
-@login_required
+@require_api_auth
 def set_transaction_category(transaction_id):
     """Assign a custom category to a single transaction.
 
@@ -375,7 +437,7 @@ def set_transaction_category(transaction_id):
             joinedload(Transaction.account),
             joinedload(Transaction.credential),
             joinedload(Transaction.custom_category),
-        ).filter_by(id=transaction_id, user_id=current_user.id).first()
+        ).filter_by(id=transaction_id, user_id=g.api_user.id).first()
 
         if not txn:
             return jsonify({'error': 'Transaction not found.'}), 404
@@ -396,7 +458,7 @@ def set_transaction_category(transaction_id):
             txn.custom_category_id = None
             db.session.flush()
             apply_rules_to_transactions(
-                current_user.id, transaction_ids=[txn.id]
+                g.api_user.id, transaction_ids=[txn.id]
             )
             db.session.commit()
             override_map = _load_overrides([txn.id])
@@ -408,7 +470,7 @@ def set_transaction_category(transaction_id):
         fallback_label = ' / '.join(plaid_cats) if plaid_cats else None
         plaid_candidates = [fallback_label] if fallback_label else []
 
-        existing = _find_custom_category(current_user.id, label)
+        existing = _find_custom_category(g.api_user.id, label)
         normalized_color = None
         if explicit_color:
             try:
@@ -442,7 +504,7 @@ def set_transaction_category(transaction_id):
                         }), 409
 
             category = CustomCategory(
-                user_id=current_user.id,
+                user_id=g.api_user.id,
                 name=trimmed,
                 color=normalized_color or DEFAULT_MANUAL_COLOR,
             )
@@ -469,7 +531,7 @@ def set_transaction_category(transaction_id):
 
 
 @api_v1.route('/transactions/bulk-category', methods=['PATCH'])
-@login_required
+@require_api_auth
 def bulk_set_transaction_category():
     """Assign a custom category to multiple transactions at once.
 
@@ -512,7 +574,7 @@ def bulk_set_transaction_category():
             )
             .filter(
                 Transaction.id.in_(txn_ids),
-                Transaction.user_id == current_user.id,
+                Transaction.user_id == g.api_user.id,
             )
             .all()
         )
@@ -532,7 +594,7 @@ def bulk_set_transaction_category():
                 t.custom_category_id = None
             db.session.flush()
             apply_rules_to_transactions(
-                current_user.id, transaction_ids=real_ids
+                g.api_user.id, transaction_ids=real_ids
             )
             db.session.commit()
             override_map = _load_overrides(real_ids)
@@ -549,7 +611,7 @@ def bulk_set_transaction_category():
             except ValueError:
                 normalized_color = None
 
-        existing = _find_custom_category(current_user.id, label)
+        existing = _find_custom_category(g.api_user.id, label)
         if existing:
             category = existing
             if normalized_color and category.color != normalized_color:
@@ -576,7 +638,7 @@ def bulk_set_transaction_category():
                             }), 409
 
             category = CustomCategory(
-                user_id=current_user.id,
+                user_id=g.api_user.id,
                 name=trimmed,
                 color=normalized_color or DEFAULT_MANUAL_COLOR,
             )
@@ -617,7 +679,7 @@ def bulk_set_transaction_category():
 # ---------------------------------------------------------------------------
 
 @api_v1.route('/categories', methods=['GET'])
-@login_required
+@require_api_auth
 def list_categories():
     """List all custom categories for the current user.
 
@@ -627,13 +689,13 @@ def list_categories():
 
     def handler():
         cats = (
-            CustomCategory.query.filter_by(user_id=current_user.id)
+            CustomCategory.query.filter_by(user_id=g.api_user.id)
             .order_by(func.lower(CustomCategory.name).asc(), CustomCategory.id.asc())
             .all()
         )
         cat_ids = [c.id for c in cats]
         r_counts, t_counts, o_counts = _collect_custom_category_stats(
-            current_user.id, cat_ids
+            g.api_user.id, cat_ids
         )
         serialized = [
             _serialize_custom_category(c, {
@@ -645,14 +707,14 @@ def list_categories():
         ]
         return jsonify({
             'categories': serialized,
-            'labels': _collect_category_labels(current_user.id),
+            'labels': _collect_category_labels(g.api_user.id),
         })
 
     return _with_schema_retry(handler)
 
 
 @api_v1.route('/categories', methods=['POST'])
-@login_required
+@require_api_auth
 def create_category():
     """Create a new custom category.
 
@@ -684,12 +746,12 @@ def create_category():
         except ValueError as exc:
             return jsonify({'error': str(exc)}), 400
 
-        existing = _find_custom_category(current_user.id, name)
+        existing = _find_custom_category(g.api_user.id, name)
         if existing:
             return jsonify({'error': 'A category with this name already exists.'}), 400
 
         cat = CustomCategory(
-            user_id=current_user.id, name=name, color=color
+            user_id=g.api_user.id, name=name, color=color
         )
         db.session.add(cat)
         db.session.commit()
@@ -698,21 +760,21 @@ def create_category():
             'category': _serialize_custom_category(cat, {
                 'rule_count': 0, 'transaction_count': 0, 'override_count': 0,
             }),
-            'labels': _collect_category_labels(current_user.id),
+            'labels': _collect_category_labels(g.api_user.id),
         }), 201
 
     return _with_schema_retry(handler)
 
 
 @api_v1.route('/categories/<int:category_id>', methods=['PUT'])
-@login_required
+@require_api_auth
 def update_category(category_id):
     """Update a custom category's name and/or colour."""
     ensure_category_schema()
 
     def handler():
         cat = CustomCategory.query.filter_by(
-            id=category_id, user_id=current_user.id
+            id=category_id, user_id=g.api_user.id
         ).first()
         if not cat:
             return jsonify({'error': 'Custom category not found.'}), 404
@@ -731,7 +793,7 @@ def update_category(category_id):
                 trimmed = trimmed[:255]
             if trimmed.lower() != (cat.name or '').lower():
                 dup = CustomCategory.query.filter(
-                    CustomCategory.user_id == current_user.id,
+                    CustomCategory.user_id == g.api_user.id,
                     func.lower(CustomCategory.name) == trimmed.lower(),
                     CustomCategory.id != cat.id,
                 ).first()
@@ -756,7 +818,7 @@ def update_category(category_id):
         db.session.commit()
 
         r_counts, t_counts, o_counts = _collect_custom_category_stats(
-            current_user.id, [cat.id]
+            g.api_user.id, [cat.id]
         )
         return jsonify({
             'category': _serialize_custom_category(cat, {
@@ -764,21 +826,21 @@ def update_category(category_id):
                 'transaction_count': int(t_counts.get(cat.id, 0)),
                 'override_count': int(o_counts.get(cat.id, 0)),
             }),
-            'labels': _collect_category_labels(current_user.id),
+            'labels': _collect_category_labels(g.api_user.id),
         })
 
     return _with_schema_retry(handler)
 
 
 @api_v1.route('/categories/<int:category_id>', methods=['DELETE'])
-@login_required
+@require_api_auth
 def delete_category(category_id):
     """Delete a custom category.  Unlinks it from all transactions."""
     ensure_category_schema()
 
     def handler():
         cat = CustomCategory.query.filter_by(
-            id=category_id, user_id=current_user.id
+            id=category_id, user_id=g.api_user.id
         ).first()
         if not cat:
             return jsonify({'error': 'Custom category not found.'}), 404
@@ -795,7 +857,7 @@ def delete_category(category_id):
 # ---------------------------------------------------------------------------
 
 @api_v1.route('/categories/rules', methods=['GET'])
-@login_required
+@require_api_auth
 def list_category_rules():
     """List all automatic categorisation rules.
 
@@ -807,20 +869,20 @@ def list_category_rules():
     def handler():
         rules = (
             CategoryRule.query.options(joinedload(CategoryRule.category))
-            .filter_by(user_id=current_user.id)
+            .filter_by(user_id=g.api_user.id)
             .order_by(CategoryRule.created_at.desc(), CategoryRule.id.desc())
             .all()
         )
         return jsonify({
             'rules': [_serialize_category(r) for r in rules],
-            'labels': _collect_category_labels(current_user.id),
+            'labels': _collect_category_labels(g.api_user.id),
         })
 
     return _with_schema_retry(handler)
 
 
 @api_v1.route('/categories/rules', methods=['POST'])
-@login_required
+@require_api_auth
 def create_category_rule():
     """Create an automatic categorisation rule.
 
@@ -879,14 +941,14 @@ def create_category_rule():
             except (TypeError, ValueError):
                 return jsonify({'error': 'Invalid category_id.'}), 400
             category = CustomCategory.query.filter_by(
-                id=cat_id, user_id=current_user.id
+                id=cat_id, user_id=g.api_user.id
             ).first()
             if not category:
                 return jsonify({'error': 'Category not found.'}), 404
         else:
             try:
                 category = _get_or_create_custom_category(
-                    current_user.id,
+                    g.api_user.id,
                     cat_name,
                     color=payload.get('color'),
                 )
@@ -894,7 +956,7 @@ def create_category_rule():
                 return jsonify({'error': str(exc)}), 400
 
         rule = CategoryRule(
-            user_id=current_user.id,
+            user_id=g.api_user.id,
             category_id=category.id,
             text_to_match=text,
             field_to_match=field,
@@ -906,20 +968,20 @@ def create_category_rule():
         db.session.add(rule)
         db.session.flush()
 
-        summary = apply_category_rules(current_user.id)
+        summary = apply_category_rules(g.api_user.id)
         db.session.commit()
 
         return jsonify({
             'rule': _serialize_category(rule),
             'summary': summary,
-            'labels': _collect_category_labels(current_user.id),
+            'labels': _collect_category_labels(g.api_user.id),
         }), 201
 
     return _with_schema_retry(handler)
 
 
 @api_v1.route('/categories/rules/<int:rule_id>', methods=['PUT'])
-@login_required
+@require_api_auth
 def update_category_rule(rule_id):
     """Update an automatic categorisation rule."""
     ensure_category_schema()
@@ -927,7 +989,7 @@ def update_category_rule(rule_id):
     def handler():
         rule = CategoryRule.query.options(
             joinedload(CategoryRule.category)
-        ).filter_by(id=rule_id, user_id=current_user.id).first()
+        ).filter_by(id=rule_id, user_id=g.api_user.id).first()
         if not rule:
             return jsonify({'error': 'Category rule not found.'}), 404
 
@@ -968,14 +1030,14 @@ def update_category_rule(rule_id):
             except (TypeError, ValueError):
                 return jsonify({'error': 'Invalid category_id.'}), 400
             category = CustomCategory.query.filter_by(
-                id=cat_id, user_id=current_user.id
+                id=cat_id, user_id=g.api_user.id
             ).first()
             if not category:
                 return jsonify({'error': 'Category not found.'}), 404
         else:
             try:
                 category = _get_or_create_custom_category(
-                    current_user.id,
+                    g.api_user.id,
                     cat_name,
                     color=payload.get('color'),
                 )
@@ -991,40 +1053,40 @@ def update_category_rule(rule_id):
         rule.category = category
 
         db.session.flush()
-        summary = apply_category_rules(current_user.id)
+        summary = apply_category_rules(g.api_user.id)
         db.session.commit()
 
         return jsonify({
             'rule': _serialize_category(rule),
             'summary': summary,
-            'labels': _collect_category_labels(current_user.id),
+            'labels': _collect_category_labels(g.api_user.id),
         })
 
     return _with_schema_retry(handler)
 
 
 @api_v1.route('/categories/rules/<int:rule_id>', methods=['DELETE'])
-@login_required
+@require_api_auth
 def delete_category_rule(rule_id):
     """Delete an automatic categorisation rule (re-evaluates transactions)."""
     ensure_category_schema()
 
     def handler():
         rule = CategoryRule.query.filter_by(
-            id=rule_id, user_id=current_user.id
+            id=rule_id, user_id=g.api_user.id
         ).first()
         if not rule:
             return jsonify({'error': 'Category rule not found.'}), 404
 
         db.session.delete(rule)
         db.session.flush()
-        summary = apply_category_rules(current_user.id)
+        summary = apply_category_rules(g.api_user.id)
         db.session.commit()
 
         return jsonify({
             'deleted': rule_id,
             'summary': summary,
-            'labels': _collect_category_labels(current_user.id),
+            'labels': _collect_category_labels(g.api_user.id),
         })
 
     return _with_schema_retry(handler)
@@ -1035,14 +1097,14 @@ def delete_category_rule(rule_id):
 # ---------------------------------------------------------------------------
 
 @api_v1.route('/accounts', methods=['GET'])
-@login_required
+@require_api_auth
 def list_accounts():
     """List active accounts, optionally filtered by institution.
 
     Query params:
       institution_id   int   Filter accounts belonging to this credential
     """
-    user_id = current_user.id
+    user_id = g.api_user.id
     inst_id = request.args.get('institution_id')
 
     query = Account.query.join(Credential).filter(
@@ -1073,11 +1135,11 @@ def list_accounts():
 
 
 @api_v1.route('/institutions', methods=['GET'])
-@login_required
+@require_api_auth
 def list_institutions():
     """List all active institutions (credentials) for the current user."""
     banks = Credential.query.filter_by(
-        user_id=current_user.id, status='Active'
+        user_id=g.api_user.id, status='Active'
     ).all()
     result = []
     for b in banks:
@@ -1101,6 +1163,80 @@ def list_institutions():
             'accounts': accounts,
         })
     return jsonify({'institutions': result})
+
+
+# ---------------------------------------------------------------------------
+#  API Key management
+# ---------------------------------------------------------------------------
+
+@api_v1.route('/admin/api-keys', methods=['GET'])
+@login_required
+def list_api_keys():
+    """List API keys for the currently logged-in user (session only)."""
+    keys = ApiKey.query.filter_by(user_id=current_user.id).order_by(
+        ApiKey.created_at.desc()
+    ).all()
+    return jsonify({
+        'api_keys': [
+            {
+                'id': k.id,
+                'key_prefix': k.key_prefix + '...',
+                'name': k.name,
+                'is_active': k.is_active,
+                'created_at': k.created_at.isoformat() if k.created_at else None,
+                'last_used_at': k.last_used_at.isoformat() if k.last_used_at else None,
+            }
+            for k in keys
+        ]
+    })
+
+
+@api_v1.route('/admin/api-keys', methods=['POST'])
+@login_required
+def create_api_key():
+    """Generate a new API key. Returns the full key **once** — store it securely.
+
+    Body (JSON):
+      {"name": "Agent API Key"}   # optional human-friendly label
+
+    Response includes the raw key (shown only on creation).
+    """
+    payload = request.get_json() or {}
+    name = (payload.get('name') or '').strip() or f'key_{secrets.token_hex(4)}'
+
+    full_key, raw_key, prefix = _generate_api_key()
+    key_hash = _hash_api_key(full_key)
+
+    record = ApiKey(
+        key_hash=key_hash,
+        key_prefix=prefix,
+        user_id=current_user.id,
+        name=name,
+    )
+    db.session.add(record)
+    db.session.commit()
+
+    return jsonify({
+        'api_key': {
+            'id': record.id,
+            'name': record.name,
+            'key_prefix': prefix + '...',
+            'key': full_key,  # only returned once
+            'created_at': record.created_at.isoformat(),
+        }
+    }), 201
+
+
+@api_v1.route('/admin/api-keys/<int:key_id>', methods=['DELETE'])
+@login_required
+def revoke_api_key(key_id):
+    """Revoke (deactivate) an API key. It can no longer authenticate."""
+    record = ApiKey.query.filter_by(id=key_id, user_id=current_user.id).first()
+    if not record:
+        return jsonify({'error': 'API key not found.'}), 404
+    record.is_active = False
+    db.session.commit()
+    return jsonify({'revoked': key_id})
 
 
 # ---------------------------------------------------------------------------

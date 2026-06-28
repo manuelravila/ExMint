@@ -210,3 +210,21 @@ class Budget(db.Model):
     amount = db.Column(db.Numeric(14, 2), nullable=False)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+
+class ApiKey(db.Model):
+    __tablename__ = 'api_keys'
+
+    id = db.Column(db.Integer, primary_key=True)
+    key_hash = db.Column(db.String(256), nullable=False, unique=True)
+    key_prefix = db.Column(db.String(32), nullable=False)  # first 12+ chars for identification
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    name = db.Column(db.String(100), nullable=False)
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
+    last_used_at = db.Column(db.DateTime, nullable=True)
+
+    user = db.relationship('User', backref=db.backref('api_keys', lazy=True))
+
+    def __repr__(self):
+        return f'<ApiKey {self.key_prefix}... for user {self.user_id}>'
