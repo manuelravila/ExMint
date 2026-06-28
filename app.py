@@ -74,8 +74,10 @@ def create_app():
     # Register blueprints
     from views import views as views_blueprint
     from core_views import core as core_blueprint
+    from api_views import api_v1 as api_v1_blueprint
     app.register_blueprint(views_blueprint)
     app.register_blueprint(core_blueprint)
+    app.register_blueprint(api_v1_blueprint)
 
     @app.before_request
     def before_request():

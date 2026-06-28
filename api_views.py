@@ -1,0 +1,1142 @@
+"""api_views.py — ExMint API v1 blueprint
+
+A machine-oriented API layer that mirrors the UI's core actions.
+Designed for programmatic access: sync, query, categorize.
+"""
+
+from flask import Blueprint, jsonify, request, current_app
+from flask_login import login_required, current_user
+from models import (
+    db,
+    Credential,
+    Account,
+    Transaction,
+    CustomCategory,
+    CategoryRule,
+    TransactionCategoryOverride,
+)
+from sqlalchemy import and_, or_, func, asc, desc
+from sqlalchemy.orm import joinedload, aliased
+from decimal import Decimal
+from datetime import datetime, date
+import json
+from uuid import uuid4
+import plaid
+
+from config import Config
+from version import __version__ as VERSION
+
+# Reuse internal helpers from core_views to stay in sync with UI behaviour.
+from core_views import (
+    _sync_credential_transactions,
+    _parse_transaction_filters,
+    _build_transactions_query,
+    _serialize_transaction,
+    _load_overrides,
+    _serialize_custom_category,
+    _serialize_category,
+    _collect_category_labels,
+    _collect_custom_category_stats,
+    _find_custom_category,
+    _get_or_create_custom_category,
+    _normalize_category_name,
+    _normalize_color,
+    _validate_category_name,
+    _resolve_rule_field,
+    _resolve_rule_type,
+    _parse_decimal_value,
+    _extract_label,
+    apply_category_rules,
+    apply_rules_to_transactions,
+    ensure_category_schema,
+    _with_schema_retry,
+    DEFAULT_MANUAL_COLOR,
+    UNCATEGORIZED_LABEL,
+    FALLBACK_CATEGORY_COLOR,
+)
+
+api_v1 = Blueprint('api_v1', __name__, url_prefix='/api/v1')
+
+
+# ---------------------------------------------------------------------------
+#  Sync
+# ---------------------------------------------------------------------------
+
+@api_v1.route('/sync', methods=['POST'])
+@login_required
+def sync_all():
+    """Sync transactions for all active institutions.
+
+    Returns the same per-institution summary the UI shows:
+    added/modified/removed counts and requires_update flag.
+
+    Response:
+    {
+      "summary": [
+        {
+          "credential_id": 1,
+          "institution_name": "Chase",
+          "added": 12,
+          "modified": 0,
+          "removed": 0,
+          "requires_update": false
+        }
+      ],
+      "errors": [],
+      "categories": {"rules_processed": 5, ...},
+      "version": "1.4.4"
+    }
+    """
+    ensure_category_schema()
+
+    def handler():
+        user = current_user
+        active_creds = Credential.query.filter_by(
+            user_id=user.id, status='Active'
+        ).all()
+
+        summary = []
+        errors = []
+        category_summary = None
+
+        for cred in active_creds:
+            try:
+                counts, cred_error = _sync_credential_transactions(
+                    user, cred, from_webhook=False
+                )
+                db.session.commit()
+                summary.append({
+                    'credential_id': cred.id,
+                    'institution_name': cred.institution_name,
+                    'added': counts['added'],
+                    'modified': counts['modified'],
+                    'removed': counts['removed'],
+                    'requires_update': cred.requires_update,
+                })
+                if cred_error:
+                    errors.append({
+                        'credential_id': cred.id,
+                        'institution_name': cred.institution_name,
+                        **cred_error,
+                    })
+            except plaid.ApiException as e:
+                errors.append({
+                    'credential_id': cred.id,
+                    'institution_name': cred.institution_name,
+                    'error_code': 'DEVELOPMENT_ENVIRONMENT_BROWNOUT',
+                    'error_message': (
+                        'Plaid Dev environment is undergoing a scheduled '
+                        'brownout. Please try again later.'
+                    ),
+                })
+                db.session.rollback()
+            except Exception as exc:
+                current_app.logger.exception(
+                    "API sync failed for credential %s", cred.id
+                )
+                errors.append({
+                    'credential_id': cred.id,
+                    'institution_name': cred.institution_name,
+                    'error_message': str(exc),
+                })
+                db.session.rollback()
+
+        has_rules = (
+            CategoryRule.query.filter_by(user_id=user.id).first() is not None
+        )
+        if has_rules:
+            category_summary = apply_category_rules(user.id)
+
+        db.session.commit()
+        status_code = 200 if not errors else 207
+        return jsonify({
+            'summary': summary,
+            'errors': errors,
+            'version': VERSION,
+            'categories': category_summary,
+        }), status_code
+
+    return _with_schema_retry(handler)
+
+
+# ---------------------------------------------------------------------------
+#  Transactions — query with all filters
+# ---------------------------------------------------------------------------
+
+@api_v1.route('/transactions', methods=['GET'])
+@login_required
+def get_transactions():
+    """Query transactions with the same filters as the UI.
+
+    Query params (all optional):
+      page              int    Page number (default 1)
+      page_size         int    Items per page (default 200, max 500)
+      sort_key          str    One of: date, name, amount (default date)
+      sort_desc         bool   Sort descending (default true)
+      search            str    Free-text search across name/merchant/description
+      start_date        str    ISO date (YYYY-MM-DD) — inclusive
+      end_date          str    ISO date (YYYY-MM-DD) — inclusive
+      account_ids       str    Comma-separated account IDs
+      institution_ids   str    Comma-separated institution/credential IDs
+      min_amount        str|num Minimum amount (absolute)
+      max_amount        str|num Maximum amount (absolute)
+      type              str    Filter: 'credit' or 'debit'
+      custom_category_id str   Category ID, 'uncategorized', or omit
+      is_new            bool   Only new transactions (not yet seen)
+      pending           bool   Only pending transactions
+
+    Returns same shape as /api/transactions in the UI.
+    """
+    ensure_category_schema()
+
+    def handler():
+        user_id = current_user.id
+        args = request.args
+
+        # Parse base filters using the same parser core_views uses.
+        base = _parse_transaction_filters(args)
+
+        # Additional filters not covered by the core parser.
+        institution_ids = _parse_int_list(args.get('institution_ids', ''))
+        transaction_type = (args.get('type') or '').strip().lower()
+        transaction_type = (
+            transaction_type if transaction_type in ('credit', 'debit') else None
+        )
+        is_new = (args.get('is_new') or '').strip().lower() in ('true', '1', 'yes')
+        pending_flag = (args.get('pending') or '').strip().lower() in ('true', '1', 'yes')
+
+        # Build the base query via core_views logic.
+        query = _build_transactions_query(user_id, base)
+
+        # Apply extra filters.
+        if institution_ids:
+            query = query.filter(Transaction.credential_id.in_(institution_ids))
+
+        if transaction_type == 'debit':
+            query = query.filter(Transaction.amount > 0)
+        elif transaction_type == 'credit':
+            query = query.filter(Transaction.amount < 0)
+
+        if is_new:
+            query = query.filter(Transaction.is_new.is_(True))
+
+        if pending_flag:
+            query = query.filter(Transaction.pending.is_(True))
+
+        total_count = query.count()
+
+        # Sorting (must match core_views logic)
+        sort_mapping = {
+            'date': Transaction.date,
+            'name': Transaction.name,
+            'amount': Transaction.amount,
+        }
+        sort_key = base['sort_key']
+        sort_desc = base['sort_desc']
+        sort_col = sort_mapping.get(sort_key, Transaction.date)
+        primary_order = desc(sort_col) if sort_desc else asc(sort_col)
+        secondary_order = desc(Transaction.id)
+        if sort_col is Transaction.date and not sort_desc:
+            secondary_order = asc(Transaction.id)
+
+        page = base['page']
+        page_size = base['page_size']
+        ordered = query.order_by(primary_order, secondary_order)
+        offset = (page - 1) * page_size
+        txn_rows = ordered.offset(offset).limit(page_size).all()
+
+        override_map = _load_overrides([t.id for t in txn_rows])
+        serialized = [
+            _serialize_transaction(t, override_map) for t in txn_rows
+        ]
+
+        has_more = (page * page_size) < total_count
+
+        return jsonify({
+            'transactions': serialized,
+            'page': page,
+            'page_size': page_size,
+            'total_count': total_count,
+            'has_more': has_more,
+            'sort_key': sort_key,
+            'sort_desc': sort_desc,
+            'filters': {
+                'start_date': base['start_date'].isoformat() if base['start_date'] else None,
+                'end_date': base['end_date'].isoformat() if base['end_date'] else None,
+                'min_amount': str(base['min_amount']) if base['min_amount'] is not None else None,
+                'max_amount': str(base['max_amount']) if base['max_amount'] is not None else None,
+                'custom_category_id': base['custom_category_param'] or None,
+                'transaction_type': transaction_type,
+            },
+        })
+
+    return _with_schema_retry(handler)
+
+
+@api_v1.route('/transactions/uncategorized', methods=['GET'])
+@login_required
+def get_uncategorized():
+    """Shortcut: get uncategorized transactions in a date range.
+
+    Query params:
+      start_date   str    ISO date (defaults to 30 days ago)
+      end_date     str    ISO date (defaults to today)
+      page         int    (default 1)
+      page_size    int    (default 200)
+
+    Returns the same shape as GET /transactions.
+    """
+    ensure_category_schema()
+
+    def handler():
+        user_id = current_user.id
+        args = request.args
+        end = _parse_date(args.get('end_date')) or date.today()
+        start = _parse_date(args.get('start_date')) or (
+            end - __import__('datetime').timedelta(days=30)
+        )
+        try:
+            page = max(1, int(args.get('page', 1)))
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            page_size = max(1, min(500, int(args.get('page_size', 200))))
+        except (TypeError, ValueError):
+            page_size = 200
+
+        # Uncategorized = no custom_category_id, no override.
+        override_alias = aliased(TransactionCategoryOverride)
+        query = (
+            Transaction.query.options(
+                joinedload(Transaction.account),
+                joinedload(Transaction.credential),
+                joinedload(Transaction.custom_category),
+            )
+            .outerjoin(
+                override_alias,
+                override_alias.transaction_id == Transaction.id,
+            )
+            .filter(
+                Transaction.user_id == user_id,
+                Transaction.is_removed.is_(False),
+                Transaction.date >= start,
+                Transaction.date <= end,
+                Transaction.custom_category_id.is_(None),
+                override_alias.custom_category_id.is_(None),
+            )
+            .order_by(Transaction.date.desc(), Transaction.id.desc())
+        )
+        total_count = query.count()
+        offset = (page - 1) * page_size
+        txn_rows = query.offset(offset).limit(page_size).all()
+        override_map = _load_overrides([t.id for t in txn_rows])
+        serialized = [
+            _serialize_transaction(t, override_map) for t in txn_rows
+        ]
+        has_more = (page * page_size) < total_count
+
+        return jsonify({
+            'transactions': serialized,
+            'page': page,
+            'page_size': page_size,
+            'total_count': total_count,
+            'has_more': has_more,
+            'start_date': start.isoformat(),
+            'end_date': end.isoformat(),
+        })
+
+    return _with_schema_retry(handler)
+
+
+# ---------------------------------------------------------------------------
+#  Transaction category assignment (single)
+# ---------------------------------------------------------------------------
+
+@api_v1.route('/transactions/<int:transaction_id>/category', methods=['PATCH'])
+@login_required
+def set_transaction_category(transaction_id):
+    """Assign a custom category to a single transaction.
+
+    Body (JSON):
+      {
+        "label": "Category Name",           # required — sets or creates category
+        "color": "#FF5733",                 # optional hex colour
+        "force_create": true                # optional — bypass Plaid-name conflict check
+      }
+
+    Pass label=null or label="" to clear the manual override.
+
+    Returns the updated transaction object.
+    """
+    ensure_category_schema()
+
+    def handler():
+        txn = Transaction.query.options(
+            joinedload(Transaction.account),
+            joinedload(Transaction.credential),
+            joinedload(Transaction.custom_category),
+        ).filter_by(id=transaction_id, user_id=current_user.id).first()
+
+        if not txn:
+            return jsonify({'error': 'Transaction not found.'}), 404
+
+        payload = request.get_json() or {}
+        raw_label = payload.get('label')
+        label = _normalize_category_name(raw_label)
+        explicit_color = payload.get('color')
+        force_create = payload.get('force_create', False)
+
+        override = TransactionCategoryOverride.query.filter_by(
+            transaction_id=txn.id
+        ).first()
+
+        if not label:
+            if override:
+                db.session.delete(override)
+            txn.custom_category_id = None
+            db.session.flush()
+            apply_rules_to_transactions(
+                current_user.id, transaction_ids=[txn.id]
+            )
+            db.session.commit()
+            override_map = _load_overrides([txn.id])
+            return jsonify({
+                'transaction': _serialize_transaction(txn, override_map)
+            })
+
+        plaid_cats = _extract_category_list(txn.category)
+        fallback_label = ' / '.join(plaid_cats) if plaid_cats else None
+        plaid_candidates = [fallback_label] if fallback_label else []
+
+        existing = _find_custom_category(current_user.id, label)
+        normalized_color = None
+        if explicit_color:
+            try:
+                normalized_color = _normalize_color(explicit_color)
+            except ValueError:
+                normalized_color = None
+
+        if existing:
+            category = existing
+            if normalized_color and category.color != normalized_color:
+                category.color = normalized_color
+        else:
+            trimmed = _normalize_category_name(label)
+            if len(trimmed) < 3:
+                return jsonify({
+                    'error': 'Category name must be at least 3 characters.'
+                }), 400
+            if not force_create:
+                lowered = trimmed.lower()
+                for candidate in plaid_candidates:
+                    if not candidate:
+                        continue
+                    c_trimmed = _normalize_category_name(candidate)
+                    if c_trimmed and lowered == c_trimmed.lower():
+                        return jsonify({
+                            'confirmation_required': True,
+                            'message': (
+                                'An Automatic category with this name already '
+                                'exists. Set force_create=true to override.'
+                            ),
+                        }), 409
+
+            category = CustomCategory(
+                user_id=current_user.id,
+                name=trimmed,
+                color=normalized_color or DEFAULT_MANUAL_COLOR,
+            )
+            db.session.add(category)
+            db.session.flush()
+
+        if override is None:
+            override = TransactionCategoryOverride(
+                transaction_id=txn.id, custom_category_id=category.id
+            )
+            db.session.add(override)
+        else:
+            override.custom_category_id = category.id
+
+        txn.custom_category_id = None
+        db.session.commit()
+
+        override_map = _load_overrides([txn.id])
+        return jsonify({
+            'transaction': _serialize_transaction(txn, override_map)
+        })
+
+    return _with_schema_retry(handler)
+
+
+@api_v1.route('/transactions/bulk-category', methods=['PATCH'])
+@login_required
+def bulk_set_transaction_category():
+    """Assign a custom category to multiple transactions at once.
+
+    Body (JSON):
+      {
+        "transaction_ids": [1, 2, 3],       # required — max 500
+        "label": "Category Name",            # required — sets or creates category
+        "color": "#FF5733",                  # optional
+        "force_create": false                # optional
+      }
+
+    Pass label=null to clear manual overrides on the given transactions.
+
+    Returns the updated transactions array.
+    """
+    ensure_category_schema()
+
+    def handler():
+        payload = request.get_json() or {}
+        txn_ids = payload.get('transaction_ids', [])
+        raw_label = payload.get('label')
+        label = _normalize_category_name(raw_label)
+        explicit_color = payload.get('color')
+        force_create = payload.get('force_create', False)
+
+        if not txn_ids or not isinstance(txn_ids, list):
+            return jsonify({
+                'error': 'transaction_ids must be a non-empty list.'
+            }), 400
+        if len(txn_ids) > 500:
+            return jsonify({
+                'error': 'Cannot update more than 500 transactions at once.'
+            }), 400
+
+        transactions = (
+            Transaction.query.options(
+                joinedload(Transaction.account),
+                joinedload(Transaction.credential),
+                joinedload(Transaction.custom_category),
+            )
+            .filter(
+                Transaction.id.in_(txn_ids),
+                Transaction.user_id == current_user.id,
+            )
+            .all()
+        )
+
+        if len(transactions) != len(set(txn_ids)):
+            return jsonify({'error': 'One or more transactions not found.'}), 404
+
+        real_ids = [t.id for t in transactions]
+
+        if not label:
+            overrides = TransactionCategoryOverride.query.filter(
+                TransactionCategoryOverride.transaction_id.in_(real_ids)
+            ).all()
+            for o in overrides:
+                db.session.delete(o)
+            for t in transactions:
+                t.custom_category_id = None
+            db.session.flush()
+            apply_rules_to_transactions(
+                current_user.id, transaction_ids=real_ids
+            )
+            db.session.commit()
+            override_map = _load_overrides(real_ids)
+            return jsonify({
+                'transactions': [
+                    _serialize_transaction(t, override_map) for t in transactions
+                ]
+            })
+
+        normalized_color = None
+        if explicit_color:
+            try:
+                normalized_color = _normalize_color(explicit_color)
+            except ValueError:
+                normalized_color = None
+
+        existing = _find_custom_category(current_user.id, label)
+        if existing:
+            category = existing
+            if normalized_color and category.color != normalized_color:
+                category.color = normalized_color
+        else:
+            trimmed = _normalize_category_name(label)
+            if len(trimmed) < 3:
+                return jsonify({
+                    'error': 'Category name must be at least 3 characters.'
+                }), 400
+            if not force_create:
+                for txn in transactions:
+                    plaid_cats = _extract_category_list(txn.category)
+                    fb = ' / '.join(plaid_cats) if plaid_cats else None
+                    if fb:
+                        ct = _normalize_category_name(fb)
+                        if ct and trimmed.lower() == ct.lower():
+                            return jsonify({
+                                'confirmation_required': True,
+                                'message': (
+                                    'An Automatic category with this name '
+                                    'already exists. Set force_create=true.'
+                                ),
+                            }), 409
+
+            category = CustomCategory(
+                user_id=current_user.id,
+                name=trimmed,
+                color=normalized_color or DEFAULT_MANUAL_COLOR,
+            )
+            db.session.add(category)
+            db.session.flush()
+
+        existing_overrides = {
+            o.transaction_id: o
+            for o in TransactionCategoryOverride.query.filter(
+                TransactionCategoryOverride.transaction_id.in_(real_ids)
+            ).all()
+        }
+
+        for t in transactions:
+            t.custom_category_id = None
+            o = existing_overrides.get(t.id)
+            if o is None:
+                o = TransactionCategoryOverride(
+                    transaction_id=t.id, custom_category_id=category.id
+                )
+                db.session.add(o)
+            else:
+                o.custom_category_id = category.id
+
+        db.session.commit()
+        override_map = _load_overrides(real_ids)
+        return jsonify({
+            'transactions': [
+                _serialize_transaction(t, override_map) for t in transactions
+            ]
+        })
+
+    return _with_schema_retry(handler)
+
+
+# ---------------------------------------------------------------------------
+#  Custom categories (CRUD)
+# ---------------------------------------------------------------------------
+
+@api_v1.route('/categories', methods=['GET'])
+@login_required
+def list_categories():
+    """List all custom categories for the current user.
+
+    Returns categories with rule_count, transaction_count, and override_count.
+    """
+    ensure_category_schema()
+
+    def handler():
+        cats = (
+            CustomCategory.query.filter_by(user_id=current_user.id)
+            .order_by(func.lower(CustomCategory.name).asc(), CustomCategory.id.asc())
+            .all()
+        )
+        cat_ids = [c.id for c in cats]
+        r_counts, t_counts, o_counts = _collect_custom_category_stats(
+            current_user.id, cat_ids
+        )
+        serialized = [
+            _serialize_custom_category(c, {
+                'rule_count': int(r_counts.get(c.id, 0)),
+                'transaction_count': int(t_counts.get(c.id, 0)),
+                'override_count': int(o_counts.get(c.id, 0)),
+            })
+            for c in cats
+        ]
+        return jsonify({
+            'categories': serialized,
+            'labels': _collect_category_labels(current_user.id),
+        })
+
+    return _with_schema_retry(handler)
+
+
+@api_v1.route('/categories', methods=['POST'])
+@login_required
+def create_category():
+    """Create a new custom category.
+
+    Body (JSON):
+      {
+        "name": "Groceries",       # required, min 3 chars
+        "color": "#FF5733"         # optional hex colour
+      }
+
+    Returns the created category.
+    """
+    ensure_category_schema()
+
+    def handler():
+        payload = request.get_json() or {}
+        raw_name = payload.get('name') or payload.get('label')
+        try:
+            name = _validate_category_name(raw_name, plaid_candidates=None)
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
+        if len(name) > 255:
+            name = name[:255]
+        if not name:
+            return jsonify({'error': 'Name is required.'}), 400
+
+        color_value = payload.get('color') or DEFAULT_MANUAL_COLOR
+        try:
+            color = _normalize_color(color_value)
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
+
+        existing = _find_custom_category(current_user.id, name)
+        if existing:
+            return jsonify({'error': 'A category with this name already exists.'}), 400
+
+        cat = CustomCategory(
+            user_id=current_user.id, name=name, color=color
+        )
+        db.session.add(cat)
+        db.session.commit()
+
+        return jsonify({
+            'category': _serialize_custom_category(cat, {
+                'rule_count': 0, 'transaction_count': 0, 'override_count': 0,
+            }),
+            'labels': _collect_category_labels(current_user.id),
+        }), 201
+
+    return _with_schema_retry(handler)
+
+
+@api_v1.route('/categories/<int:category_id>', methods=['PUT'])
+@login_required
+def update_category(category_id):
+    """Update a custom category's name and/or colour."""
+    ensure_category_schema()
+
+    def handler():
+        cat = CustomCategory.query.filter_by(
+            id=category_id, user_id=current_user.id
+        ).first()
+        if not cat:
+            return jsonify({'error': 'Custom category not found.'}), 404
+
+        payload = request.get_json() or {}
+        name = payload.get('name')
+        color_value = payload.get('color')
+        updated = False
+
+        if name is not None:
+            try:
+                trimmed = _validate_category_name(name, plaid_candidates=None)
+            except ValueError as exc:
+                return jsonify({'error': str(exc)}), 400
+            if len(trimmed) > 255:
+                trimmed = trimmed[:255]
+            if trimmed.lower() != (cat.name or '').lower():
+                dup = CustomCategory.query.filter(
+                    CustomCategory.user_id == current_user.id,
+                    func.lower(CustomCategory.name) == trimmed.lower(),
+                    CustomCategory.id != cat.id,
+                ).first()
+                if dup:
+                    return jsonify({
+                        'error': 'Another category with this name already exists.'
+                    }), 400
+                cat.name = trimmed
+                updated = True
+
+        if color_value is not None:
+            try:
+                nc = _normalize_color(color_value)
+            except ValueError as exc:
+                return jsonify({'error': str(exc)}), 400
+            if cat.color != nc:
+                cat.color = nc
+                updated = True
+
+        if updated:
+            db.session.flush()
+        db.session.commit()
+
+        r_counts, t_counts, o_counts = _collect_custom_category_stats(
+            current_user.id, [cat.id]
+        )
+        return jsonify({
+            'category': _serialize_custom_category(cat, {
+                'rule_count': int(r_counts.get(cat.id, 0)),
+                'transaction_count': int(t_counts.get(cat.id, 0)),
+                'override_count': int(o_counts.get(cat.id, 0)),
+            }),
+            'labels': _collect_category_labels(current_user.id),
+        })
+
+    return _with_schema_retry(handler)
+
+
+@api_v1.route('/categories/<int:category_id>', methods=['DELETE'])
+@login_required
+def delete_category(category_id):
+    """Delete a custom category.  Unlinks it from all transactions."""
+    ensure_category_schema()
+
+    def handler():
+        cat = CustomCategory.query.filter_by(
+            id=category_id, user_id=current_user.id
+        ).first()
+        if not cat:
+            return jsonify({'error': 'Custom category not found.'}), 404
+
+        db.session.delete(cat)
+        db.session.commit()
+        return jsonify({'deleted': category_id})
+
+    return _with_schema_retry(handler)
+
+
+# ---------------------------------------------------------------------------
+#  Category rules (automatic matching rules)
+# ---------------------------------------------------------------------------
+
+@api_v1.route('/categories/rules', methods=['GET'])
+@login_required
+def list_category_rules():
+    """List all automatic categorisation rules.
+
+    Each rule defines text/amount/type conditions that auto-assign
+    a custom category when matched.
+    """
+    ensure_category_schema()
+
+    def handler():
+        rules = (
+            CategoryRule.query.options(joinedload(CategoryRule.category))
+            .filter_by(user_id=current_user.id)
+            .order_by(CategoryRule.created_at.desc(), CategoryRule.id.desc())
+            .all()
+        )
+        return jsonify({
+            'rules': [_serialize_category(r) for r in rules],
+            'labels': _collect_category_labels(current_user.id),
+        })
+
+    return _with_schema_retry(handler)
+
+
+@api_v1.route('/categories/rules', methods=['POST'])
+@login_required
+def create_category_rule():
+    """Create an automatic categorisation rule.
+
+    Body (JSON):
+      {
+        "text_to_match": "WALMART",        # required — string to search for
+        "field_to_match": "description",    # optional — "description" (default), "merchant", "category"
+        "category_id": 5,                   # optional — existing category id
+        "label": "Groceries",               # optional — category name (used if category_id absent)
+        "transaction_type": "debit",        # optional — "credit", "debit", or null/omit for both
+        "amount_min": 10.00,                # optional — minimum absolute amount
+        "amount_max": 200.00,               # optional — maximum absolute amount
+        "color": "#FF5733"                  # optional — colour when creating a new category
+      }
+
+    After creation, all existing transactions are re-evaluated against rules.
+    Returns the created rule + a summary of transactions matched/updated.
+    """
+    ensure_category_schema()
+
+    def handler():
+        payload = request.get_json() or {}
+        text = (payload.get('text_to_match') or '').strip()
+        cat_id = payload.get('category_id')
+        cat_name = (_extract_label(payload) or '').strip()
+
+        if not text:
+            return jsonify({'error': 'text_to_match is required.'}), 400
+        if not cat_id and not cat_name:
+            return jsonify({
+                'error': 'category_id or label is required.'
+            }), 400
+
+        if len(text) > 512:
+            text = text[:512]
+        if cat_name and len(cat_name) > 255:
+            cat_name = cat_name[:255]
+
+        field = _resolve_rule_field(payload.get('field_to_match'))
+        txn_type = _resolve_rule_type(payload.get('transaction_type'))
+
+        try:
+            amt_min = _parse_decimal_value(payload.get('amount_min'))
+            amt_max = _parse_decimal_value(payload.get('amount_max'))
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
+
+        if amt_min is not None and amt_max is not None and amt_min > amt_max:
+            return jsonify({
+                'error': 'amount_min cannot be greater than amount_max.'
+            }), 400
+
+        if cat_id:
+            try:
+                cat_id = int(cat_id)
+            except (TypeError, ValueError):
+                return jsonify({'error': 'Invalid category_id.'}), 400
+            category = CustomCategory.query.filter_by(
+                id=cat_id, user_id=current_user.id
+            ).first()
+            if not category:
+                return jsonify({'error': 'Category not found.'}), 404
+        else:
+            try:
+                category = _get_or_create_custom_category(
+                    current_user.id,
+                    cat_name,
+                    color=payload.get('color'),
+                )
+            except ValueError as exc:
+                return jsonify({'error': str(exc)}), 400
+
+        rule = CategoryRule(
+            user_id=current_user.id,
+            category_id=category.id,
+            text_to_match=text,
+            field_to_match=field,
+            transaction_type=txn_type,
+            amount_min=amt_min,
+            amount_max=amt_max,
+        )
+        rule.category = category
+        db.session.add(rule)
+        db.session.flush()
+
+        summary = apply_category_rules(current_user.id)
+        db.session.commit()
+
+        return jsonify({
+            'rule': _serialize_category(rule),
+            'summary': summary,
+            'labels': _collect_category_labels(current_user.id),
+        }), 201
+
+    return _with_schema_retry(handler)
+
+
+@api_v1.route('/categories/rules/<int:rule_id>', methods=['PUT'])
+@login_required
+def update_category_rule(rule_id):
+    """Update an automatic categorisation rule."""
+    ensure_category_schema()
+
+    def handler():
+        rule = CategoryRule.query.options(
+            joinedload(CategoryRule.category)
+        ).filter_by(id=rule_id, user_id=current_user.id).first()
+        if not rule:
+            return jsonify({'error': 'Category rule not found.'}), 404
+
+        payload = request.get_json() or {}
+        text = (payload.get('text_to_match') or '').strip()
+        cat_id = payload.get('category_id')
+        cat_name = (_extract_label(payload) or '').strip()
+
+        if not text:
+            return jsonify({'error': 'text_to_match is required.'}), 400
+        if not cat_id and not cat_name:
+            return jsonify({
+                'error': 'category_id or label is required.'
+            }), 400
+
+        if len(text) > 512:
+            text = text[:512]
+        if cat_name and len(cat_name) > 255:
+            cat_name = cat_name[:255]
+
+        field = _resolve_rule_field(payload.get('field_to_match'))
+        txn_type = _resolve_rule_type(payload.get('transaction_type'))
+
+        try:
+            amt_min = _parse_decimal_value(payload.get('amount_min'))
+            amt_max = _parse_decimal_value(payload.get('amount_max'))
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
+
+        if amt_min is not None and amt_max is not None and amt_min > amt_max:
+            return jsonify({
+                'error': 'amount_min cannot be greater than amount_max.'
+            }), 400
+
+        if cat_id:
+            try:
+                cat_id = int(cat_id)
+            except (TypeError, ValueError):
+                return jsonify({'error': 'Invalid category_id.'}), 400
+            category = CustomCategory.query.filter_by(
+                id=cat_id, user_id=current_user.id
+            ).first()
+            if not category:
+                return jsonify({'error': 'Category not found.'}), 404
+        else:
+            try:
+                category = _get_or_create_custom_category(
+                    current_user.id,
+                    cat_name,
+                    color=payload.get('color'),
+                )
+            except ValueError as exc:
+                return jsonify({'error': str(exc)}), 400
+
+        rule.text_to_match = text
+        rule.field_to_match = field
+        rule.transaction_type = txn_type
+        rule.amount_min = amt_min
+        rule.amount_max = amt_max
+        rule.category_id = category.id
+        rule.category = category
+
+        db.session.flush()
+        summary = apply_category_rules(current_user.id)
+        db.session.commit()
+
+        return jsonify({
+            'rule': _serialize_category(rule),
+            'summary': summary,
+            'labels': _collect_category_labels(current_user.id),
+        })
+
+    return _with_schema_retry(handler)
+
+
+@api_v1.route('/categories/rules/<int:rule_id>', methods=['DELETE'])
+@login_required
+def delete_category_rule(rule_id):
+    """Delete an automatic categorisation rule (re-evaluates transactions)."""
+    ensure_category_schema()
+
+    def handler():
+        rule = CategoryRule.query.filter_by(
+            id=rule_id, user_id=current_user.id
+        ).first()
+        if not rule:
+            return jsonify({'error': 'Category rule not found.'}), 404
+
+        db.session.delete(rule)
+        db.session.flush()
+        summary = apply_category_rules(current_user.id)
+        db.session.commit()
+
+        return jsonify({
+            'deleted': rule_id,
+            'summary': summary,
+            'labels': _collect_category_labels(current_user.id),
+        })
+
+    return _with_schema_retry(handler)
+
+
+# ---------------------------------------------------------------------------
+#  Accounts & Institutions
+# ---------------------------------------------------------------------------
+
+@api_v1.route('/accounts', methods=['GET'])
+@login_required
+def list_accounts():
+    """List active accounts, optionally filtered by institution.
+
+    Query params:
+      institution_id   int   Filter accounts belonging to this credential
+    """
+    user_id = current_user.id
+    inst_id = request.args.get('institution_id')
+
+    query = Account.query.join(Credential).filter(
+        Credential.user_id == user_id,
+        Credential.status == 'Active',
+    )
+    if inst_id:
+        try:
+            query = query.filter(Credential.id == int(inst_id))
+        except (TypeError, ValueError):
+            pass
+    query = query.filter(Account.status == 'Active')
+
+    accounts = [
+        {
+            'id': a.id,
+            'name': a.name,
+            'mask': a.mask,
+            'type': a.type,
+            'subtype': a.subtype,
+            'is_enabled': a.is_enabled,
+            'credential_id': a.credential_id,
+            'institution_name': a.credential.institution_name if a.credential else None,
+        }
+        for a in query.all()
+    ]
+    return jsonify({'accounts': accounts})
+
+
+@api_v1.route('/institutions', methods=['GET'])
+@login_required
+def list_institutions():
+    """List all active institutions (credentials) for the current user."""
+    banks = Credential.query.filter_by(
+        user_id=current_user.id, status='Active'
+    ).all()
+    result = []
+    for b in banks:
+        accounts = [
+            {
+                'id': a.id,
+                'name': a.name,
+                'mask': a.mask,
+                'type': a.type,
+                'subtype': a.subtype,
+                'plaid_account_id': a.plaid_account_id,
+                'is_enabled': a.is_enabled,
+            }
+            for a in b.accounts
+            if a.status == 'Active'
+        ]
+        result.append({
+            'id': b.id,
+            'institution_name': b.institution_name,
+            'requires_update': b.requires_update,
+            'accounts': accounts,
+        })
+    return jsonify({'institutions': result})
+
+
+# ---------------------------------------------------------------------------
+#  Helpers
+# ---------------------------------------------------------------------------
+
+def _parse_date(raw):
+    if not raw:
+        return None
+    try:
+        return date.fromisoformat(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_int_list(raw: str):
+    if not raw:
+        return []
+    result = []
+    for part in raw.split(','):
+        p = part.strip()
+        if p.isdigit():
+            result.append(int(p))
+    return result
+
+
+def _extract_category_list(raw):
+    """Re-implemented locally to avoid deep import — mirrors core_views."""
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return [str(x) for x in raw if x]
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            return [str(x) for x in parsed if x]
+    except (TypeError, ValueError):
+        pass
+    return [str(raw)] if raw else []

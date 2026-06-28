@@ -1,3 +1,9 @@
+## [1.5.0] - 2026-06-27
+
+### Added
+
+- **API v1**: machine-oriented API layer at `/api/v1/` with endpoints for sync, transaction queries (all UI filters: date range, account, institution, amount, type, custom category, search, pagination), category CRUD, automatic rule CRUD, and uncategorized transaction lookup. Built by reusing existing core_views internals so behaviour matches the UI exactly.
+
 ## [1.4.4] - 2026-06-27
 
 ### Added
