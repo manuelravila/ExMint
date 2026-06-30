@@ -985,7 +985,7 @@
                                                     </div>
                                                 </div>
                                                 <!-- Spending section -->
-                                                <div v-if="month.spending_categories && month.spending_categories.length" class="spending-spending-section">
+                                                <div v-if="month.spending_categories && month.spending_categories.length" class="spending-spending-section" style="margin-top: 0.75rem;">
                                                     <div class="spending-spending-header">
                                                         <span>Spending</span>
                                                         <span class="spending-spending-subtotal">[[ formatDashboardAmount(month.spending_subtotal, null) ]]</span>
@@ -1033,13 +1033,12 @@
                                                                     >
                                                                         [[ category.remainder !== null ? formatDashboardAmount(category.remainder, null) : '—' ]]
                                                                     </td>
-                                                                </tr>
-                                                            </tbody>
-                                                        </table>
-                                                    </div>
+                                                            </tr>
+                                                        </tbody>
+                                                    </table>
                                                 </div>
-                                                <div v-if="(!month.income_categories || !month.income_categories.length) && (!month.spending_categories || !month.spending_categories.length)" class="text-muted small pt-2">
-                                                    No transactions recorded for this month yet.
+                                                <div v-else class="text-muted small pt-2">
+                                                    No spending recorded for this month yet.
                                                 </div>
                                             </div>
                                         </div>

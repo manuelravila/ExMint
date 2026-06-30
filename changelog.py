@@ -3,6 +3,15 @@
 
 changelog = [
     {
+        "version": "1.5.5",
+        "date": "2026-06-30",
+        "changes": [
+            "Spending Report now shows income categories separately with green header, spending in purple",
+            "Net difference (income - spending) shown in month header",
+            "Income/spending section headers have tinted background and sit flush against their tables"
+        ]
+    },
+    {
         "version": "1.5.4",
         "date": "2026-06-30",
         "changes": [
