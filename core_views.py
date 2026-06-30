@@ -1188,6 +1188,7 @@ def _collect_spending_summary(user_id):
         category_entries[label_key] = {
             'label': label,
             'totals': defaultdict(lambda: defaultdict(lambda: Decimal('0.00'))),
+            'income_totals': defaultdict(lambda: defaultdict(lambda: Decimal('0.00'))),
             'raw_sum': Decimal('0.00')
         }
 
@@ -1211,11 +1212,14 @@ def _collect_spending_summary(user_id):
         info = category_entries.setdefault(label_key, {
             'label': label,
             'totals': defaultdict(lambda: defaultdict(lambda: Decimal('0.00'))),
+            'income_totals': defaultdict(lambda: defaultdict(lambda: Decimal('0.00'))),
             'raw_sum': Decimal('0.00')
         })
         if value < 0:
             spending_value = abs(value)
             info['totals'][year][month] += spending_value
+        elif value > 0:
+            info['income_totals'][year][month] += value
         info['raw_sum'] += value
 
     metrics = _calculate_budget_metrics(user_id, [info['label'] for info in category_entries.values()])
@@ -1228,39 +1232,60 @@ def _collect_spending_summary(user_id):
     year_map = defaultdict(lambda: defaultdict(lambda: {
         'month': None,
         'label': None,
-        'total': Decimal('0.00'),
-        'categories': []
+        'income_subtotal': Decimal('0.00'),
+        'spending_subtotal': Decimal('0.00'),
+        'income_categories': [],
+        'spending_categories': []
     }))
 
     for label_key, info in category_entries.items():
         metrics_entry = metrics.get(label_key, {})
-        six_month_average = abs(metrics_entry.get('six_month_average', Decimal('0.00')))
-        classification = metrics_entry.get('classification')
-        if classification is None:
-            classification = 'income' if info['raw_sum'] > 0 else 'expense'
-        
-        # Skip pure income categories from the spending report
-        if classification == 'income' and not any(month for month in info['totals'].values() if any(val > 0 for val in month.values())):
-            continue
-
         budget_amount = budget_map.get(label_key)
 
+        # ── Spending categories (negative amounts, shown as positive) ────
         for year, months in info['totals'].items():
             for month, value in months.items():
+                if value == Decimal('0.00'):
+                    continue
                 month_entry = year_map[year][month]
                 month_entry['month'] = month
                 month_entry['label'] = calendar.month_abbr[month]
-                month_entry['total'] += value
+                month_entry['spending_subtotal'] += value
+                six_month_avg = abs(metrics_entry.get('six_month_average', Decimal('0.00')))
                 remainder = None
                 if budget_amount is not None:
                     remainder = budget_amount - value
-                month_entry['categories'].append({
+                month_entry['spending_categories'].append({
                     'label': info['label'],
                     'value': value,
-                    'six_month_average': six_month_average,
+                    'six_month_average': six_month_avg,
                     'budget': budget_amount,
                     'remainder': remainder,
-                    'classification': classification
+                    'classification': 'expense'
+                })
+
+        # ── Income categories (positive amounts) ─────────────────────────
+        for year, months in info['income_totals'].items():
+            for month, value in months.items():
+                if value == Decimal('0.00'):
+                    continue
+                month_entry = year_map[year][month]
+                month_entry['month'] = month
+                month_entry['label'] = calendar.month_abbr[month]
+                month_entry['income_subtotal'] += value
+                # For income categories, the 6-month average from
+                # _calculate_budget_metrics is already the net average
+                # (positive for income categories). Use it as-is.
+                income_avg = metrics_entry.get('six_month_average', Decimal('0.00'))
+                if income_avg < 0:
+                    income_avg = abs(income_avg)
+                month_entry['income_categories'].append({
+                    'label': info['label'],
+                    'value': value,
+                    'six_month_average': income_avg,
+                    'budget': None,
+                    'remainder': None,
+                    'classification': 'income'
                 })
 
     # Add uncategorized totals as a synthetic category per month
@@ -1271,44 +1296,67 @@ def _collect_spending_summary(user_id):
             month_entry = year_map[year][month]
             month_entry['month'] = month
             month_entry['label'] = calendar.month_abbr[month]
-            month_entry['total'] += value
             net_classification = 'income' if value > 0 else 'expense'
-            month_entry['categories'].append({
-                'label': UNCATEGORIZED_LABEL,
-                'value': value,
-                'six_month_average': Decimal('0.00'),
-                'budget': None,
-                'remainder': None,
-                'classification': net_classification
-            })
+            abs_value = abs(value)
+            if net_classification == 'income':
+                month_entry['income_subtotal'] += abs_value
+                month_entry['income_categories'].append({
+                    'label': UNCATEGORIZED_LABEL,
+                    'value': abs_value,
+                    'six_month_average': Decimal('0.00'),
+                    'budget': None,
+                    'remainder': None,
+                    'classification': 'income'
+                })
+            else:
+                month_entry['spending_subtotal'] += abs_value
+                month_entry['spending_categories'].append({
+                    'label': UNCATEGORIZED_LABEL,
+                    'value': abs_value,
+                    'six_month_average': Decimal('0.00'),
+                    'budget': None,
+                    'remainder': None,
+                    'classification': 'expense'
+                })
 
     for year, months in year_map.items():
         for month, entry in months.items():
-            net_value = monthly_cashflow[year][month].quantize(CENT, rounding=ROUND_HALF_UP)
-            entry['total'] = net_value
+            net_total = entry['income_subtotal'] - entry['spending_subtotal']
+            entry['total'] = net_total
 
     years_output = []
     for year in sorted(year_map.keys(), reverse=True):
         months_output = []
         for month in sorted(year_map[year].keys(), reverse=True):
             month_entry = year_map[year][month]
-            categories = month_entry['categories']
-            categories.sort(key=lambda item: item['label'].lower())
+            income_cats = sorted(month_entry['income_categories'], key=lambda item: item['label'].lower())
+            spending_cats = sorted(month_entry['spending_categories'], key=lambda item: item['label'].lower())
             months_output.append({
                 'year': year,
                 'month': month,
                 'label': month_entry['label'],
+                'income_subtotal': float(month_entry['income_subtotal'].quantize(CENT, rounding=ROUND_HALF_UP)),
+                'spending_subtotal': float(month_entry['spending_subtotal'].quantize(CENT, rounding=ROUND_HALF_UP)),
                 'total': float(month_entry['total'].quantize(CENT, rounding=ROUND_HALF_UP)),
-                'categories': [
+                'income_categories': [
                     {
-                        'label': category['label'],
-                        'value': float(category['value'].quantize(CENT, rounding=ROUND_HALF_UP)),
-                        'six_month_average': float(category['six_month_average'].quantize(CENT, rounding=ROUND_HALF_UP)),
-                        'budget': float(category['budget'].quantize(CENT, rounding=ROUND_HALF_UP)) if category['budget'] is not None else None,
-                        'remainder': float(category['remainder'].quantize(CENT, rounding=ROUND_HALF_UP)) if category['remainder'] is not None else None,
-                        'classification': category['classification']
+                        'label': cat['label'],
+                        'value': float(cat['value'].quantize(CENT, rounding=ROUND_HALF_UP)),
+                        'six_month_average': float(cat['six_month_average'].quantize(CENT, rounding=ROUND_HALF_UP)),
+                        'classification': cat['classification']
                     }
-                    for category in categories
+                    for cat in income_cats
+                ],
+                'spending_categories': [
+                    {
+                        'label': cat['label'],
+                        'value': float(cat['value'].quantize(CENT, rounding=ROUND_HALF_UP)),
+                        'six_month_average': float(cat['six_month_average'].quantize(CENT, rounding=ROUND_HALF_UP)),
+                        'budget': float(cat['budget'].quantize(CENT, rounding=ROUND_HALF_UP)) if cat['budget'] is not None else None,
+                        'remainder': float(cat['remainder'].quantize(CENT, rounding=ROUND_HALF_UP)) if cat['remainder'] is not None else None,
+                        'classification': cat['classification']
+                    }
+                    for cat in spending_cats
                 ]
             })
         years_output.append({

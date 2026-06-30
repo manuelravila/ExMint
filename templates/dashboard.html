@@ -944,55 +944,102 @@
                                                 <span class="spending-month-total">[[ formatDashboardAmount(month.total, null) ]]</span>
                                             </button>
                                             <div v-if="isSpendingMonthOpen(selectedSpendingYear, month.month)" class="spending-month-table">
-                                                <div v-if="getSpendingCategoriesForMonth(month).length" class="table-responsive spending-table-wrapper">
-                                                    <table class="table table-sm table-hover table-striped mb-0 spending-table">
-                                                        <thead class="thead-light">
-                                                            <tr>
-                                                                <th scope="col">Category</th>
-                                                                <th scope="col">This Month</th>
-                                                                <th scope="col">6M Average</th>
-                                                                <th scope="col">Budget</th>
-                                                                <th scope="col">Remainder</th>
-                                                            </tr>
-                                                        </thead>
-                                                        <tbody>
-                                                            <tr
-                                                                v-for="category in getSpendingCategoriesForMonth(month)"
-                                                                :key="`spending-${selectedSpendingYear}-${month.month}-${category.label}`"
-                                                            >
-                                                                <td class="align-middle">
-                                                                    <button
-                                                                        type="button"
-                                                                        class="btn btn-link p-0 spending-category-link"
-                                                                        @click="applySpendingCategoryFilter(category.label, month.month, selectedSpendingYear)"
-                                                                    >
-                                                                        [[ category.label ]]
-                                                                    </button>
-                                                                </td>
-                                                                <td class="align-middle">
-                                                                    [[ formatDashboardAmount(category.value, null) ]]
-                                                                </td>
-                                                                <td class="align-middle">
-                                                                    [[ formatDashboardAmount(category.six_month_average, null) ]]
-                                                                </td>
-                                                                <td class="align-middle">
-                                                                    [[ category.budget !== null ? formatDashboardAmount(category.budget, null) : '—' ]]
-                                                                </td>
-                                                                <td
-                                                                    class="align-middle"
-                                                                    :class="{
-                                                                        'text-success': category.remainder !== null && category.remainder >= 0,
-                                                                        'text-danger': category.remainder !== null && category.remainder < 0
-                                                                    }"
+                                                <!-- Income section -->
+                                                <div v-if="month.income_categories && month.income_categories.length" class="spending-income-section">
+                                                    <div class="spending-income-header">
+                                                        <span>Income</span>
+                                                        <span class="spending-income-subtotal">[[ formatDashboardAmount(month.income_subtotal, null) ]]</span>
+                                                    </div>
+                                                    <div class="table-responsive">
+                                                        <table class="table table-sm table-hover table-striped mb-0 spending-table">
+                                                            <thead class="thead-light">
+                                                                <tr>
+                                                                    <th scope="col">Category</th>
+                                                                    <th scope="col">This Month</th>
+                                                                    <th scope="col">6M Average</th>
+                                                                </tr>
+                                                            </thead>
+                                                            <tbody>
+                                                                <tr
+                                                                    v-for="category in month.income_categories"
+                                                                    :key="`income-${selectedSpendingYear}-${month.month}-${category.label}`"
                                                                 >
-                                                                    [[ category.remainder !== null ? formatDashboardAmount(category.remainder, null) : '—' ]]
-                                                                </td>
-                                                            </tr>
-                                                        </tbody>
-                                                    </table>
+                                                                    <td class="align-middle">
+                                                                        <button
+                                                                            type="button"
+                                                                            class="btn btn-link p-0 spending-category-link spending-income-category"
+                                                                            @click="applySpendingCategoryFilter(category.label, month.month, selectedSpendingYear)"
+                                                                        >
+                                                                            [[ category.label ]]
+                                                                        </button>
+                                                                    </td>
+                                                                    <td class="align-middle">
+                                                                        [[ formatDashboardAmount(category.value, null) ]]
+                                                                    </td>
+                                                                    <td class="align-middle">
+                                                                        [[ formatDashboardAmount(category.six_month_average, null) ]]
+                                                                    </td>
+                                                                </tr>
+                                                            </tbody>
+                                                        </table>
+                                                    </div>
                                                 </div>
-                                                <div v-else class="text-muted small pt-2">
-                                                    No spending recorded for this month yet.
+                                                <!-- Spending section -->
+                                                <div v-if="month.spending_categories && month.spending_categories.length" class="spending-spending-section">
+                                                    <div class="spending-spending-header">
+                                                        <span>Spending</span>
+                                                        <span class="spending-spending-subtotal">[[ formatDashboardAmount(month.spending_subtotal, null) ]]</span>
+                                                    </div>
+                                                    <div class="table-responsive spending-table-wrapper">
+                                                        <table class="table table-sm table-hover table-striped mb-0 spending-table">
+                                                            <thead class="thead-light">
+                                                                <tr>
+                                                                    <th scope="col">Category</th>
+                                                                    <th scope="col">This Month</th>
+                                                                    <th scope="col">6M Average</th>
+                                                                    <th scope="col">Budget</th>
+                                                                    <th scope="col">Remainder</th>
+                                                                </tr>
+                                                            </thead>
+                                                            <tbody>
+                                                                <tr
+                                                                    v-for="category in month.spending_categories"
+                                                                    :key="`spending-${selectedSpendingYear}-${month.month}-${category.label}`"
+                                                                >
+                                                                    <td class="align-middle">
+                                                                        <button
+                                                                            type="button"
+                                                                            class="btn btn-link p-0 spending-category-link"
+                                                                            @click="applySpendingCategoryFilter(category.label, month.month, selectedSpendingYear)"
+                                                                        >
+                                                                            [[ category.label ]]
+                                                                        </button>
+                                                                    </td>
+                                                                    <td class="align-middle">
+                                                                        [[ formatDashboardAmount(category.value, null) ]]
+                                                                    </td>
+                                                                    <td class="align-middle">
+                                                                        [[ formatDashboardAmount(category.six_month_average, null) ]]
+                                                                    </td>
+                                                                    <td class="align-middle">
+                                                                        [[ category.budget !== null ? formatDashboardAmount(category.budget, null) : '—' ]]
+                                                                    </td>
+                                                                    <td
+                                                                        class="align-middle"
+                                                                        :class="{
+                                                                            'text-success': category.remainder !== null && category.remainder >= 0,
+                                                                            'text-danger': category.remainder !== null && category.remainder < 0
+                                                                        }"
+                                                                    >
+                                                                        [[ category.remainder !== null ? formatDashboardAmount(category.remainder, null) : '—' ]]
+                                                                    </td>
+                                                                </tr>
+                                                            </tbody>
+                                                        </table>
+                                                    </div>
+                                                </div>
+                                                <div v-if="(!month.income_categories || !month.income_categories.length) && (!month.spending_categories || !month.spending_categories.length)" class="text-muted small pt-2">
+                                                    No transactions recorded for this month yet.
                                                 </div>
                                             </div>
                                         </div>
