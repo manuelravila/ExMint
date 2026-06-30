@@ -3544,7 +3544,7 @@ def deactivate_plaid_token(access_token):
 def _find_duplicate_transaction_groups(user_id):
     """Return a list of duplicate groups for the given user.
 
-    Detects two classes of duplicates:
+    Detects three classes of duplicates:
 
     1. **Same-account** — same (account_id, date, amount, name) appearing
        more than once on the same account.  Catches the race-condition sync
@@ -3555,12 +3555,18 @@ def _find_duplicate_transaction_groups(user_id):
        where Plaid reports the same real-world transaction under both a primary
        and supplementary card, each with a distinct plaid_transaction_id.
 
+    3. **Plaid+CSV overlap** — same (account_id, date, amount) appearing
+       more than once where one has a real plaid_transaction_id and another
+       has a csv_ prefix.  Catches CSV re-imports of transactions that were
+       already synced via Plaid with a different description/name.
+
     Within each group the record to *keep* is chosen by this priority:
 
       1. Split parents (has_split_children=True) beat unsplit rows — preserves
          the user's manual categorisation work.
       2. Posted (pending=False) beats pending.
-      3. Same-account tie-break: keep oldest id (lowest id).
+      3. Overlap groups: keep the Plaid-synced transaction over the CSV import.
+      4. Same-account tie-break: keep oldest id (lowest id).
          Cross-account tie-break: keep lowest credential_id (older connection).
 
     Split *children* are never surfaced as independent candidates; they are
@@ -3644,16 +3650,69 @@ def _find_duplicate_transaction_groups(user_id):
         key = ('cross', str(txn.date), str(txn.amount), txn.name)
         groups.setdefault(key, []).append(txn)
 
+    # ── Phase 3: Plaid+CSV overlap duplicates ─────────────────────────────
+    # Same (account_id, date, amount) appearing >1 time where one has a real
+    # plaid_transaction_id and another has a csv_ prefix.  Catches CSV
+    # re-imports of transactions that were already synced via Plaid with a
+    # different description (the most common cause of false negatives in the
+    # existing exact-name dedup).
+    overlap_subq = (
+        db.session.query(
+            Transaction.account_id,
+            Transaction.date,
+            Transaction.amount,
+        )
+        .filter(*base_filter)
+        .group_by(Transaction.account_id, Transaction.date, Transaction.amount)
+        .having(func.count(Transaction.id) > 1)
+        .subquery()
+    )
+
+    overlap_txns = (
+        Transaction.query
+        .options(joinedload(Transaction.account), joinedload(Transaction.credential))
+        .join(overlap_subq, and_(
+            Transaction.account_id == overlap_subq.c.account_id,
+            Transaction.date == overlap_subq.c.date,
+            Transaction.amount == overlap_subq.c.amount,
+        ))
+        .filter(*base_filter)
+        .order_by(Transaction.date.desc(), Transaction.id.asc())
+        .all()
+    )
+
+    overlap_groups = {}
+    for txn in overlap_txns:
+        if txn.id in same_acct_ids:
+            continue  # already captured in a same-account group
+        key = ('overlap', txn.account_id, str(txn.date), str(txn.amount))
+        is_csv_source = bool(txn.plaid_transaction_id and txn.plaid_transaction_id.startswith('csv_'))
+        if is_csv_source:
+            overlap_groups.setdefault(key, {'plaid': None, 'csvs': []})
+            overlap_groups[key]['csvs'].append(txn)
+        else:
+            overlap_groups.setdefault(key, {'plaid': None, 'csvs': []})
+            if overlap_groups[key]['plaid'] is None:
+                overlap_groups[key]['plaid'] = txn
+
+    for key, val in overlap_groups.items():
+        if val['plaid'] is not None and val['csvs']:
+            groups[key] = [val['plaid']] + val['csvs']
+
     # ── Build result ──────────────────────────────────────────────────────
     result = []
     for group_key, txns in groups.items():
         is_cross = group_key[0] == 'cross'
+        is_overlap = group_key[0] == 'overlap'
 
         txns.sort(key=lambda t: (
             0 if t.has_split_children else 1,
             0 if not t.pending else 1,
-            # Cross-account: keep oldest credential (lowest credential_id).
-            # Same-account: keep most-recent id when split, oldest otherwise.
+            # Overlap: keep Plaid-synced (real plaid_id) over CSV-imported
+            1 if is_overlap and t.plaid_transaction_id and t.plaid_transaction_id.startswith('csv_') else 0,
+            # Cross-account: keep oldest credential. Same-account: keep
+            # oldest id. Overlap falls through to same-account tiebreaker
+            # after the Plaid-before-CSV sort above.
             t.credential_id if is_cross else (-t.id if t.has_split_children else t.id),
         ))
         keep = txns[0]
@@ -4256,6 +4315,26 @@ def csv_import_execute():
                     skipped += 1
                     continue
             else:
+                # Second dedup pass: check for Plaid-synced duplicate by
+                # (account_id, date, amount) only. Catches the case where a
+                # Plaid-synced transaction already exists with a different
+                # description/name than the CSV column provides, preventing
+                # double-counting when CSV re-imports overlap with Plaid data.
+                existing_plaid = Transaction.query.filter(
+                    Transaction.account_id == row_account_id,
+                    Transaction.date == date_val,
+                    Transaction.amount == amount,
+                    Transaction.is_removed.is_(False),
+                    Transaction.plaid_transaction_id.isnot(None),
+                    ~Transaction.plaid_transaction_id.like('csv_%'),
+                ).first()
+
+                if existing_plaid:
+                    # Already exists via Plaid sync with the same
+                    # account/date/amount — this is a CSV re-import duplicate
+                    skipped += 1
+                    continue
+
                 txn = Transaction(
                     plaid_transaction_id=synthetic_id,
                     user_id=current_user.id,

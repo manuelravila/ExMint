@@ -1500,6 +1500,22 @@ def api_csv_import_execute():
                     skipped += 1
                 continue
 
+            # Second dedup pass: check for Plaid-synced duplicate by
+            # (account_id, date, amount) only. Catches the Plaid+CSV
+            # overlap where descriptions differ.
+            api_existing_plaid = Transaction.query.filter(
+                Transaction.account_id == target_account_id,
+                Transaction.date == date_val,
+                Transaction.amount == final_amount,
+                Transaction.is_removed.is_(False),
+                Transaction.plaid_transaction_id.isnot(None),
+                ~Transaction.plaid_transaction_id.like('csv_%'),
+            ).first()
+
+            if api_existing_plaid:
+                skipped += 1
+                continue
+
             from uuid import uuid4
             new_txn = Transaction(
                 plaid_transaction_id=f'csv_{uuid4().hex}',
