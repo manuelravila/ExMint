@@ -1,11 +1,11 @@
 # app.py
-from flask import Flask, session
+from flask import Flask, session, request, jsonify, redirect, url_for
 import os
 from extensions import mail
 from config import Config
 from models import db
 from flask_bcrypt import Bcrypt
-from flask_login import LoginManager
+from flask_login import LoginManager, current_user, logout_user
 from flask_migrate import Migrate
 from flask_cors import CORS
 import plaid
@@ -82,6 +82,44 @@ def create_app():
     @app.before_request
     def before_request():
         session.permanent = True
+        # Server-side session hard ceiling: force re-login if LOGIN_SESSION_DURATION
+        # has elapsed since the login timestamp, regardless of sliding cookie refresh.
+        if current_user.is_authenticated:
+            login_time_str = session.get('_login_time')
+            if login_time_str:
+                try:
+                    login_time = datetime.fromisoformat(login_time_str)
+                    max_age = app.config.get('LOGIN_SESSION_DURATION', 14400)
+                    elapsed = (datetime.utcnow() - login_time).total_seconds()
+                    if elapsed > max_age:
+                        logout_user()
+                        session.clear()
+                        if request.path.startswith('/api/'):
+                            return jsonify({'error': 'Session expired. Please log in again.'}), 401
+                        return redirect(url_for('views.login', next=request.path))
+                except (ValueError, TypeError):
+                    pass  # Malformed timestamp — let Flask-Login handle normally
+
+            # Idle timeout: if no request received in IDLE_SESSION_DURATION seconds,
+            # force re-login. Updates _last_active on every request so the timer
+            # resets on each interaction.
+            last_active_str = session.get('_last_active')
+            if last_active_str:
+                try:
+                    last_active = datetime.fromisoformat(last_active_str)
+                    idle_timeout = app.config.get('IDLE_SESSION_DURATION', 1800)
+                    idle_elapsed = (datetime.utcnow() - last_active).total_seconds()
+                    if idle_elapsed > idle_timeout:
+                        logout_user()
+                        session.clear()
+                        if request.path.startswith('/api/'):
+                            return jsonify({'error': 'Session expired due to inactivity. Please log in again.'}), 401
+                        return redirect(url_for('views.login', next=request.path))
+                except (ValueError, TypeError):
+                    pass
+
+            # Stamp last activity time for idle timeout tracking
+            session['_last_active'] = datetime.utcnow().isoformat()
 
     # Inject version and year into templates
     @app.context_processor

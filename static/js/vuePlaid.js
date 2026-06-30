@@ -3610,3 +3610,21 @@ const app = new Vue({
         document.body.classList.remove('mobile-sidebar-open');
     }
 });
+
+// ── Global 401 interceptor ──────────────────────────────────────────────
+// If any fetch() to an API route returns a 401, the session has expired.
+// Redirect to login so the user sees the login page instead of broken UI.
+(function() {
+    const origFetch = window.fetch;
+    window.fetch = function() {
+        return origFetch.apply(this, arguments).then(function(response) {
+            if (response.status === 401) {
+                const url = arguments[0] || '';
+                if (typeof url === 'string' && url.startsWith('/api/')) {
+                    window.location.href = '/login';
+                }
+            }
+            return response;
+        });
+    };
+})();
