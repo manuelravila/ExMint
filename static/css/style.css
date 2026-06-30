@@ -1195,6 +1195,41 @@ body.mobile-sidebar-open {
     outline: none;
 }
 
+/* ── Income / Spending sections within a month ─────────────────────── */
+.spending-income-header,
+.spending-spending-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.625rem 0.85rem;
+    font-size: 0.875rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    border-radius: 0.375rem 0.375rem 0 0;
+}
+
+.spending-income-header {
+    color: #2C6B4F;
+    background: rgba(44, 107, 79, 0.09);
+}
+
+.spending-spending-header {
+    color: #6B3FA0;
+    background: rgba(107, 63, 160, 0.09);
+}
+
+.spending-income-subtotal,
+.spending-spending-subtotal {
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+}
+
+.spending-income-category {
+    color: #2C6B4F !important;
+    font-weight: 500;
+}
+
 .spending-month-label {
     display: inline-flex;
     align-items: center;
@@ -1211,7 +1246,6 @@ body.mobile-sidebar-open {
 }
 
 .spending-table-wrapper {
-    margin-top: 0.75rem;
 }
 
 .spending-table th,
