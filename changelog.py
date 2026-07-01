@@ -3,6 +3,17 @@
 
 changelog = [
     {
+        "version": "1.6.0",
+        "date": "2026-07-01",
+        "changes": [
+            "Per-month budgets with MonthlyBudget table — budgets tied to individual months instead of global",
+            "Spending header now shows Budget: $X | Remainder: $X | Balance: $X per month",
+            "Budget propagation fills forward into blank future months only, never overwrites existing entries",
+            "Auto-creation copies budgets from previous month when new months get transactions",
+            "Backward-fallback fix: months before the earliest budget show no budget (not the earliest entry)"
+        ]
+    },
+    {
         "version": "1.5.6",
         "date": "2026-06-30",
         "changes": [
