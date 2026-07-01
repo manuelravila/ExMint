@@ -917,7 +917,9 @@ const app = new Vue({
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         category_label: category.label,
-                        amount: amount
+                        amount: amount,
+                        year: year,
+                        month: month
                     })
                 });
                 if (!response.ok) {

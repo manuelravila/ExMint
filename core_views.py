@@ -10,6 +10,7 @@ from models import (
     CategoryRule,
     TransactionCategoryOverride,
     Budget,
+    MonthlyBudget,
     CsvImportTemplate,
 )
 from plaid.model.item_remove_request import ItemRemoveRequest
@@ -1157,6 +1158,55 @@ def _calculate_spending_metrics(user_id, category_labels):
     return metrics
 
 
+def _ensure_monthly_budgets(user_id):
+    """Auto-create MonthlyBudget entries for months that have transactions but no budgets.
+
+    Copies budgets from the previous month when a new month appears.
+    """
+    today = date.today()
+
+    # Find all months with transactions that might not have budgets
+    result = db.session.query(
+        func.extract('year', Transaction.date).label('yr'),
+        func.extract('month', Transaction.date).label('mo')
+    ).filter(
+        Transaction.user_id == user_id,
+        Transaction.is_removed.is_(False)
+    ).distinct().all()
+
+    for yr, mo in result:
+        yr = int(yr)
+        mo = int(mo)
+        # Skip if this month already has any MonthlyBudget entries
+        existing_count = MonthlyBudget.query.filter_by(
+            user_id=user_id, year=yr, month=mo
+        ).count()
+        if existing_count > 0:
+            continue
+
+        # Find the previous month (or same month last year if this is January)
+        prev_year, prev_month = (yr - 1, 12) if mo == 1 else (yr, mo - 1)
+
+        # Copy budgets from previous month
+        prev_budgets = MonthlyBudget.query.filter_by(
+            user_id=user_id, year=prev_year, month=prev_month
+        ).all()
+        if prev_budgets:
+            for pb in prev_budgets:
+                mb = MonthlyBudget(
+                    user_id=user_id,
+                    category_label=pb.category_label,
+                    year=yr,
+                    month=mo,
+                    amount=pb.amount
+                )
+                db.session.add(mb)
+            current_app.logger.info(
+                "Auto-created %d MonthlyBudget entries for %d-%02d from previous month",
+                len(prev_budgets), yr, mo
+            )
+
+
 def _collect_spending_summary(user_id):
     today = date.today()
     current_year = today.year
@@ -1222,12 +1272,31 @@ def _collect_spending_summary(user_id):
             info['income_totals'][year][month] += value
         info['raw_sum'] += value
 
+    # ── Load monthly budgets from MonthlyBudget (per-month) ────────────
+    monthly_budget_rows = MonthlyBudget.query.filter(
+        MonthlyBudget.user_id == user_id,
+        MonthlyBudget.year >= start_date.year,
+        MonthlyBudget.year <= current_year + 2
+    ).order_by(MonthlyBudget.year, MonthlyBudget.month).all()
+
+    # Build per-category sorted budget history for backward fallback
+    _budget_history = defaultdict(list)
+    for mb in monthly_budget_rows:
+        _budget_history[mb.category_label.strip().lower()].append(
+            (mb.year, mb.month, Decimal(mb.amount or 0).quantize(CENT, rounding=ROUND_HALF_UP))
+        )
+
+    def _get_budget_for(label_key, year, month):
+        """Get the budget amount for a category in a specific month, cascading backwards."""
+        hist = _budget_history.get(label_key, [])
+        if not hist:
+            return None
+        for y, m, amt in reversed(hist):
+            if (y, m) <= (year, month):
+                return amt
+        return hist[0][2]  # earliest entry as fallback
+
     metrics = _calculate_budget_metrics(user_id, [info['label'] for info in category_entries.values()])
-    budgets = Budget.query.filter_by(user_id=user_id).all()
-    budget_map = {
-        (budget.category_label or '').strip().lower(): Decimal(budget.amount or 0).quantize(CENT, rounding=ROUND_HALF_UP)
-        for budget in budgets
-    }
 
     year_map = defaultdict(lambda: defaultdict(lambda: {
         'month': None,
@@ -1238,9 +1307,11 @@ def _collect_spending_summary(user_id):
         'spending_categories': []
     }))
 
+    # Track which months have which budgeted categories to fill $0-activity entries later
+    _budgeted_labels_by_month = defaultdict(set)
+
     for label_key, info in category_entries.items():
         metrics_entry = metrics.get(label_key, {})
-        budget_amount = budget_map.get(label_key)
 
         # ── Spending categories (negative amounts, shown as positive) ────
         for year, months in info['totals'].items():
@@ -1252,9 +1323,11 @@ def _collect_spending_summary(user_id):
                 month_entry['label'] = calendar.month_abbr[month]
                 month_entry['spending_subtotal'] += value
                 six_month_avg = abs(metrics_entry.get('six_month_average', Decimal('0.00')))
+                budget_amount = _get_budget_for(label_key, year, month)
                 remainder = None
                 if budget_amount is not None:
                     remainder = budget_amount - value
+                    _budgeted_labels_by_month[(year, month)].add(label_key)
                 month_entry['spending_categories'].append({
                     'label': info['label'],
                     'value': value,
@@ -1319,10 +1392,53 @@ def _collect_spending_summary(user_id):
                     'classification': 'expense'
                 })
 
+    # ── Add budget-only categories ($0 actual spending) ──────────────
+    # Categories with a budget but zero transactions need to appear so
+    # budget_total and remainder_total include them.
+    for year, months in list(year_map.items()):
+        for month, entry in list(months.items()):
+            existing_labels = {c['label'].lower() for c in entry['spending_categories']}
+            for label_key, hist in _budget_history.items():
+                if label_key in existing_labels:
+                    continue
+                budget_amount = _get_budget_for(label_key, year, month)
+                if budget_amount is None:
+                    continue
+                # Find the display label
+                display_label = None
+                for lk, info in category_entries.items():
+                    if lk == label_key:
+                        display_label = info['label']
+                        break
+                if not display_label:
+                    mb = MonthlyBudget.query.filter(
+                        MonthlyBudget.user_id == user_id,
+                        MonthlyBudget.category_label.ilike(label_key),
+                        MonthlyBudget.year >= year - 1
+                    ).first()
+                    display_label = mb.category_label if mb else label_key.title()
+                _budgeted_labels_by_month[(year, month)].add(label_key)
+                entry['spending_categories'].append({
+                    'label': display_label,
+                    'value': Decimal('0.00'),
+                    'six_month_average': Decimal('0.00'),
+                    'budget': budget_amount,
+                    'remainder': budget_amount,  # budget - 0 actual = budget
+                    'classification': 'expense'
+                })
+
     for year, months in year_map.items():
         for month, entry in months.items():
             net_total = entry['income_subtotal'] - entry['spending_subtotal']
             entry['total'] = net_total
+            entry['budget_total'] = sum(
+                (cat['budget'] for cat in entry['spending_categories'] if cat['budget'] is not None),
+                Decimal('0.00')
+            ).quantize(CENT, rounding=ROUND_HALF_UP)
+            entry['remainder_total'] = sum(
+                (cat['remainder'] for cat in entry['spending_categories'] if cat['remainder'] is not None),
+                Decimal('0.00')
+            ).quantize(CENT, rounding=ROUND_HALF_UP)
 
     years_output = []
     for year in sorted(year_map.keys(), reverse=True):
@@ -1338,6 +1454,8 @@ def _collect_spending_summary(user_id):
                 'income_subtotal': float(month_entry['income_subtotal'].quantize(CENT, rounding=ROUND_HALF_UP)),
                 'spending_subtotal': float(month_entry['spending_subtotal'].quantize(CENT, rounding=ROUND_HALF_UP)),
                 'total': float(month_entry['total'].quantize(CENT, rounding=ROUND_HALF_UP)),
+                'budget_total': float(month_entry['budget_total']),
+                'remainder_total': float(month_entry['remainder_total']),
                 'income_categories': [
                     {
                         'label': cat['label'],
@@ -2245,6 +2363,9 @@ def sync_transactions():
         has_category_rules = CategoryRule.query.filter_by(user_id=user.id).first() is not None
         if has_category_rules:
             category_summary = apply_category_rules(user.id)
+
+        # Auto-create monthly budgets for any new months
+        _ensure_monthly_budgets(user.id)
 
         db.session.commit()
 
@@ -3281,7 +3402,7 @@ def delete_budget(budget_id):
 @core.route('/api/budgets/inline', methods=['PUT'])
 @login_required
 def upsert_budget_inline():
-    """Upsert a budget by category_label (inline from spending report)."""
+    """Upsert a budget by category_label for a specific month, propagating forward."""
     payload = request.get_json() or {}
     category_label = (payload.get('category_label') or '').strip()
     if not category_label:
@@ -3292,28 +3413,75 @@ def upsert_budget_inline():
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400
 
-    budget = Budget.query.filter_by(
+    month = payload.get('month')
+    year = payload.get('year')
+    today = date.today()
+    if not year or not month:
+        year = today.year
+        month = today.month
+    else:
+        year = int(year)
+        month = int(month)
+
+    # Upsert the MonthlyBudget for this specific (year, month)
+    mb = MonthlyBudget.query.filter_by(
         user_id=current_user.id,
-        category_label=category_label
+        category_label=category_label,
+        year=year,
+        month=month
     ).first()
 
-    if budget:
-        budget.amount = amount
+    if mb:
+        mb.amount = amount
     else:
-        budget = Budget(
+        mb = MonthlyBudget(
             user_id=current_user.id,
             category_label=category_label,
-            frequency='monthly',
+            year=year,
+            month=month,
             amount=amount
         )
-        db.session.add(budget)
+        db.session.add(mb)
+
+    # Propagate forward: set the same amount for all future months
+    # up to 24 months out (current year + 2)
+    max_year = today.year + 2
+    cursor_year = year
+    cursor_month = month + 1
+    while cursor_year <= max_year:
+        if cursor_month > 12:
+            cursor_month = 1
+            cursor_year += 1
+        if cursor_year > max_year:
+            break
+        # Upsert future month
+        future = MonthlyBudget.query.filter_by(
+            user_id=current_user.id,
+            category_label=category_label,
+            year=cursor_year,
+            month=cursor_month
+        ).first()
+        if future:
+            future.amount = amount
+        else:
+            future = MonthlyBudget(
+                user_id=current_user.id,
+                category_label=category_label,
+                year=cursor_year,
+                month=cursor_month,
+                amount=amount
+            )
+            db.session.add(future)
+        cursor_month += 1
 
     db.session.commit()
 
-    metrics = _calculate_budget_metrics(current_user.id, [category_label])
-    response_budget = _serialize_budget(budget, metrics)
-
-    return jsonify({'budget': response_budget})
+    return jsonify({'budget': {
+        'category_label': category_label,
+        'amount': float(amount),
+        'year': year,
+        'month': month
+    }})
 
 
 @core.route('/api/balance', methods=['POST'])
@@ -4476,6 +4644,11 @@ def csv_import_execute():
                 bank_name=(default_account.credential.institution_name if default_account and default_account.credential else None),
             )
             db.session.add(tmpl)
+        db.session.commit()
+
+    # Auto-create monthly budgets for any newly populated months
+    if inserted + updated > 0:
+        _ensure_monthly_budgets(current_user.id)
         db.session.commit()
 
     return jsonify(

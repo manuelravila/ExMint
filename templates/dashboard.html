@@ -978,7 +978,11 @@
                                                 <div v-if="month.spending_categories && month.spending_categories.length" class="spending-spending-section" style="margin-top: 0.75rem;">
                                                     <div class="spending-spending-header">
                                                         <span>Spending</span>
-                                                        <span class="spending-spending-subtotal">[[ formatDashboardAmount(month.spending_subtotal, null) ]]</span>
+                                                        <span class="spending-header-meta">
+                                                            <span class="spending-header-budget">Budget: [[ formatDashboardAmount(month.budget_total, null) ]]</span>
+                                                            <span class="spending-header-remainder">Remainder: [[ formatDashboardAmount(month.remainder_total, null) ]]</span>
+                                                            <span class="spending-spending-subtotal">Balance: [[ formatDashboardAmount(month.spending_subtotal, null) ]]</span>
+                                                        </span>
                                                     </div>
                                                     <div class="table-responsive spending-table-wrapper">
                                                         <table class="table table-sm table-hover table-striped mb-0 spending-table">

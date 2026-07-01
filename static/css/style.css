@@ -1225,6 +1225,24 @@ body.mobile-sidebar-open {
     font-weight: 700;
 }
 
+.spending-header-meta {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-transform: none;
+    letter-spacing: normal;
+}
+
+.spending-header-budget {
+    color: #2563EB;
+}
+
+.spending-header-remainder {
+    color: #D97706;
+}
+
 .spending-income-category {
     color: #2C6B4F !important;
     font-weight: 500;
