@@ -873,6 +873,72 @@ const app = new Vue({
             return month.categories;
         },
 
+        /* ── Inline budget editing ────────────────────────── */
+        startBudgetEdit: function(category, event) {
+            if (category._editingBudget) return;
+            // If no budget yet, pre-fill with 6-month average
+            if (category.budget === null || category.budget === undefined) {
+                category._budgetDraft = Math.abs(category.six_month_average || 0);
+            } else {
+                category._budgetDraft = Math.abs(category.budget);
+            }
+            category._previousBudget = category.budget;
+            this.$set(category, '_editingBudget', true);
+            // Focus input on next tick
+            this.$nextTick(() => {
+                const inputs = document.querySelectorAll('.budget-inline-input');
+                const last = inputs[inputs.length - 1];
+                if (last) last.focus();
+            });
+        },
+
+        saveBudgetInline: async function(category, month, year) {
+            if (!category._editingBudget) return;
+            category._editingBudget = false;
+
+            const draftValue = category._budgetDraft;
+            if (draftValue === undefined || draftValue === null || draftValue === '') {
+                category.budget = category._previousBudget;
+                return;
+            }
+
+            const amount = Math.abs(parseFloat(draftValue));
+            if (isNaN(amount) || amount < 0) {
+                category.budget = category._previousBudget;
+                return;
+            }
+
+            // Optimistic update
+            category.budget = amount;
+
+            try {
+                const response = await fetch('/api/budgets/inline', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        category_label: category.label,
+                        amount: amount
+                    })
+                });
+                if (!response.ok) {
+                    const data = await response.json();
+                    throw new Error(data.error || 'Failed to save budget');
+                }
+                // Refresh dashboard to get updated remainders
+                await this.fetchDashboard({ suppressLoader: true, force: true });
+            } catch (error) {
+                console.error('Error saving budget:', error);
+                category.budget = category._previousBudget;
+            }
+        },
+
+        cancelBudgetEdit: function(category) {
+            if (!category._editingBudget) return;
+            category._editingBudget = false;
+            category.budget = category._previousBudget;
+            category._budgetDraft = null;
+        },
+
         startTransactionCategoryEdit: function(transaction) {
             if (!transaction || transaction.savingCategory) {
                 return;
