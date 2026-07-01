@@ -3278,6 +3278,44 @@ def delete_budget(budget_id):
     return jsonify({'budgets': remaining, 'summary': summary})
 
 
+@core.route('/api/budgets/inline', methods=['PUT'])
+@login_required
+def upsert_budget_inline():
+    """Upsert a budget by category_label (inline from spending report)."""
+    payload = request.get_json() or {}
+    category_label = (payload.get('category_label') or '').strip()
+    if not category_label:
+        return jsonify({'error': 'Category is required.'}), 400
+
+    try:
+        amount = _normalize_budget_amount(payload.get('amount'))
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+
+    budget = Budget.query.filter_by(
+        user_id=current_user.id,
+        category_label=category_label
+    ).first()
+
+    if budget:
+        budget.amount = amount
+    else:
+        budget = Budget(
+            user_id=current_user.id,
+            category_label=category_label,
+            frequency='monthly',
+            amount=amount
+        )
+        db.session.add(budget)
+
+    db.session.commit()
+
+    metrics = _calculate_budget_metrics(current_user.id, [category_label])
+    response_budget = _serialize_budget(budget, metrics)
+
+    return jsonify({'budget': response_budget})
+
+
 @core.route('/api/balance', methods=['POST'])
 @login_required
 def fetch_balances():
