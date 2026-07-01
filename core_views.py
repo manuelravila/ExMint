@@ -3443,8 +3443,9 @@ def upsert_budget_inline():
         )
         db.session.add(mb)
 
-    # Propagate forward: set the same amount for all future months
-    # up to 24 months out (current year + 2)
+    # Propagate forward: fill future months ONLY if they don't already have a budget
+    # (respects the rule: setting Oct 2025 propagates to Nov-Dec 2025 but does NOT
+    # overwrite Jan 2026 which was already set explicitly)
     max_year = today.year + 2
     cursor_year = year
     cursor_month = month + 1
@@ -3454,16 +3455,14 @@ def upsert_budget_inline():
             cursor_year += 1
         if cursor_year > max_year:
             break
-        # Upsert future month
-        future = MonthlyBudget.query.filter_by(
+        # Only create if no entry exists yet — never overwrite an existing one
+        existing = MonthlyBudget.query.filter_by(
             user_id=current_user.id,
             category_label=category_label,
             year=cursor_year,
             month=cursor_month
         ).first()
-        if future:
-            future.amount = amount
-        else:
+        if existing is None:
             future = MonthlyBudget(
                 user_id=current_user.id,
                 category_label=category_label,
