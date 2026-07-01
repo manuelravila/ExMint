@@ -213,6 +213,28 @@ class Budget(db.Model):
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
 
+class MonthlyBudget(db.Model):
+    __tablename__ = 'monthly_budgets'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    category_label = db.Column(db.String(255), nullable=False)
+    year = db.Column(db.Integer, nullable=False)
+    month = db.Column(db.Integer, nullable=False)  # 1-12
+    amount = db.Column(db.Numeric(14, 2), nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    user = db.relationship('User', backref=db.backref('monthly_budgets', lazy=True))
+
+    __table_args__ = (
+        db.UniqueConstraint('user_id', 'category_label', 'year', 'month', name='uq_monthly_budget'),
+    )
+
+    def __repr__(self):
+        return f'<MonthlyBudget {self.category_label} {self.year}-{self.month:02d} ${self.amount}>'
+
+
 class ApiKey(db.Model):
     __tablename__ = 'api_keys'
 
