@@ -1287,14 +1287,19 @@ def _collect_spending_summary(user_id):
         )
 
     def _get_budget_for(label_key, year, month):
-        """Get the budget amount for a category in a specific month, cascading backwards."""
+        """Get the budget amount for a category in a specific month, cascading backwards.
+
+        Walks backward from the requested month.  If no past entry exists (i.e. the
+        earliest budget starts *after* this month) returns None — the category had
+        no budget for that month.
+        """
         hist = _budget_history.get(label_key, [])
         if not hist:
             return None
         for y, m, amt in reversed(hist):
             if (y, m) <= (year, month):
                 return amt
-        return hist[0][2]  # earliest entry as fallback
+        return None  # no entry for this month or any earlier month
 
     metrics = _calculate_budget_metrics(user_id, [info['label'] for info in category_entries.values()])
 
