@@ -3,6 +3,15 @@
 
 changelog = [
     {
+        "version": "1.5.6",
+        "date": "2026-06-30",
+        "changes": [
+            "Fixed spending report showing empty months — backend now correctly splits income/spending categories",
+            "CSV import dedup catches Plaid+CSV overlap by (account, date, amount) ignoring name differences",
+            "Find Duplicates (Maintenance) detects Plaid+CSV overlap as a third duplicate class"
+        ]
+    },
+    {
         "version": "1.5.5",
         "date": "2026-06-30",
         "changes": [
