@@ -1109,14 +1109,14 @@ def list_accounts():
 
     query = Account.query.join(Credential).filter(
         Credential.user_id == user_id,
-        Credential.status == 'Active',
+        Credential.status.in_(['Active', 'Revoked']),
     )
     if inst_id:
         try:
             query = query.filter(Credential.id == int(inst_id))
         except (TypeError, ValueError):
             pass
-    query = query.filter(Account.status == 'Active')
+    query = query.filter(Account.status.in_(['Active', 'Revoked']))
 
     accounts = [
         {
@@ -1128,6 +1128,7 @@ def list_accounts():
             'is_enabled': a.is_enabled,
             'credential_id': a.credential_id,
             'institution_name': a.credential.institution_name if a.credential else None,
+            'status': a.status,
         }
         for a in query.all()
     ]
@@ -1139,7 +1140,9 @@ def list_accounts():
 def list_institutions():
     """List all active institutions (credentials) for the current user."""
     banks = Credential.query.filter_by(
-        user_id=g.api_user.id, status='Active'
+        user_id=g.api_user.id
+    ).filter(
+        Credential.status.in_(['Active', 'Revoked'])
     ).all()
     result = []
     for b in banks:
@@ -1150,16 +1153,18 @@ def list_institutions():
                 'mask': a.mask,
                 'type': a.type,
                 'subtype': a.subtype,
-                'plaid_account_id': a.plaid_account_id,
                 'is_enabled': a.is_enabled,
+                'status': a.status,
             }
             for a in b.accounts
-            if a.status == 'Active'
+            if a.status in ('Active', 'Revoked')
         ]
         result.append({
             'id': b.id,
             'institution_name': b.institution_name,
             'requires_update': b.requires_update,
+            'soft_disconnected': b.soft_disconnected,
+            'revoked': b.status == 'Revoked',
             'accounts': accounts,
         })
     return jsonify({'institutions': result})

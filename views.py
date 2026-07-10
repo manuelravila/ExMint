@@ -87,7 +87,9 @@ def dashboard_data():
     user = current_user
 
     # Retrieve the user’s banks from DB
-    banks = Credential.query.filter_by(user_id=user.id, status='Active').all()
+    banks = Credential.query.filter_by(user_id=user.id).filter(
+        Credential.status.in_(['Active', 'Revoked'])
+    ).all()
 
     # Build the JSON response
     banks_data = []
@@ -96,7 +98,9 @@ def dashboard_data():
             'id': bank.id,
             'institution_name': bank.institution_name,
             'requires_update': bank.requires_update,
-            'soft_disconnected': bank.soft_disconnected
+            'soft_disconnected': bank.soft_disconnected,
+            'revoked': bank.status == 'Revoked',
+            'label': bank.label or '',
         })
 
     return jsonify({'banks': banks_data})

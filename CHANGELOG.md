@@ -1,3 +1,26 @@
+## [1.7.0] - 2026-07-10
+
+### Added
+
+- **Credential labels**: inline label editing in the sidebar — click the placeholder or existing label to rename any institution. Displayed in the sidebar next to the institution name and in the Balances tree. New `label` column on `Credential` model. `PUT /api/credentials/<id>/label` endpoint.
+- **Sidebar badges**: "CSV Only" badge on soft-disconnected (paused) institutions and "Revoked" badge on fully disconnected institutions. Revoked accounts show "Inactive" badge. Revoked institutions are dimmed (`opacity: 0.7`) in the sidebar.
+- **My Connections badges**: "Disconnected" badge for revoked credentials in the connections modal. Pause button hidden and Reconnect button hidden for revoked credentials.
+- **Revoked credentials in API**: all API endpoints (`/api/banks`, `/api/accounts`, `/api/v1/institutions`, `/api/v1/accounts`, `/dashboard_data`) now return both Active and Revoked credentials with a `revoked` flag and `status` field per account.
+- **Live Plaid balance sync**: after every successful transaction sync for active (non-paused) credentials, `_sync_account_balances()` fetches `accounts/balance/get` from Plaid and saves `current_balance`/`available_balance` per account. New `current_balance` and `available_balance` columns on `Account` model.
+- **Balance summary overhaul**: `_collect_balances_summary()` now computes balances from three layers:
+  - Active Plaid-connected accounts → use live `current_balance` from Plaid
+  - Paused accounts with reconciliation → `last_known_balance + post-balance-date transactions`
+  - Fallback → sum of all non-removed transactions
+  - Revoked accounts completely excluded from totals
+- **Account reconciliation**: click a paused (CSV Only) account balance in the Balances tree to enter a known correct balance. Saves as `last_known_balance` with today's date via `PUT /api/accounts/<id>/reconcile`. Future balance calculations use this as the anchor point.
+- **Null access_token guard**: `_sync_credential_transactions()` returns clean `NO_ACCESS_TOKEN` error when a credential lacks an access token, preventing Plaid tracebacks for disconnected credentials.
+- **Balances export**: `GET /api/balances/export?format=csv|xlsx` — downloads all balances with Group, Institution, Account, Mask, Balance, and Type columns. CSV and Excel buttons in the Balances card header.
+- **Spending export with budget columns**: `GET /api/spending/export?format=csv|xlsx&year=2026` — generates a single file with 4 tables: SPENDING (per-month values), 6-MONTH AVERAGE, BUDGET, and REMAINDER, separated by blank rows.
+
+### Fixed
+
+- **XLSX export triggering Excel recovery dialog**: the Spending XLSX export showed "We found a problem with some content" on open. Root cause was empty `inlineStr` XML cells from openpyxl. Fixed by using `None` for empty cells and saving to a temp file then re-loading to normalize the XML structure.
+
 ## [1.5.1] - 2026-06-28
 
 ### Added
