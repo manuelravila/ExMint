@@ -2957,13 +2957,17 @@ const app = new Vue({
                 this.modalBanks = this.banks;
 
                 const retainedOpen = this.banks
+                    .filter(bank => !bank.revoked)
                     .map(bank => bank.id)
                     .filter(id => previousOpen.has(id));
 
                 if (retainedOpen.length) {
                     this.openInstitutionIds = retainedOpen;
                 } else {
-                    this.openInstitutionIds = this.banks.map(bank => bank.id);
+                    // Only auto-open active (non-revoked) institutions
+                    this.openInstitutionIds = this.banks
+                        .filter(bank => !bank.revoked)
+                        .map(bank => bank.id);
                 }
 
                 const availableIds = new Set();
@@ -3144,6 +3148,8 @@ const app = new Vue({
             return this.filters.sortDesc ? 'fas fa-sort-down' : 'fas fa-sort-up';
         },
         handleSearchInput: function() {
+            // Switch to Transactions view so search feels responsive
+            this.activePane = 'transactions';
             if (this.searchDebounce) {
                 window.clearTimeout(this.searchDebounce);
             }
