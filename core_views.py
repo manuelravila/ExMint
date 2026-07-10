@@ -2524,7 +2524,7 @@ def get_banks():
     banks = Credential.query.filter_by(user_id=current_user.id).filter(
         Credential.status.in_(['Active', 'Revoked'])
     ).all()
-    banks_data = []
+    raw_banks = []
 
     for bank in banks:
         accounts_data = []
@@ -2546,14 +2546,43 @@ def get_banks():
         if not accounts_data:
             continue
 
-        banks_data.append({
+        raw_banks.append({
             'id': bank.id,
             'institution_name': bank.institution_name,
             'label': bank.label or '',
             'requires_update': bank.requires_update,
             'soft_disconnected': bank.soft_disconnected,
             'revoked': bank.status == 'Revoked',
-            'accounts': accounts_data
+            'accounts': accounts_data,
+            '_masks': {a.get('mask') for a in accounts_data if a.get('mask')}
+        })
+
+    # Deduplicate: group by institution, only show Revoked credentials
+    # that have account masks NOT already present in another credential
+    # of the same institution (whether Active or Revoked). This prevents
+    # duplicate sidebar entries when the same bank was re-connected
+    # multiple times.
+    from collections import defaultdict
+    seen_masks_by_inst = defaultdict(set)
+    banks_data = []
+    # Process active credentials first, then revoked, so active ones
+    # establish the baseline set of masks.
+    raw_banks.sort(key=lambda b: (1 if b['revoked'] else 0, b['id']))
+    for b in raw_banks:
+        covered = seen_masks_by_inst[b['institution_name']]
+        extra = b['_masks'] - covered
+        if not extra and b['revoked']:
+            continue  # all accounts already visible via another credential
+        covered |= b['_masks']
+        # Strip internal fields before returning
+        banks_data.append({
+            'id': b['id'],
+            'institution_name': b['institution_name'],
+            'label': b['label'],
+            'requires_update': b['requires_update'],
+            'soft_disconnected': b['soft_disconnected'],
+            'revoked': b['revoked'],
+            'accounts': b['accounts']
         })
 
     return jsonify(banks=banks_data)
