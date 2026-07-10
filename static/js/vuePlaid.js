@@ -277,6 +277,10 @@ const app = new Vue({
         dashboardTab: 'summary',
         nextSplitRowId: 0,
         isSidebarCollapsed: false,
+        editingLabelBankId: null,
+        editLabelValue: '',
+        reconcilingAccountId: null,
+        reconcileValue: 0,
         isMobileView: false,
         mobileCardCollapsed: {
             balances: false,
@@ -1209,6 +1213,13 @@ const app = new Vue({
         triggerTransactionExport: function(format) {
             const url = this.buildTransactionExportUrl(format);
             window.open(url, '_blank');
+        },
+        exportBalances: function(format) {
+            window.open('/api/balances/export?format=' + format, '_blank');
+        },
+        exportSpending: function(format) {
+            const year = this.selectedSpendingYear || new Date().getFullYear();
+            window.open('/api/spending/export?format=' + format + '&year=' + year, '_blank');
         },
         handleTransactionClick: function(transaction) {
             if (this.touchContextMenuTriggered) {
@@ -2858,6 +2869,78 @@ const app = new Vue({
                 event.preventDefault();
                 this.closeMobileSidebar();
             }
+        },
+        startLabelEdit: function(bank) {
+            this.editingLabelBankId = bank.id;
+            this.editLabelValue = bank.label || '';
+            this.$nextTick(() => {
+                const inputs = this.$refs.labelInput;
+                if (inputs) {
+                    // $refs might be array if multiple instances
+                    const input = Array.isArray(inputs) ? inputs[inputs.length - 1] : inputs;
+                    input.focus();
+                    input.select();
+                }
+            });
+        },
+        cancelLabelEdit: function() {
+            this.editingLabelBankId = null;
+            this.editLabelValue = '';
+        },
+        saveLabel: function(bank) {
+            const label = (this.editLabelValue || '').trim();
+            this.editingLabelBankId = null;
+            fetch('/api/credentials/' + bank.id + '/label', {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({label: label})
+            }).then(function(r) {
+                if (!r.ok) throw new Error('Failed to save label');
+                return r.json();
+            }).then(function(data) {
+                bank.label = data.label;
+            }).catch(function(err) {
+                console.error('Error saving label:', err);
+            });
+            this.editLabelValue = '';
+        },
+        startReconcile: function(account) {
+            if (!account.is_reconcilable) return;
+            this.reconcilingAccountId = account.id;
+            this.reconcileValue = account.balance;
+            this.$nextTick(() => {
+                const inputs = this.$refs.reconcileInput;
+                if (inputs) {
+                    const input = Array.isArray(inputs) ? inputs[inputs.length - 1] : inputs;
+                    input.focus();
+                    input.select();
+                }
+            });
+        },
+        cancelReconcile: function() {
+            this.reconcilingAccountId = null;
+            this.reconcileValue = 0;
+        },
+        saveReconcile: function(account) {
+            const val = this.reconcileValue;
+            this.reconcilingAccountId = null;
+            if (val === null || val === undefined || val === '') return;
+            fetch('/api/accounts/' + account.id + '/reconcile', {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({balance: val})
+            }).then(function(r) {
+                if (!r.ok) throw new Error('Failed to reconcile');
+                return r.json();
+            }).then(function(data) {
+                // Update the local balance to match what was set
+                account.last_known_balance = data.last_known_balance;
+                account.balance_date = data.balance_date;
+                account.balance = data.last_known_balance;
+            }).catch(function(err) {
+                console.error('Error reconciling:', err);
+            });
+            this.reconcileValue = 0;
         },
         fetchBanks: async function() {
             try {

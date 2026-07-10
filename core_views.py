@@ -16,7 +16,7 @@ from models import (
 from plaid.model.item_remove_request import ItemRemoveRequest
 from plaid.model.accounts_get_request import AccountsGetRequest
 from plaid.model.item_webhook_update_request import ItemWebhookUpdateRequest
-#from plaid.model.accounts_balance_get_request import AccountsBalanceGetRequest
+from plaid.model.accounts_balance_get_request import AccountsBalanceGetRequest
 from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
 from sqlalchemy import and_, or_, func, asc, desc, inspect, text
 from sqlalchemy.orm import joinedload, aliased
@@ -1003,23 +1003,36 @@ def _format_decimal(value):
 
 
 def _collect_balances_summary(user_id):
-    transaction_totals = db.session.query(
+    from datetime import date as date_func
+    today = date_func.today()
+
+    # Subquery: sum of all non-removed transactions per account
+    raw_totals = db.session.query(
         Transaction.account_id.label('account_id'),
-        func.coalesce(func.sum(Transaction.amount), Decimal('0.00')).label('balance')
+        func.coalesce(func.sum(Transaction.amount), Decimal('0.00')).label('txn_total')
     ).filter(
         Transaction.user_id == user_id,
         Transaction.is_removed.is_(False)
     ).group_by(Transaction.account_id).subquery()
 
+    # Query: active accounts from active or soft-disconnected credentials only
     accounts = (
         db.session.query(
             Account,
             Credential.institution_name,
-            func.coalesce(transaction_totals.c.balance, Decimal('0.00')).label('balance')
+            Credential.soft_disconnected,
+            Credential.status.label('credential_status'),
+            Credential.label,
+            func.coalesce(raw_totals.c.txn_total, Decimal('0.00')).label('txn_total')
         )
         .join(Credential, Account.credential_id == Credential.id)
-        .outerjoin(transaction_totals, transaction_totals.c.account_id == Account.id)
-        .filter(Credential.user_id == user_id, Account.is_enabled.is_(True))
+        .outerjoin(raw_totals, raw_totals.c.account_id == Account.id)
+        .filter(
+            Credential.user_id == user_id,
+            Credential.status.in_(['Active', 'Revoked']),
+            Account.status.in_(['Active', 'Revoked']),
+            Account.is_enabled.is_(True)
+        )
         .all()
     )
 
@@ -1027,12 +1040,33 @@ def _collect_balances_summary(user_id):
     grand_total = Decimal('0.00')
     processed_accounts = set()
 
-    for account, institution_name, balance in accounts:
+    for account, institution_name, soft_disconnected, credential_status, credential_label, txn_total in accounts:
         account_key = (institution_name, account.name, account.mask)
         if account_key in processed_accounts:
             continue
         processed_accounts.add(account_key)
-        
+
+        # Skip revoked accounts entirely
+        if account.status == 'Revoked' or credential_status == 'Revoked':
+            continue
+
+        if soft_disconnected and account.last_known_balance is not None and account.balance_date is not None:
+            # Paused account with a known balance — calculate from last known + post-balance transactions
+            post_total = db.session.query(
+                func.coalesce(func.sum(Transaction.amount), Decimal('0.00'))
+            ).filter(
+                Transaction.account_id == account.id,
+                Transaction.is_removed.is_(False),
+                Transaction.date > account.balance_date
+            ).scalar()
+            raw_balance = account.last_known_balance + post_total
+        elif not soft_disconnected and account.current_balance is not None:
+            # Active (Plaid-connected) account — use live balance from Plaid
+            raw_balance = account.current_balance
+        else:
+            # Fallback: Active account without Plaid balance yet, or paused without reconciliation — sum all transactions
+            raw_balance = txn_total
+
         group_key = _classify_account_group(account)
         if group_key not in groups:
             groups[group_key] = {
@@ -1042,15 +1076,16 @@ def _collect_balances_summary(user_id):
                 'institutions': {}
             }
 
-        account_balance = Decimal(balance or 0)
+        account_balance = Decimal(raw_balance or 0)
         if (account.type or '').lower() in {'credit', 'loan'}:
             account_balance = -account_balance
         account_balance = account_balance.quantize(CENT, rounding=ROUND_HALF_UP)
 
-        institution_key = f"{group_key}:{institution_name or 'Unknown Institution'}"
+        institution_key = f"{group_key}:{institution_name or 'Unknown Institution'}:{credential_label or ''}"
         institution_entry = groups[group_key]['institutions'].setdefault(institution_key, {
             'id': institution_key,
             'name': institution_name or 'Unknown Institution',
+            'label': credential_label or '',
             'total': Decimal('0.00'),
             'accounts': []
         })
@@ -1059,7 +1094,12 @@ def _collect_balances_summary(user_id):
             'id': account.id,
             'name': account.name or 'Account',
             'mask': account.mask,
-            'balance': float(account_balance)
+            'balance': float(account_balance),
+            'current_balance': float(account.current_balance) if account.current_balance is not None else None,
+            'available_balance': float(account.available_balance) if account.available_balance is not None else None,
+            'last_known_balance': float(account.last_known_balance) if account.last_known_balance is not None else None,
+            'balance_date': account.balance_date.isoformat() if account.balance_date else None,
+            'is_reconcilable': soft_disconnected
         }
         institution_entry['accounts'].append(account_entry)
         institution_entry['total'] += account_balance
@@ -2210,6 +2250,13 @@ def _sync_credential_transactions(user, credential, from_webhook=False):
         pass  # Locking not supported by this database backend — best-effort
 
     counts = {'added': 0, 'modified': 0, 'removed': 0}
+    if not credential.access_token:
+        current_app.logger.warning(
+            "Skipping sync for credential %s (%s): no access token",
+            credential.id, credential.institution_name
+        )
+        return counts, {'error_code': 'NO_ACCESS_TOKEN',
+                        'error_message': 'No access token — credential was disconnected or never fully linked.'}
     cursor = credential.transactions_cursor
     has_more = True
     latest_cursor = cursor
@@ -2272,8 +2319,51 @@ def _sync_credential_transactions(user, credential, from_webhook=False):
         credential.transactions_cursor = cursor or latest_cursor or credential.transactions_cursor
         if credential.requires_update:
             credential.requires_update = False
+        # Also sync live balances from Plaid for active (connected) credentials
+        if not credential.soft_disconnected:
+            _sync_account_balances(credential)
 
     return counts, credential_error
+
+
+def _sync_account_balances(credential):
+    """Fetch live balances from Plaid and update Account records."""
+    try:
+        request = AccountsBalanceGetRequest(access_token=credential.access_token)
+        response = current_app.plaid_client.accounts_balance_get(request)
+        data = response.to_dict()
+    except Exception as exc:
+        current_app.logger.warning(
+            "Failed to fetch balances for credential %s: %s",
+            credential.id, exc
+        )
+        return
+
+    plaid_accounts = data.get('accounts', [])
+    updated = 0
+    for pa in plaid_accounts:
+        plaid_id = pa.get('account_id')
+        if not plaid_id:
+            continue
+        account = Account.query.filter_by(
+            credential_id=credential.id,
+            plaid_account_id=plaid_id
+        ).first()
+        if not account:
+            continue
+        balances = pa.get('balances', {}) or {}
+        current = balances.get('current')
+        available = balances.get('available')
+        account.current_balance = current
+        account.available_balance = available
+        updated += 1
+
+    if updated:
+        current_app.logger.info(
+            "Updated balances for %d accounts under credential %s",
+            updated, credential.id
+        )
+
 
 @core.route('/api/plaid/webhook', methods=['POST'])
 def plaid_webhook():
@@ -2410,30 +2500,37 @@ def get_accounts():
     user_id = current_user.id
     bank_id = request.args.get('bank_id')
 
-    query = Account.query.join(Credential).filter(Credential.user_id == user_id, Credential.status == 'Active')
+    query = Account.query.join(Credential).filter(
+        Credential.user_id == user_id,
+        Credential.status.in_(['Active', 'Revoked'])
+    )
 
     if bank_id:
         query = query.filter(Credential.id == bank_id)
 
-    accounts = query.filter(Account.status == 'Active').all()
+    accounts = query.filter(
+        Account.status.in_(['Active', 'Revoked'])
+    ).all()
 
     accounts_data = [{'id': account.id, 'name': account.name, 'mask': account.mask, 
-                    'type': account.type, 'subtype': account.subtype, 'is_enabled': account.is_enabled} for account in accounts]
+                    'type': account.type, 'subtype': account.subtype, 'is_enabled': account.is_enabled,
+                    'status': account.status} for account in accounts]
 
     return jsonify(accounts=accounts_data)
 
 @core.route('/api/banks', methods=['GET'])
 @login_required
 def get_banks():
-    banks = Credential.query.filter_by(user_id=current_user.id, status='Active').all()
+    banks = Credential.query.filter_by(user_id=current_user.id).filter(
+        Credential.status.in_(['Active', 'Revoked'])
+    ).all()
     banks_data = []
 
     for bank in banks:
         accounts_data = []
         for account in bank.accounts:
-            if account.status != 'Active':
+            if account.status not in ('Active', 'Revoked'):
                 continue
-
             accounts_data.append({
                 'id': account.id,
                 'name': account.name,
@@ -2441,18 +2538,83 @@ def get_banks():
                 'type': account.type,
                 'subtype': account.subtype,
                 'plaid_account_id': account.plaid_account_id,
-                'is_enabled': account.is_enabled
+                'is_enabled': account.is_enabled,
+                'status': account.status
             })
+
+        # Skip credentials with no accounts
+        if not accounts_data:
+            continue
 
         banks_data.append({
             'id': bank.id,
             'institution_name': bank.institution_name,
+            'label': bank.label or '',
             'requires_update': bank.requires_update,
             'soft_disconnected': bank.soft_disconnected,
+            'revoked': bank.status == 'Revoked',
             'accounts': accounts_data
         })
 
     return jsonify(banks=banks_data)
+
+
+@core.route('/api/credentials/<int:credential_id>/label', methods=['PUT'])
+@login_required
+def update_credential_label(credential_id):
+    data = request.get_json(silent=True) or {}
+    label = (data.get('label') or '').strip()
+
+    credential = Credential.query.filter_by(
+        id=credential_id, user_id=current_user.id
+    ).first()
+    if not credential:
+        return jsonify(error='Credential not found'), 404
+
+    if len(label) > 100:
+        return jsonify(error='Label too long (max 100 characters)'), 400
+
+    credential.label = label if label else None
+    db.session.commit()
+    return jsonify(success=True, label=credential.label or '')
+
+
+@core.route('/api/accounts/<int:account_id>/reconcile', methods=['PUT'])
+@login_required
+def reconcile_account(account_id):
+    data = request.get_json(silent=True) or {}
+    balance_str = data.get('balance')
+    if balance_str is None:
+        return jsonify(error='balance is required'), 400
+
+    try:
+        balance = Decimal(str(balance_str)).quantize(CENT, rounding=ROUND_HALF_UP)
+    except (ValueError, TypeError):
+        return jsonify(error='Invalid balance value'), 400
+
+    if abs(balance) > Decimal('999999999999') / Decimal('100'):
+        return jsonify(error='Balance value too large'), 400
+
+    account = Account.query.join(Credential).filter(
+        Account.id == account_id,
+        Credential.user_id == current_user.id
+    ).first()
+    if not account:
+        return jsonify(error='Account not found'), 404
+    if not account.credential.soft_disconnected:
+        return jsonify(error='Only paused (CSV Only) accounts can be reconciled'), 400
+
+    from datetime import date
+    account.last_known_balance = balance
+    account.balance_date = date.today()
+    db.session.commit()
+
+    return jsonify(
+        success=True,
+        last_known_balance=float(balance),
+        balance_date=account.balance_date.isoformat()
+    )
+
 
 @core.route('/api/transactions', methods=['GET'])
 @login_required
@@ -2587,6 +2749,207 @@ def export_transactions():
         )
 
     return _with_schema_retry(handler)
+
+
+@core.route('/api/balances/export', methods=['GET'])
+@login_required
+def export_balances():
+    format_param = (request.args.get('format') or 'csv').strip().lower()
+    if format_param not in ('csv', 'xlsx'):
+        return jsonify({'error': 'Unsupported export format.'}), 400
+    if format_param == 'xlsx' and Workbook is None:
+        return jsonify({'error': 'Excel export is not available on this server.'}), 501
+
+    summary = _collect_balances_summary(current_user.id)
+    rows = []
+    for group in summary.get('groups', []):
+        for inst in group.get('institutions', []):
+            label = inst.get('label', '')
+            inst_display = f"{inst['name']} - {label}" if label else inst['name']
+            for acct in inst.get('accounts', []):
+                rows.append({
+                    'group': group['label'],
+                    'institution': inst_display,
+                    'account': acct['name'],
+                    'mask': acct.get('mask', ''),
+                    'balance': acct['balance'],
+                    'type': 'Plaid (live)' if not acct.get('is_reconcilable') and acct.get('current_balance') is not None else 'Reconciled' if acct.get('is_reconcilable') and acct.get('last_known_balance') is not None else 'Calculated'
+                })
+
+    timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+
+    if format_param == 'csv':
+        output = StringIO()
+        writer = csv.writer(output)
+        writer.writerow(['Group', 'Institution', 'Account', 'Mask', 'Balance', 'Type'])
+        for r in rows:
+            writer.writerow([r['group'], r['institution'], r['account'], r['mask'], r['balance'], r['type']])
+        csv_content = output.getvalue()
+        filename = f'balances_{timestamp}.csv'
+        response = current_app.response_class(csv_content, mimetype='text/csv')
+        response.headers['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response
+
+    workbook = Workbook()
+    ws = workbook.active
+    ws.title = 'Balances'
+    ws.append(['Group', 'Institution', 'Account', 'Mask', 'Balance', 'Type'])
+    for r in rows:
+        ws.append([r['group'], r['institution'], r['account'], r['mask'], r['balance'], r['type']])
+    output_stream = BytesIO()
+    workbook.save(output_stream)
+    filename = f'balances_{timestamp}.xlsx'
+    output_stream.seek(0)
+    return send_file(
+        output_stream,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True,
+        download_name=filename
+    )
+
+
+@core.route('/api/spending/export', methods=['GET'])
+@login_required
+def export_spending():
+    format_param = (request.args.get('format') or 'csv').strip().lower()
+    if format_param not in ('csv', 'xlsx'):
+        return jsonify({'error': 'Unsupported export format.'}), 400
+    if format_param == 'xlsx' and Workbook is None:
+        return jsonify({'error': 'Excel export is not available on this server.'}), 501
+
+    target_year = request.args.get('year', type=int) or date.today().year
+    spending_data = _collect_spending_summary(current_user.id)
+
+    year_entry = None
+    for y in spending_data.get('years', []):
+        if y['year'] == target_year:
+            year_entry = y
+            break
+    if not year_entry:
+        return jsonify({'error': f'No spending data for year {target_year}'}), 404
+
+    months = year_entry.get('months', [])
+    month_labels = [m['label'] for m in months]
+
+    # Collect all unique category labels
+    all_cat_labels = set()
+    for m in months:
+        for cat in m.get('spending_categories', []):
+            all_cat_labels.add(cat['label'])
+    all_cat_labels = sorted(all_cat_labels)
+
+    # Build 4 lookup tables: table[category_label][month_label] = value
+    def _build_table(key):
+        table = {}
+        totals = {}
+        for ml in month_labels:
+            totals[ml] = 0
+        for label in all_cat_labels:
+            table[label] = {}
+            for m in months:
+                ml = m['label']
+                cat_val = None
+                for cat in m.get('spending_categories', []):
+                    if cat['label'] == label:
+                        cat_val = cat.get(key, 0) or 0
+                        break
+                table[label][ml] = cat_val if cat_val is not None else 0
+        return table
+
+    spending_table = _build_table('value')
+    avg_table = _build_table('six_month_average')
+    budget_table = _build_table('budget')
+    remainder_table = _build_table('remainder')
+
+    # Compute totals per month for each table
+    def _table_totals(table):
+        totals = {}
+        for ml in month_labels:
+            totals[ml] = 0
+            for label in all_cat_labels:
+                totals[ml] += table[label].get(ml, 0)
+        return totals
+
+    spending_totals = _table_totals(spending_table)
+    # For avg/budget/remainder, the TOTAL row just shows blank (they don't meaningfully sum)
+    avg_totals = {ml: '' for ml in month_labels}
+    budget_totals = {ml: '' for ml in month_labels}
+    remainder_totals = {ml: '' for ml in month_labels}
+
+    tables_config = [
+        ('SPENDING', spending_table, spending_totals),
+        ('6-MONTH AVERAGE', avg_table, avg_totals),
+        ('BUDGET', budget_table, budget_totals),
+        ('REMAINDER', remainder_table, remainder_totals),
+    ]
+
+    timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+
+    # ── CSV: 4 sections ────────────────────────────────────────────────
+    if format_param == 'csv':
+        output = StringIO()
+        writer = csv.writer(output)
+        for section_name, table, totals in tables_config:
+            writer.writerow([f'=== {section_name} ==='])
+            writer.writerow(['Category'] + month_labels)
+            for label in all_cat_labels:
+                row = [label]
+                for ml in month_labels:
+                    row.append(table[label].get(ml, 0))
+                writer.writerow(row)
+            # Total row
+            total_row = ['TOTAL']
+            for ml in month_labels:
+                total_row.append(totals.get(ml, ''))
+            writer.writerow(total_row)
+            writer.writerow([])  # blank separator
+        csv_content = output.getvalue()
+        filename = f'spending_{target_year}_{timestamp}.csv'
+        response = current_app.response_class(csv_content, mimetype='text/csv')
+        response.headers['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response
+
+    # ── XLSX: single sheet, 4 tables with blank-row separators ─────────
+    import tempfile, os
+    workbook = Workbook()
+    default = workbook.active
+    default.title = f'Spending {target_year}'
+
+    for idx, (section_name, table, totals) in enumerate(tables_config):
+        if idx > 0:
+            default.append([None] * (1 + len(month_labels)))
+        default.append([section_name])
+        default.append(['Category'] + month_labels)
+        for label in all_cat_labels:
+            row = [label]
+            for ml in month_labels:
+                row.append(table[label].get(ml, 0))
+            default.append(row)
+        total_row = ['TOTAL']
+        for ml in month_labels:
+            val = totals.get(ml, 0)
+            total_row.append(val if val != '' else 0)
+        default.append(total_row)
+
+    # Save to temp file and re-read to normalize any XML issues
+    tmpfd, tmppath = tempfile.mkstemp(suffix='.xlsx')
+    os.close(tmpfd)
+    try:
+        workbook.save(tmppath)
+        from openpyxl import load_workbook as _reload
+        wb2 = _reload(tmppath)
+        output_stream = BytesIO()
+        wb2.save(output_stream)
+    finally:
+        os.unlink(tmppath)
+    output_stream.seek(0)
+    filename = f'spending_{target_year}_{timestamp}.xlsx'
+    return send_file(
+        output_stream,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True,
+        download_name=filename
+    )
 
 
 @core.route('/api/transactions/<int:transaction_id>/split', methods=['GET', 'POST'])

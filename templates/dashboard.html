@@ -204,7 +204,7 @@
                 id="transactions-accordion"
                 v-show="!transactionsCollapsed && !isSidebarCollapsed"
             >
-                <div class="institution-card" v-for="bank in banks" :key="bank.id">
+                <div class="institution-card" v-for="bank in banks" :key="bank.id" :class="{ 'institution-disconnected': bank.revoked }">
                     <div class="institution-header">
                         <div class="institution-main">
                             <div class="form-check form-check-inline institution-checkbox mb-0">
@@ -218,8 +218,17 @@
                                 >
                                 <label class="sr-only" :for="`bank-${bank.id}`">Toggle [[ bank.institution_name ]]</label>
                             </div>
-                            <span class="institution-name">[[ bank.institution_name ]]</span>
+                            <span class="institution-name" :class="{ 'text-muted': bank.revoked }">[[ bank.institution_name ]]</span>
+                            <span v-if="editingLabelBankId !== bank.id">
+                                <span v-if="bank.label" class="institution-label-display" @click="startLabelEdit(bank)"> - [[ bank.label ]]</span>
+                                <span v-else class="institution-label-placeholder" @click="startLabelEdit(bank)"> — <span class="text-muted small">Label</span></span>
+                            </span>
+                            <span v-else>
+                                <span class="institution-label-sep"> - </span>
+                                <input type="text" class="institution-label-input" v-model="editLabelValue" @keydown.enter="saveLabel(bank)" @keydown.escape="cancelLabelEdit" @blur="saveLabel(bank)" ref="labelInput" maxlength="100">
+                            </span>
                             <span v-if="bank.soft_disconnected" class="badge badge-secondary ml-1" style="font-size: 0.65rem;">CSV Only</span>
+                            <span v-if="bank.revoked" class="badge badge-secondary ml-1" style="font-size: 0.65rem;">Revoked</span>
                             <button
                                 v-if="bank.requires_update"
                                 type="button"
@@ -245,7 +254,7 @@
                         :aria-labelledby="`heading-${bank.id}`"
                     >
                         <div class="list-group list-group-flush account-list">
-                            <label class="list-group-item d-flex justify-content-between align-items-center" v-for="account in bank.accounts" :key="account.id">
+                            <label class="list-group-item d-flex justify-content-between align-items-center" v-for="account in bank.accounts" :key="account.id" :class="{ 'bg-light': account.status === 'Revoked' }">
                                 <div class="custom-control custom-checkbox">
                                     <input class="custom-control-input" type="checkbox" :id="`account-${account.id}`" :value="account.id" v-model="selectedAccountIds" @change="handleAccountSelectionChange">
                                     <label class="custom-control-label" :for="`account-${account.id}`">
@@ -253,10 +262,13 @@
                                         <span class="text-muted ml-1" v-if="account.mask">••[[ account.mask ]]</span>
                                     </label>
                                 </div>
-                                <span class="badge badge-light text-uppercase ml-2" v-if="account.subtype">[[ account.subtype ]]</span>
+                                <span>
+                                    <span class="badge badge-light text-uppercase ml-2" v-if="account.subtype">[[ account.subtype ]]</span>
+                                    <span v-if="account.status === 'Revoked'" class="badge badge-secondary ml-1 account-status-badge">Inactive</span>
+                                </span>
                             </label>
                             <div v-if="!bank.accounts.length" class="list-group-item text-muted small">
-                                No active accounts for this institution.
+                                No accounts available for this institution.
                             </div>
                         </div>
                         <div class="px-3 py-2 border-top">
@@ -799,7 +811,16 @@
                                         <h5 class="mb-0">Balances</h5>
                                         <small class="text-muted d-block">Totals by account group and institution</small>
                                     </div>
-                                    <button
+                                    <div class="d-flex align-items-center">
+                                        <div class="btn-group btn-group-sm mr-2" role="group" aria-label="Export balances">
+                                            <button type="button" class="btn btn-outline-secondary" title="Download CSV" @click="exportBalances('csv')">
+                                                <i class="fas fa-file-csv"></i>
+                                            </button>
+                                            <button type="button" class="btn btn-outline-secondary" title="Download Excel" @click="exportBalances('xlsx')">
+                                                <i class="fas fa-file-excel"></i>
+                                            </button>
+                                        </div>
+                                        <button
                                         v-if="isMobileView"
                                         type="button"
                                         class="card-collapse-toggle"
@@ -809,7 +830,8 @@
                                     >
                                         <i :class="[mobileCardCollapsed.balances ? 'fas fa-chevron-down' : 'fas fa-chevron-up']"></i>
                                     </button>
-                                </div>
+                                        </div>
+                                    </div>
                                 <div
                                     class="card-body"
                                     id="balances-card-body"
@@ -849,7 +871,10 @@
                                                         :aria-expanded="isBalanceInstitutionOpen(group.key, institution.id) ? 'true' : 'false'"
                                                     >
                                                         <i :class="isBalanceInstitutionOpen(group.key, institution.id) ? 'fas fa-chevron-down' : 'fas fa-chevron-right'"></i>
-                                                        <span class="tree-label">[[ institution.name ]]</span>
+                                                        <span class="tree-label">
+                                                            [[ institution.name ]]
+                                                            <small v-if="institution.label" class="text-muted credential-label-display">- [[ institution.label ]]</small>
+                                                        </span>
                                                         <span class="tree-value" :class="{ 'text-danger': institution.total < 0 }">
                                                             [[ formatDashboardAmount(institution.total, null) ]]
                                                         </span>
@@ -861,8 +886,12 @@
                                                             class="tree-account"
                                                         >
                                                             <span class="tree-label">[[ account.name ]] <small v-if="account.mask" class="text-muted">([[ account.mask ]])</small></span>
-                                                            <span class="tree-value" :class="{ 'text-danger': account.balance < 0 }">
+                                                            <span v-if="reconcilingAccountId !== account.id" class="tree-value" :class="{ 'text-danger': account.balance < 0, 'reconcilable': account.is_reconcilable }" @click="startReconcile(account)">
                                                                 [[ formatDashboardAmount(account.balance, null) ]]
+                                                                <small v-if="account.is_reconcilable" class="text-muted reconcilable-hint">✎</small>
+                                                            </span>
+                                                            <span v-else class="tree-value">
+                                                                $<input type="number" step="0.01" class="reconcile-input" v-model.number="reconcileValue" @keydown.enter="saveReconcile(account)" @keydown.escape="cancelReconcile" @blur="saveReconcile(account)" ref="reconcileInput" autofocus>
                                                             </span>
                                                         </div>
                                                     </div>
@@ -895,6 +924,14 @@
                                                 [[ year ]]
                                             </option>
                                         </select>
+                                    </div>
+                                    <div class="btn-group btn-group-sm" role="group" aria-label="Export spending">
+                                        <button type="button" class="btn btn-outline-secondary" title="Download CSV" @click="exportSpending('csv')">
+                                            <i class="fas fa-file-csv"></i>
+                                        </button>
+                                        <button type="button" class="btn btn-outline-secondary" title="Download Excel" @click="exportSpending('xlsx')">
+                                            <i class="fas fa-file-excel"></i>
+                                        </button>
                                     </div>
                                     <button
                                         v-if="isMobileView"
@@ -1503,11 +1540,12 @@
                                 <li v-for="bank in banks" :key="bank.id" class="list-group-item d-flex justify-content-between align-items-center">
                                     <span class="bank-name">[[ bank.institution_name ]]
                                         <span v-if="bank.soft_disconnected" class="badge badge-secondary ml-1">CSV Only</span>
+                                        <span v-if="bank.revoked" class="badge badge-secondary ml-1">Disconnected</span>
                                     </span>
                                     <div class="button-group">
                                         <button v-if="bank.soft_disconnected" class="btn btn-success btn-sm mr-2" @click="startReconnect(bank.id)">Reconnect</button>
-                                        <button v-else class="btn btn-secondary btn-sm mr-2" @click="startReconnect(bank.id)">Reconnect</button>
-                                        <button v-if="!bank.soft_disconnected" class="btn btn-warning btn-sm mr-2" @click="softDisconnectBank(bank)">Pause</button>
+                                        <button v-else-if="!bank.revoked" class="btn btn-secondary btn-sm mr-2" @click="startReconnect(bank.id)">Reconnect</button>
+                                        <button v-if="!bank.soft_disconnected && !bank.revoked" class="btn btn-warning btn-sm mr-2" @click="softDisconnectBank(bank)">Pause</button>
                                         <button class="btn btn-danger btn-sm" @click="removeBank(bank)">Remove</button>
                                     </div>
                                 </li>

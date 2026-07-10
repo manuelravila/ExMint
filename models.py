@@ -79,6 +79,7 @@ class Credential(db.Model):
     status = db.Column(db.String(10), nullable=False, default='Active')
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     institution_name = db.Column(db.String(100))
+    label = db.Column(db.String(100), nullable=True)
     access_token = db.Column(EncryptedType(db.String, key))
     requires_update = db.Column(db.Boolean, default=False, nullable=False)
     soft_disconnected = db.Column(db.Boolean, default=False, nullable=False)
@@ -94,6 +95,10 @@ class Account(db.Model):
     subtype = db.Column(db.String(50))  # e.g., 'checking', 'savings', 'credit card'
     mask = db.Column(db.String(4))  # Last 4 digits of the account number, if available
     is_enabled = db.Column(db.Boolean, default=True, nullable=False)
+    last_known_balance = db.Column(db.Numeric(14, 2), nullable=True)
+    balance_date = db.Column(db.Date, nullable=True)
+    current_balance = db.Column(db.Numeric(14, 2), nullable=True)
+    available_balance = db.Column(db.Numeric(14, 2), nullable=True)
 
     # Relation to Credential
     credential = db.relationship('Credential', backref=db.backref('accounts', lazy=True))

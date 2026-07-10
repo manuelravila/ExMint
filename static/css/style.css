@@ -384,6 +384,85 @@ input[type="submit"] {
     margin-right: 0.5rem;
 }
 
+.institution-disconnected {
+    opacity: 0.7;
+}
+
+.institution-disconnected .account-list .list-group-item {
+    background-color: #f8f9fa;
+}
+
+.institution-disconnected .account-list .account-status-badge {
+    font-size: 0.6rem;
+}
+
+.institution-label-display {
+    cursor: pointer;
+    color: #555;
+    font-size: 0.85rem;
+}
+
+.institution-label-display:hover {
+    color: #000;
+    text-decoration: underline;
+}
+
+.institution-label-placeholder {
+    cursor: pointer;
+    color: #aaa;
+    font-size: 0.85rem;
+}
+
+.institution-label-placeholder:hover {
+    color: #666;
+}
+
+.institution-label-sep {
+    color: #999;
+    font-size: 0.85rem;
+}
+
+.institution-label-input {
+    width: 100px;
+    font-size: 0.85rem;
+    padding: 0 4px;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    outline: none;
+}
+
+.institution-label-input:focus {
+    border-color: #2563EB;
+    box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+}
+
+.reconcilable {
+    cursor: pointer;
+}
+
+.reconcilable:hover {
+    color: #2563EB !important;
+}
+
+.reconcilable-hint {
+    font-size: 0.7rem;
+    margin-left: 2px;
+}
+
+.reconcile-input {
+    width: 90px;
+    font-size: 0.85rem;
+    padding: 0 4px;
+    border: 1px solid #2563EB;
+    border-radius: 3px;
+    outline: none;
+    text-align: right;
+}
+
+.reconcile-input:focus {
+    box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.2);
+}
+
 .collapse-toggle {
     color: #2c6b4f;
     background: rgba(255, 255, 255, 0.5);
