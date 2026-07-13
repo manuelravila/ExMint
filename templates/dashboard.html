@@ -1016,9 +1016,9 @@
                                                     <div class="spending-spending-header">
                                                         <span>Spending</span>
                                                         <span class="spending-header-meta">
-                                                            <span class="spending-header-budget">Budget: [[ formatDashboardAmount(month.budget_total, null) ]]</span>
-                                                            <span class="spending-header-remainder">Remainder: [[ formatDashboardAmount(month.remainder_total, null) ]]</span>
                                                             <span class="spending-spending-subtotal">Total: [[ formatDashboardAmount(month.spending_subtotal, null) ]]</span>
+                                                            <span class="spending-header-budget">Budget: [[ formatDashboardAmount(month.budget_total, null) ]]</span>
+                                                            <span class="spending-header-remainder" :class="{'text-success': month.remainder_total > 0, 'text-danger': month.remainder_total < 0}">Remainder: [[ formatDashboardAmount(month.remainder_total, null) ]]</span>
                                                         </span>
                                                     </div>
                                                     <div class="table-responsive spending-table-wrapper">

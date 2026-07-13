@@ -1370,8 +1370,6 @@ def _collect_spending_summary(user_id):
         }
 
     uncategorized_totals = defaultdict(lambda: defaultdict(lambda: Decimal('0.00')))
-    # Track spending per (custom_category_id) for exclusion check
-    cat_excluded_spending = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: Decimal('0.00'))))
 
     for txn in transactions:
         if txn.has_split_children and not txn.is_split_child:
@@ -1383,21 +1381,10 @@ def _collect_spending_summary(user_id):
         month = txn.date.month
         value = Decimal(txn.amount or 0).quantize(CENT, rounding=ROUND_HALF_UP)
 
-        # Track excluded-category spending and skip normal category tracking
-        if (txn.custom_category_id in excluded_cat_ids) and value < 0:
-            cat_excluded_spending[txn.custom_category_id][year][month] += abs(value)
-            continue
-
         if not label:
             uncategorized_totals[year][month] += value
             continue
         label_key = label.lower()
-
-        # Also check exclusion by resolved label (handles overrides → excluded cats)
-        if value < 0 and label_key in cat_id_map and cat_id_map[label_key][1]:
-            cat_id = cat_id_map[label_key][0]
-            cat_excluded_spending[cat_id][year][month] += abs(value)
-            continue
 
         info = category_entries.setdefault(label_key, {
             'label': label,
@@ -1433,7 +1420,9 @@ def _collect_spending_summary(user_id):
                 me = year_map[year][month]
                 me['month'] = month
                 me['label'] = calendar.month_abbr[month]
-                me['spending_subtotal'] += value
+                cat_info = cat_id_map.get(label_key, (None, None))
+                if not cat_info[1]:  # not budget-excluded
+                    me['spending_subtotal'] += value
                 six_month_avg = abs(metrics_entry.get('six_month_average', Decimal('0.00')))
                 budget_amount = _get_budget_for(label_key, year, month)
                 remainder = None
@@ -1443,7 +1432,6 @@ def _collect_spending_summary(user_id):
 
                 rollover_amt_for_cat = _get_rollover(label_key, year, month)
                 cat_is_auto = _get_is_automatic(label_key, year, month)
-                cat_info = cat_id_map.get(label_key, (None, None))
                 me['spending_categories'].append({
                     'label': info['label'],
                     'value': float(value.quantize(CENT, rounding=ROUND_HALF_UP)),
@@ -1488,13 +1476,14 @@ def _collect_spending_summary(user_id):
             for label_key, hist in _budget_history.items():
                 if label_key in existing_labels:
                     continue
+                if label_key == 'everything else':
+                    continue  # handled by its own dedicated section below
                 budget_amount = _get_budget_for(label_key, year, month)
                 if budget_amount is None:
                     continue
-                # Skip budget-excluded categories
+                # Budget-excluded categories appear in the table (dimmed/strikethrough)
                 cat_info_bo = cat_id_map.get(label_key, (None, None))
-                if cat_info_bo[1]:  # budget_excluded
-                    continue
+                is_excluded_bo = bool(cat_info_bo[1])
                 display_label = None
                 for lk, info in category_entries.items():
                     if lk == label_key:
@@ -1533,10 +1522,16 @@ def _collect_spending_summary(user_id):
         for month in list(year_map[year].keys()):
             entry = year_map[year][month]
             uc_value = uncategorized_totals[year][month]
-            if uc_value == Decimal('0.00'):
-                continue
             abs_uc = abs(uc_value)
-            entry['spending_subtotal'] += abs_uc
+            ee_budget = _get_budget_for('everything else', year, month)
+
+            # Skip if zero spending AND no budget (nothing to show)
+            if abs_uc == Decimal('0.00') and ee_budget is None:
+                continue
+
+            if abs_uc > Decimal('0.00'):
+                entry['spending_subtotal'] += abs_uc
+
             # Calculate 6-month average
             uc_values = []
             for offset in range(6):
@@ -1552,7 +1547,6 @@ def _collect_spending_summary(user_id):
             if uc_values:
                 uc_avg = (sum(uc_values, Decimal('0.00')) / Decimal(len(uc_values))).quantize(CENT, rounding=ROUND_HALF_UP)
 
-            ee_budget = _get_budget_for('everything else', year, month)
             ee_remainder = (ee_budget - Decimal(str(abs_uc))).quantize(CENT) if ee_budget is not None else None
 
             entry['spending_categories'].append({
