@@ -57,6 +57,7 @@ from core_views import (
     DEFAULT_MANUAL_COLOR,
     UNCATEGORIZED_LABEL,
     FALLBACK_CATEGORY_COLOR,
+    _collect_spending_summary,
 )
 
 api_v1 = Blueprint('api_v1', __name__, url_prefix='/api/v1')
@@ -1168,6 +1169,58 @@ def list_institutions():
             'accounts': accounts,
         })
     return jsonify({'institutions': result})
+
+
+# ---------------------------------------------------------------------------
+#  Budget & Spending Summary
+# ---------------------------------------------------------------------------
+
+@api_v1.route('/budgets/summary', methods=['GET'])
+@require_api_auth
+def budget_summary():
+    """Return current month's budget/spending summary with per-category detail.
+
+    Query params:
+      year    int   (default: current year)
+      month   int   (default: current month)
+
+    Returns the same structure as _collect_spending_summary but
+    filtered to the requested year/month for compactness.
+    """
+    from datetime import date as dt_date
+    today = dt_date.today()
+    target_year = request.args.get('year', type=int) or today.year
+    target_month = request.args.get('month', type=int) or today.month
+
+    spending = _collect_spending_summary(g.api_user.id)
+    for y in spending.get('years', []):
+        if y['year'] == target_year:
+            for m in y.get('months', []):
+                if m['month'] == target_month:
+                    # Keep only what the agent needs
+                    compact = {
+                        'year': target_year,
+                        'month': target_month,
+                        'budget_total': m['budget_total'],
+                        'spending_subtotal': m['spending_subtotal'],
+                        'remainder_total': m['remainder_total'],
+                        'spending_categories': [],
+                        'income_categories': m.get('income_categories', []),
+                    }
+                    for cat in m['spending_categories']:
+                        if cat.get('_budget_excluded'):
+                            continue  # skip excluded for agent summary
+                        compact['spending_categories'].append({
+                            'label': cat['label'],
+                            'value': cat['value'],
+                            'budget': cat.get('budget'),
+                            'remainder': cat.get('remainder'),
+                            'rollover_amount': cat.get('_rollover_amount'),
+                            'is_everything_else': cat.get('_is_everything_else', False),
+                        })
+                    return jsonify({'budget_summary': compact})
+
+    return jsonify({'budget_summary': None})
 
 
 # ---------------------------------------------------------------------------
