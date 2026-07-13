@@ -1392,6 +1392,13 @@ def _collect_spending_summary(user_id):
             uncategorized_totals[year][month] += value
             continue
         label_key = label.lower()
+
+        # Also check exclusion by resolved label (handles overrides → excluded cats)
+        if value < 0 and label_key in cat_id_map and cat_id_map[label_key][1]:
+            cat_id = cat_id_map[label_key][0]
+            cat_excluded_spending[cat_id][year][month] += abs(value)
+            continue
+
         info = category_entries.setdefault(label_key, {
             'label': label,
             'totals': defaultdict(lambda: defaultdict(lambda: Decimal('0.00'))),
@@ -1570,11 +1577,8 @@ def _collect_spending_summary(user_id):
                 (cat.get('budget') or 0) for cat in entry['spending_categories']
                 if not cat.get('_budget_excluded')
             )).quantize(CENT, rounding=ROUND_HALF_UP))
-            entry['remainder_total'] = float(Decimal(sum(
-                (cat.get('remainder') if 'remainder' in cat else None)
-                for cat in entry['spending_categories']
-                if cat.get('remainder') is not None and not cat.get('_budget_excluded')
-            )).quantize(CENT, rounding=ROUND_HALF_UP))
+            # Remainder = budget - total (non-excluded) spending
+            entry['remainder_total'] = float((Decimal(str(entry['budget_total'])) - Decimal(str(entry['spending_subtotal']))).quantize(CENT, rounding=ROUND_HALF_UP))
 
     years_output = []
     for year in sorted(year_map.keys(), reverse=True):
