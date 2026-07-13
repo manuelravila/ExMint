@@ -1470,41 +1470,7 @@ def _collect_spending_summary(user_id):
                     'classification': 'income',
                 })
 
-    # ── Reserve (populated later, after Uncategorized + budget-only lines) ─
-
-    # ── Uncategorized as its own line (no budget, but 6M avg) ───────────
-    # Compute 6M avg for uncategorized spending
-    for year in list(year_map.keys()):
-        for month in list(year_map[year].keys()):
-            entry = year_map[year][month]
-            uc_value = uncategorized_totals[year][month]
-            if uc_value == Decimal('0.00'):
-                continue
-            abs_uc = abs(uc_value)
-            entry['spending_subtotal'] += abs_uc
-            # Calculate 6-month average for uncategorized
-            uc_values = []
-            for offset in range(6):
-                y = year
-                m = month - offset
-                while m < 1:
-                    m += 12
-                    y -= 1
-                val = uncategorized_totals[y][m]
-                if val != Decimal('0.00'):
-                    uc_values.append(abs(val))
-            uc_avg = Decimal('0.00')
-            if uc_values:
-                uc_avg = (sum(uc_values, Decimal('0.00')) / Decimal(len(uc_values))).quantize(CENT, rounding=ROUND_HALF_UP)
-
-            entry['spending_categories'].append({
-                'label': UNCATEGORIZED_LABEL,
-                'value': float(abs_uc.quantize(CENT, rounding=ROUND_HALF_UP)),
-                'six_month_average': float(uc_avg.quantize(CENT, rounding=ROUND_HALF_UP)),
-                'budget': None,
-                'remainder': None,
-                'classification': 'expense',
-            })
+    # ── Everything Else (moved to after budget-only lines) ──────────────────
 
     # ── Add budget-only categories ($0 spending) ───────────────────────
     for year in list(year_map.keys()):
@@ -1555,42 +1521,44 @@ def _collect_spending_summary(user_id):
                     '_budget_excluded': cat_id_map.get(label_key, (None, None))[1],
                 })
 
-    # ── Reserve: aggregate non-budgeted, non-excluded categories ────────────
+    # ── Everything Else (uncategorized transactions with optional budget) ──
     for year in list(year_map.keys()):
         for month in list(year_map[year].keys()):
             entry = year_map[year][month]
-            reserve_amount = Decimal('0.00')
+            uc_value = uncategorized_totals[year][month]
+            if uc_value == Decimal('0.00'):
+                continue
+            abs_uc = abs(uc_value)
+            entry['spending_subtotal'] += abs_uc
+            # Calculate 6-month average
+            uc_values = []
+            for offset in range(6):
+                y = year
+                m = month - offset
+                while m < 1:
+                    m += 12
+                    y -= 1
+                val = uncategorized_totals[y][m]
+                if val != Decimal('0.00'):
+                    uc_values.append(abs(val))
+            uc_avg = Decimal('0.00')
+            if uc_values:
+                uc_avg = (sum(uc_values, Decimal('0.00')) / Decimal(len(uc_values))).quantize(CENT, rounding=ROUND_HALF_UP)
 
-            for cat in entry['spending_categories']:
-                if cat.get('classification') != 'expense':
-                    continue
-                if cat.get('_budget_excluded'):
-                    continue
-                if cat.get('_is_everything_else'):
-                    continue
-                if cat['label'] == UNCATEGORIZED_LABEL:
-                    continue
-                if cat.get('budget') is not None:
-                    continue
-                reserve_amount += Decimal(str(cat.get('value', 0)))
+            ee_budget = _get_budget_for('everything else', year, month)
+            ee_remainder = (ee_budget - Decimal(str(abs_uc))).quantize(CENT) if ee_budget is not None else None
 
-            reserve_budget = _get_budget_for('everything else', year, month)
-            reserve_remainder = (reserve_budget - reserve_amount).quantize(CENT) if reserve_budget is not None else None
-
-            if reserve_amount > Decimal('0.00') or reserve_budget is not None:
-                reserve_auto = _get_is_automatic('everything else', year, month)
-                entry['spending_categories'].append({
-                    'label': 'Reserve',
-                    'value': float(reserve_amount.quantize(CENT, rounding=ROUND_HALF_UP)),
-                    'six_month_average': 0.0,
-                    'budget': float(reserve_budget.quantize(CENT, rounding=ROUND_HALF_UP)) if reserve_budget is not None else None,
-                    'remainder': float(reserve_remainder.quantize(CENT, rounding=ROUND_HALF_UP)) if reserve_remainder is not None else None,
-                    'classification': 'expense',
-                    '_is_everything_else': True,
-                    '_is_automatic': reserve_auto,
-                    '_category_id': None,
-                    '_budget_excluded': None,
-                })
+            entry['spending_categories'].append({
+                'label': 'Everything Else',
+                'value': float(abs_uc.quantize(CENT, rounding=ROUND_HALF_UP)),
+                'six_month_average': float(uc_avg.quantize(CENT, rounding=ROUND_HALF_UP)),
+                'budget': float(ee_budget.quantize(CENT, rounding=ROUND_HALF_UP)) if ee_budget is not None else None,
+                'remainder': float(ee_remainder.quantize(CENT, rounding=ROUND_HALF_UP)) if ee_remainder is not None else None,
+                'classification': 'expense',
+                '_is_everything_else': True,
+                '_category_id': None,
+                '_budget_excluded': None,
+            })
 
     # ── Compute totals and format output ───────────────────────────────
     for year in list(year_map.keys()):
@@ -4153,19 +4121,13 @@ def _apply_rollover(user_id, prev_year, prev_month, current_year, current_month)
 
     ee_label = 'everything else'
 
-    # Reserve spending = sum of non-budgeted, non-excluded categories
-    reserve_spending = Decimal('0.00')
-    for label_key, spent in spending_map.items():
-        if label_key not in budget_map or label_key == ee_label:
-            reserve_spending += spent
-
+    # Total budget = sum of all budgeted categories
     total_budget = sum(budget_map.values())
 
-    total_spending = reserve_spending
+    # Total spending = ALL spending (budgeted + non-budgeted + uncategorized)
+    total_spending = excluded_spending_total  # uncategorized
     for label_key, spent in spending_map.items():
-        if label_key in budget_map:
-            total_spending += spent
-    total_spending += excluded_spending_total  # uncategorized
+        total_spending += spent  # includes both budgeted and non-budgeted categories
 
     total_budget = total_budget.quantize(CENT)
     total_spending = total_spending.quantize(CENT)
@@ -4176,7 +4138,7 @@ def _apply_rollover(user_id, prev_year, prev_month, current_year, current_month)
     per_cat_surplus = {}
     for label_key, budget_amt in budget_map.items():
         if label_key == ee_label:
-            spent = reserve_spending
+            spent = excluded_spending_total  # EE = uncategorized spending
         else:
             spent = spending_map.get(label_key, Decimal('0.00'))
         per_cat_surplus[label_key] = budget_amt - spent
