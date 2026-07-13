@@ -21,6 +21,7 @@ class CustomCategory(db.Model):
     color = db.Column(db.String(7), nullable=False, default='#2C6B4F')
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    budget_excluded = db.Column(db.Boolean, nullable=False, default=False)
 
     user = db.relationship('User', backref=db.backref('custom_categories', lazy=True))
     transactions = db.relationship('Transaction', back_populates='custom_category', lazy=True)
@@ -227,6 +228,8 @@ class MonthlyBudget(db.Model):
     year = db.Column(db.Integer, nullable=False)
     month = db.Column(db.Integer, nullable=False)  # 1-12
     amount = db.Column(db.Numeric(14, 2), nullable=False)
+    is_automatic = db.Column(db.Boolean, nullable=False, default=False)
+    rollover_amount = db.Column(db.Numeric(14, 2), nullable=False, default=0)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 

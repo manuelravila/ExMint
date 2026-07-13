@@ -1383,6 +1383,52 @@ body.mobile-sidebar-open {
     font-weight: 600;
 }
 
+.budget-rollover-badge {
+    display: inline-block;
+    margin-left: 0.3rem;
+    padding: 0 0.35rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #2C6B4F;
+    background: rgba(44, 107, 79, 0.1);
+    border-radius: 0.25rem;
+    line-height: 1.4;
+    white-space: nowrap;
+}
+
+.budget-exclude-toggle {
+    margin-left: 0.3rem;
+    padding: 0 0.2rem !important;
+    font-size: 0.75rem;
+    color: #718096;
+    opacity: 0.4;
+    transition: opacity 0.15s ease;
+    vertical-align: middle;
+}
+
+.budget-exclude-toggle:hover {
+    opacity: 1;
+    color: #e53e3e;
+}
+
+.budget-exclude-toggle.text-muted {
+    opacity: 0.7;
+    color: #e53e3e !important;
+}
+
+.budget-exclude-toggle.text-muted:hover {
+    opacity: 1;
+    color: #38a169 !important;
+}
+
+tr.budget-excluded-row {
+    opacity: 0.5;
+}
+
+tr.budget-excluded-row .spending-category-link {
+    text-decoration: line-through;
+}
+
 .spending-category-link {
     color: #2b6cb0;
     font-weight: 600;

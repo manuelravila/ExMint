@@ -3,6 +3,19 @@
 
 changelog = [
     {
+        "version": "1.8.0",
+        "date": "2026-07-13",
+        "changes": [
+            "Flexible budget system with rollover — monthly surplus rolls to next month proportionally",
+            "Net-gate rollover: surplus only distributes if total spending stays under total budget",
+            "Everything Else virtual bucket — aggregates budget-excluded categories into one line item",
+            "Budget-exclusion toggle (eye icon) per category — excluded transactions skip budget tracking",
+            "Auto-rollover on first dashboard load after month transition",
+            "Alembic migration: budget_excluded, is_automatic, rollover_amount columns",
+            "Spending report shows rollover amounts as green +$X badges with base budget breakdown"
+        ]
+    },
+    {
         "version": "1.6.0",
         "date": "2026-07-01",
         "changes": [

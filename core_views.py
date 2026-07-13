@@ -12,6 +12,8 @@ from models import (
     Budget,
     MonthlyBudget,
     CsvImportTemplate,
+    get_app_setting,
+    set_app_setting,
 )
 from plaid.model.item_remove_request import ItemRemoveRequest
 from plaid.model.accounts_get_request import AccountsGetRequest
@@ -702,6 +704,7 @@ def _serialize_custom_category(category, extras=None):
         'color': category.color,
         'created_at': category.created_at.isoformat() if category.created_at else None,
         'updated_at': category.updated_at.isoformat() if category.updated_at else None,
+        'budget_excluded': getattr(category, 'budget_excluded', False),
     }
     if extras:
         data.update(extras)
@@ -1248,11 +1251,44 @@ def _ensure_monthly_budgets(user_id):
 
 
 def _collect_spending_summary(user_id):
+    """Collect spending summary with Everything Else bucket, budget exclusion, and rollover data.
+
+    Key changes from the original:
+    - Loads budget_excluded flag from CustomCategory
+    - Aggregates excluded-category + uncategorized transactions into "Everything Else" line
+    - Includes is_automatic / rollover_amount from MonthlyBudget
+    - Returns per-category surplus/deficit info for rollover display
+    """
     today = date.today()
     current_year = today.year
     current_month = today.month
     start_date = _month_start_offset(today, 23)
 
+    # ── Auto-rollover: apply once per month transition ──────────────
+    try:
+        # Determine the previous completed month
+        if current_month == 1:
+            prev_month_for_ro = 12
+            prev_year_for_ro = current_year - 1
+        else:
+            prev_month_for_ro = current_month - 1
+            prev_year_for_ro = current_year
+
+        prev_ym_key = prev_year_for_ro * 100 + prev_month_for_ro
+        last_ro = get_app_setting('last_rollover_month', '0')
+        last_ro_val = int(last_ro) if last_ro and last_ro.isdigit() else 0
+
+        if prev_ym_key > last_ro_val:
+            _apply_rollover(
+                user_id, prev_year_for_ro, prev_month_for_ro,
+                current_year, current_month
+            )
+            set_app_setting('last_rollover_month', str(prev_ym_key))
+    except Exception:
+        # Rollover is best-effort; never crash the dashboard
+        pass
+
+    # ── Load transactions ───────────────────────────────────────────────
     transactions = Transaction.query.options(
         joinedload(Transaction.custom_category)
     ).filter(
@@ -1263,7 +1299,58 @@ def _collect_spending_summary(user_id):
 
     override_map = _load_overrides([txn.id for txn in transactions])
 
-    # First, find all unique category labels from the transaction set
+    # ── Load budget_excluded categories ────────────────────────────────
+    excluded_cat_ids = set()
+    cat_id_map = {}  # label_key -> (category_id, budget_excluded)
+    try:
+        rows = CustomCategory.query.filter(
+            CustomCategory.user_id == user_id,
+        ).with_entities(CustomCategory.id, CustomCategory.name, CustomCategory.budget_excluded).all()
+        excluded_cat_ids = {r[0] for r in rows if r[2]}
+        for r in rows:
+            label_key = r[1].strip().lower()
+            cat_id_map[label_key] = (r[0], bool(r[2]))
+    except Exception:
+        pass
+
+    # ── Load MonthlyBudgets (including is_automatic / rollover_amount) ─
+    monthly_budget_rows = MonthlyBudget.query.filter(
+        MonthlyBudget.user_id == user_id,
+        MonthlyBudget.year >= start_date.year,
+        MonthlyBudget.year <= current_year + 2
+    ).order_by(MonthlyBudget.year, MonthlyBudget.month).all()
+
+    # Build per-category sorted budget history for backward fallback
+    _budget_history = defaultdict(list)
+    _is_automatic_map = {}   # (year, month, label_key) -> bool
+    _rollover_map = {}       # (year, month, label_key) -> Decimal
+    for mb in monthly_budget_rows:
+        lk = mb.category_label.strip().lower()
+        ym = (mb.year, mb.month)
+        amt = Decimal(mb.amount or 0).quantize(CENT, rounding=ROUND_HALF_UP)
+        _budget_history[lk].append((mb.year, mb.month, amt))
+        _is_automatic_map[ym + (lk,)] = getattr(mb, 'is_automatic', False)
+        rollover = getattr(mb, 'rollover_amount', Decimal('0.00'))
+        if rollover:
+            _rollover_map[ym + (lk,)] = Decimal(rollover).quantize(CENT, rounding=ROUND_HALF_UP)
+
+    def _get_budget_for(label_key, year, month):
+        """Walk backward from the requested month to find the nearest budget."""
+        hist = _budget_history.get(label_key, [])
+        if not hist:
+            return None
+        for y, m, amt in reversed(hist):
+            if (y, m) <= (year, month):
+                return amt
+        return None
+
+    def _get_is_automatic(label_key, year, month):
+        return _is_automatic_map.get((year, month, label_key), False)
+
+    def _get_rollover(label_key, year, month):
+        return _rollover_map.get((year, month, label_key), Decimal('0.00'))
+
+    # ── Categorize transactions ────────────────────────────────────────
     all_category_labels = set()
     for txn in transactions:
         if txn.has_split_children and not txn.is_split_child:
@@ -1279,11 +1366,12 @@ def _collect_spending_summary(user_id):
             'label': label,
             'totals': defaultdict(lambda: defaultdict(lambda: Decimal('0.00'))),
             'income_totals': defaultdict(lambda: defaultdict(lambda: Decimal('0.00'))),
-            'raw_sum': Decimal('0.00')
+            'raw_sum': Decimal('0.00'),
         }
 
-    monthly_cashflow = defaultdict(lambda: defaultdict(lambda: Decimal('0.00')))
     uncategorized_totals = defaultdict(lambda: defaultdict(lambda: Decimal('0.00')))
+    # Track spending per (custom_category_id) for exclusion check
+    cat_excluded_spending = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: Decimal('0.00'))))
 
     for txn in transactions:
         if txn.has_split_children and not txn.is_split_child:
@@ -1294,7 +1382,12 @@ def _collect_spending_summary(user_id):
         year = txn.date.year
         month = txn.date.month
         value = Decimal(txn.amount or 0).quantize(CENT, rounding=ROUND_HALF_UP)
-        monthly_cashflow[year][month] += value
+
+        # Track excluded-category spending and skip normal category tracking
+        if (txn.custom_category_id in excluded_cat_ids) and value < 0:
+            cat_excluded_spending[txn.custom_category_id][year][month] += abs(value)
+            continue
+
         if not label:
             uncategorized_totals[year][month] += value
             continue
@@ -1303,153 +1396,155 @@ def _collect_spending_summary(user_id):
             'label': label,
             'totals': defaultdict(lambda: defaultdict(lambda: Decimal('0.00'))),
             'income_totals': defaultdict(lambda: defaultdict(lambda: Decimal('0.00'))),
-            'raw_sum': Decimal('0.00')
+            'raw_sum': Decimal('0.00'),
         })
         if value < 0:
-            spending_value = abs(value)
-            info['totals'][year][month] += spending_value
+            info['totals'][year][month] += abs(value)
         elif value > 0:
             info['income_totals'][year][month] += value
         info['raw_sum'] += value
 
-    # ── Load monthly budgets from MonthlyBudget (per-month) ────────────
-    monthly_budget_rows = MonthlyBudget.query.filter(
-        MonthlyBudget.user_id == user_id,
-        MonthlyBudget.year >= start_date.year,
-        MonthlyBudget.year <= current_year + 2
-    ).order_by(MonthlyBudget.year, MonthlyBudget.month).all()
-
-    # Build per-category sorted budget history for backward fallback
-    _budget_history = defaultdict(list)
-    for mb in monthly_budget_rows:
-        _budget_history[mb.category_label.strip().lower()].append(
-            (mb.year, mb.month, Decimal(mb.amount or 0).quantize(CENT, rounding=ROUND_HALF_UP))
-        )
-
-    def _get_budget_for(label_key, year, month):
-        """Get the budget amount for a category in a specific month, cascading backwards.
-
-        Walks backward from the requested month.  If no past entry exists (i.e. the
-        earliest budget starts *after* this month) returns None — the category had
-        no budget for that month.
-        """
-        hist = _budget_history.get(label_key, [])
-        if not hist:
-            return None
-        for y, m, amt in reversed(hist):
-            if (y, m) <= (year, month):
-                return amt
-        return None  # no entry for this month or any earlier month
-
+    # ── Build year_map with Everything Else bucket ─────────────────────
     metrics = _calculate_budget_metrics(user_id, [info['label'] for info in category_entries.values()])
 
     year_map = defaultdict(lambda: defaultdict(lambda: {
-        'month': None,
-        'label': None,
-        'income_subtotal': Decimal('0.00'),
-        'spending_subtotal': Decimal('0.00'),
-        'income_categories': [],
-        'spending_categories': []
+        'month': None, 'label': None,
+        'income_subtotal': Decimal('0.00'), 'spending_subtotal': Decimal('0.00'),
+        'income_categories': [], 'spending_categories': []
     }))
 
-    # Track which months have which budgeted categories to fill $0-activity entries later
     _budgeted_labels_by_month = defaultdict(set)
 
     for label_key, info in category_entries.items():
         metrics_entry = metrics.get(label_key, {})
 
-        # ── Spending categories (negative amounts, shown as positive) ────
+        # Spending categories (negative amounts shown as positive)
         for year, months in info['totals'].items():
             for month, value in months.items():
                 if value == Decimal('0.00'):
                     continue
-                month_entry = year_map[year][month]
-                month_entry['month'] = month
-                month_entry['label'] = calendar.month_abbr[month]
-                month_entry['spending_subtotal'] += value
+                me = year_map[year][month]
+                me['month'] = month
+                me['label'] = calendar.month_abbr[month]
+                me['spending_subtotal'] += value
                 six_month_avg = abs(metrics_entry.get('six_month_average', Decimal('0.00')))
                 budget_amount = _get_budget_for(label_key, year, month)
                 remainder = None
                 if budget_amount is not None:
                     remainder = budget_amount - value
                     _budgeted_labels_by_month[(year, month)].add(label_key)
-                month_entry['spending_categories'].append({
+
+                rollover_amt_for_cat = _get_rollover(label_key, year, month)
+                cat_is_auto = _get_is_automatic(label_key, year, month)
+                cat_info = cat_id_map.get(label_key, (None, None))
+                me['spending_categories'].append({
                     'label': info['label'],
-                    'value': value,
-                    'six_month_average': six_month_avg,
-                    'budget': budget_amount,
-                    'remainder': remainder,
-                    'classification': 'expense'
+                    'value': float(value.quantize(CENT, rounding=ROUND_HALF_UP)),
+                    'six_month_average': float(six_month_avg.quantize(CENT, rounding=ROUND_HALF_UP)),
+                    'budget': float(budget_amount.quantize(CENT, rounding=ROUND_HALF_UP)) if budget_amount is not None else None,
+                    'remainder': float(remainder.quantize(CENT, rounding=ROUND_HALF_UP)) if remainder is not None else None,
+                    'classification': 'expense',
+                    '_is_everything_else': False,
+                    '_is_automatic': cat_is_auto,
+                    '_rollover_amount': float(rollover_amt_for_cat.quantize(CENT, rounding=ROUND_HALF_UP)) if rollover_amt_for_cat else None,
+                    '_category_id': cat_info[0],
+                    '_budget_excluded': cat_info[1],
                 })
 
-        # ── Income categories (positive amounts) ─────────────────────────
+        # Income categories (positive amounts)
         for year, months in info['income_totals'].items():
             for month, value in months.items():
                 if value == Decimal('0.00'):
                     continue
-                month_entry = year_map[year][month]
-                month_entry['month'] = month
-                month_entry['label'] = calendar.month_abbr[month]
-                month_entry['income_subtotal'] += value
-                # For income categories, the 6-month average from
-                # _calculate_budget_metrics is already the net average
-                # (positive for income categories). Use it as-is.
+                me = year_map[year][month]
+                me['month'] = month
+                me['label'] = calendar.month_abbr[month]
+                me['income_subtotal'] += value
                 income_avg = metrics_entry.get('six_month_average', Decimal('0.00'))
                 if income_avg < 0:
                     income_avg = abs(income_avg)
-                month_entry['income_categories'].append({
+                me['income_categories'].append({
                     'label': info['label'],
-                    'value': value,
-                    'six_month_average': income_avg,
-                    'budget': None,
-                    'remainder': None,
-                    'classification': 'income'
+                    'value': float(value.quantize(CENT, rounding=ROUND_HALF_UP)),
+                    'six_month_average': float(income_avg.quantize(CENT, rounding=ROUND_HALF_UP)),
+                    'classification': 'income',
                 })
 
-    # Add uncategorized totals as a synthetic category per month
-    for year, months in uncategorized_totals.items():
-        for month, value in months.items():
-            if value == Decimal('0.00'):
+    # ── Everything Else bucket (budget-excluded categories only) ─────────
+    for year in list(year_map.keys()):
+        for month in list(year_map[year].keys()):
+            entry = year_map[year][month]
+            ee_amount = Decimal('0.00')
+
+            # Only budget-excluded categories flow into Everything Else
+            for cat_id in excluded_cat_ids:
+                ee_amount += cat_excluded_spending[cat_id][year][month]
+
+            if ee_amount > Decimal('0.00'):
+                entry['spending_subtotal'] += ee_amount
+                ee_budget = _get_budget_for('everything else', year, month)
+                ee_is_auto = _get_is_automatic('everything else', year, month)
+                remainder = (ee_budget - ee_amount).quantize(CENT) if ee_budget is not None else None
+
+                entry['spending_categories'].append({
+                    'label': 'Everything Else',
+                    'value': float(ee_amount.quantize(CENT, rounding=ROUND_HALF_UP)),
+                    'six_month_average': 0.0,
+                    'budget': float(ee_budget.quantize(CENT, rounding=ROUND_HALF_UP)) if ee_budget is not None else None,
+                    'remainder': float(remainder.quantize(CENT, rounding=ROUND_HALF_UP)) if remainder is not None else None,
+                    'classification': 'expense',
+                    '_is_everything_else': True,
+                    '_is_automatic': ee_is_auto,
+                    '_category_id': None,
+                    '_budget_excluded': None,
+                })
+
+    # ── Uncategorized as its own line (no budget, but 6M avg) ───────────
+    # Compute 6M avg for uncategorized spending
+    for year in list(year_map.keys()):
+        for month in list(year_map[year].keys()):
+            entry = year_map[year][month]
+            uc_value = uncategorized_totals[year][month]
+            if uc_value == Decimal('0.00'):
                 continue
-            month_entry = year_map[year][month]
-            month_entry['month'] = month
-            month_entry['label'] = calendar.month_abbr[month]
-            net_classification = 'income' if value > 0 else 'expense'
-            abs_value = abs(value)
-            if net_classification == 'income':
-                month_entry['income_subtotal'] += abs_value
-                month_entry['income_categories'].append({
-                    'label': UNCATEGORIZED_LABEL,
-                    'value': abs_value,
-                    'six_month_average': Decimal('0.00'),
-                    'budget': None,
-                    'remainder': None,
-                    'classification': 'income'
-                })
-            else:
-                month_entry['spending_subtotal'] += abs_value
-                month_entry['spending_categories'].append({
-                    'label': UNCATEGORIZED_LABEL,
-                    'value': abs_value,
-                    'six_month_average': Decimal('0.00'),
-                    'budget': None,
-                    'remainder': None,
-                    'classification': 'expense'
-                })
+            abs_uc = abs(uc_value)
+            entry['spending_subtotal'] += abs_uc
+            # Calculate 6-month average for uncategorized
+            uc_values = []
+            for offset in range(6):
+                y = year
+                m = month - offset
+                while m < 1:
+                    m += 12
+                    y -= 1
+                val = uncategorized_totals[y][m]
+                if val != Decimal('0.00'):
+                    uc_values.append(abs(val))
+            uc_avg = Decimal('0.00')
+            if uc_values:
+                uc_avg = (sum(uc_values, Decimal('0.00')) / Decimal(len(uc_values))).quantize(CENT, rounding=ROUND_HALF_UP)
 
-    # ── Add budget-only categories ($0 actual spending) ──────────────
-    # Categories with a budget but zero transactions need to appear so
-    # budget_total and remainder_total include them.
-    for year, months in list(year_map.items()):
-        for month, entry in list(months.items()):
+            entry['spending_categories'].append({
+                'label': UNCATEGORIZED_LABEL,
+                'value': float(abs_uc.quantize(CENT, rounding=ROUND_HALF_UP)),
+                'six_month_average': float(uc_avg.quantize(CENT, rounding=ROUND_HALF_UP)),
+                'budget': None,
+                'remainder': None,
+                'classification': 'expense',
+            })
+
+    # ── Add budget-only categories ($0 spending) ───────────────────────
+    for year in list(year_map.keys()):
+        for month in list(year_map[year].keys()):
+            entry = year_map[year][month]
             existing_labels = {c['label'].lower() for c in entry['spending_categories']}
+
             for label_key, hist in _budget_history.items():
                 if label_key in existing_labels:
                     continue
                 budget_amount = _get_budget_for(label_key, year, month)
                 if budget_amount is None:
                     continue
-                # Find the display label
                 display_label = None
                 for lk, info in category_entries.items():
                     if lk == label_key:
@@ -1462,77 +1557,72 @@ def _collect_spending_summary(user_id):
                         MonthlyBudget.year >= year - 1
                     ).first()
                     display_label = mb.category_label if mb else label_key.title()
+
                 _budgeted_labels_by_month[(year, month)].add(label_key)
+
+                # Check for rollover amount
+                rollover_amt = _get_rollover(label_key, year, month)
+                is_auto = _get_is_automatic(label_key, year, month)
+
                 entry['spending_categories'].append({
                     'label': display_label,
-                    'value': Decimal('0.00'),
-                    'six_month_average': Decimal('0.00'),
-                    'budget': budget_amount,
-                    'remainder': budget_amount,  # budget - 0 actual = budget
-                    'classification': 'expense'
+                    'value': 0.0,
+                    'six_month_average': 0.0,
+                    'budget': float(budget_amount.quantize(CENT, rounding=ROUND_HALF_UP)),
+                    'remainder': float(budget_amount.quantize(CENT, rounding=ROUND_HALF_UP)),
+                    'classification': 'expense',
+                    '_is_everything_else': False,
+                    '_is_automatic': is_auto,
+                    '_rollover_amount': float(rollover_amt.quantize(CENT, rounding=ROUND_HALF_UP)) if rollover_amt else None,
+                    '_category_id': cat_id_map.get(label_key, (None, None))[0],
+                    '_budget_excluded': cat_id_map.get(label_key, (None, None))[1],
                 })
 
-    for year, months in year_map.items():
-        for month, entry in months.items():
+    # ── Compute totals and format output ───────────────────────────────
+    for year in list(year_map.keys()):
+        for month in list(year_map[year].keys()):
+            entry = year_map[year][month]
             net_total = entry['income_subtotal'] - entry['spending_subtotal']
-            entry['total'] = net_total
-            entry['budget_total'] = sum(
-                (cat['budget'] for cat in entry['spending_categories'] if cat['budget'] is not None),
-                Decimal('0.00')
-            ).quantize(CENT, rounding=ROUND_HALF_UP)
-            entry['remainder_total'] = sum(
-                (cat['remainder'] for cat in entry['spending_categories'] if cat['remainder'] is not None),
-                Decimal('0.00')
-            ).quantize(CENT, rounding=ROUND_HALF_UP)
+            entry['total'] = float(net_total.quantize(CENT, rounding=ROUND_HALF_UP))
+            entry['budget_total'] = float(Decimal(sum(
+                (cat.get('budget') or 0) for cat in entry['spending_categories']
+                if not cat.get('_budget_excluded')
+            )).quantize(CENT, rounding=ROUND_HALF_UP))
+            entry['remainder_total'] = float(Decimal(sum(
+                (cat.get('remainder') if 'remainder' in cat else None)
+                for cat in entry['spending_categories']
+                if cat.get('remainder') is not None and not cat.get('_budget_excluded')
+            )).quantize(CENT, rounding=ROUND_HALF_UP))
 
     years_output = []
     for year in sorted(year_map.keys(), reverse=True):
         months_output = []
         for month in sorted(year_map[year].keys(), reverse=True):
-            month_entry = year_map[year][month]
-            income_cats = sorted(month_entry['income_categories'], key=lambda item: item['label'].lower())
-            spending_cats = sorted(month_entry['spending_categories'], key=lambda item: item['label'].lower())
+            me = year_map[year][month]
+            income_cats = sorted(me['income_categories'], key=lambda c: c['label'].lower())
+            spending_cats = sorted(me['spending_categories'], key=lambda c: (c.get('_is_everything_else', False), c['label'].lower()))
+
             months_output.append({
                 'year': year,
                 'month': month,
-                'label': month_entry['label'],
-                'income_subtotal': float(month_entry['income_subtotal'].quantize(CENT, rounding=ROUND_HALF_UP)),
-                'spending_subtotal': float(month_entry['spending_subtotal'].quantize(CENT, rounding=ROUND_HALF_UP)),
-                'total': float(month_entry['total'].quantize(CENT, rounding=ROUND_HALF_UP)),
-                'budget_total': float(month_entry['budget_total']),
-                'remainder_total': float(month_entry['remainder_total']),
-                'income_categories': [
-                    {
-                        'label': cat['label'],
-                        'value': float(cat['value'].quantize(CENT, rounding=ROUND_HALF_UP)),
-                        'six_month_average': float(cat['six_month_average'].quantize(CENT, rounding=ROUND_HALF_UP)),
-                        'classification': cat['classification']
-                    }
-                    for cat in income_cats
-                ],
-                'spending_categories': [
-                    {
-                        'label': cat['label'],
-                        'value': float(cat['value'].quantize(CENT, rounding=ROUND_HALF_UP)),
-                        'six_month_average': float(cat['six_month_average'].quantize(CENT, rounding=ROUND_HALF_UP)),
-                        'budget': float(cat['budget'].quantize(CENT, rounding=ROUND_HALF_UP)) if cat['budget'] is not None else None,
-                        'remainder': float(cat['remainder'].quantize(CENT, rounding=ROUND_HALF_UP)) if cat['remainder'] is not None else None,
-                        'classification': cat['classification']
-                    }
-                    for cat in spending_cats
-                ]
+                'label': me['label'],
+                'income_subtotal': float(me['income_subtotal'].quantize(CENT, rounding=ROUND_HALF_UP)),
+                'spending_subtotal': float(me['spending_subtotal'].quantize(CENT, rounding=ROUND_HALF_UP)),
+                'total': me['total'],
+                'budget_total': me['budget_total'],
+                'remainder_total': me['remainder_total'],
+                'income_categories': income_cats,
+                'spending_categories': spending_cats,
             })
-        years_output.append({
-            'year': year,
-            'months': months_output
-        })
+        years_output.append({'year': year, 'months': months_output})
 
     return {
         'years': years_output,
         'current_year': current_year,
         'current_month': current_month,
-        'generated_on': today.isoformat()
+        'generated_on': today.isoformat(),
     }
+
 
 
 def _collect_cashflow_summary(user_id):
@@ -3830,13 +3920,16 @@ def upsert_budget_inline():
 
     if mb:
         mb.amount = amount
+        if mb.category_label.strip().lower() != 'everything else':
+            mb.is_automatic = False
     else:
         mb = MonthlyBudget(
             user_id=current_user.id,
             category_label=category_label,
             year=year,
             month=month,
-            amount=amount
+            amount=amount,
+            is_automatic=False if category_label.strip().lower() != 'everything else' else True,
         )
         db.session.add(mb)
 
@@ -3865,7 +3958,8 @@ def upsert_budget_inline():
                 category_label=category_label,
                 year=cursor_year,
                 month=cursor_month,
-                amount=amount
+                amount=amount,
+                is_automatic=False if category_label.strip().lower() != 'everything else' else True,
             )
             db.session.add(future)
         cursor_month += 1
@@ -3876,8 +3970,310 @@ def upsert_budget_inline():
         'category_label': category_label,
         'amount': float(amount),
         'year': year,
-        'month': month
+        'month': month,
+        'is_automatic': mb.is_automatic,
+        'rollover_amount': float(mb.rollover_amount) if mb.rollover_amount else 0.0,
     }})
+
+
+@core.route('/api/budgets/everything-else', methods=['PUT'])
+@login_required
+def upsert_everything_else_budget():
+    """Set the Everything Else auto-budget amount for a specific month.
+
+    Creates/updates a MonthlyBudget with category_label='Everything Else'
+    and is_automatic=True. This budget line auto-aggregates all uncategorized
+    and budget-excluded category spending.
+    """
+    payload = request.get_json() or {}
+    try:
+        amount = _normalize_budget_amount(payload.get('amount'))
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+
+    month = payload.get('month')
+    year = payload.get('year')
+    today = date.today()
+    if not year or not month:
+        year = today.year
+        month = today.month
+    else:
+        year = int(year)
+        month = int(month)
+
+    label = 'Everything Else'
+    mb = MonthlyBudget.query.filter_by(
+        user_id=current_user.id,
+        category_label=label,
+        year=year,
+        month=month
+    ).first()
+
+    if mb:
+        mb.amount = amount
+        mb.is_automatic = True
+    else:
+        mb = MonthlyBudget(
+            user_id=current_user.id,
+            category_label=label,
+            year=year,
+            month=month,
+            amount=amount,
+            is_automatic=True,
+        )
+        db.session.add(mb)
+
+    # Propagate forward to future months without an Everything Else budget
+    max_year = today.year + 2
+    cursor_year = year
+    cursor_month = month + 1
+    while cursor_year <= max_year:
+        if cursor_month > 12:
+            cursor_month = 1
+            cursor_year += 1
+        if cursor_year > max_year:
+            break
+        existing = MonthlyBudget.query.filter_by(
+            user_id=current_user.id,
+            category_label=label,
+            year=cursor_year,
+            month=cursor_month
+        ).first()
+        if existing is None:
+            future = MonthlyBudget(
+                user_id=current_user.id,
+                category_label=label,
+                year=cursor_year,
+                month=cursor_month,
+                amount=amount,
+                is_automatic=True,
+            )
+            db.session.add(future)
+        cursor_month += 1
+
+    db.session.commit()
+
+    return jsonify({'budget': {
+        'category_label': label,
+        'amount': float(amount),
+        'year': year,
+        'month': month,
+        'is_automatic': True,
+    }})
+
+
+def _apply_rollover(user_id, prev_year, prev_month, current_year, current_month):
+    """Core rollover calculation logic — reusable from both the API endpoint
+    and auto-rollover on dashboard load.
+
+    Returns a dict with surplus, total_budget, total_spending, and rollovers list.
+    Modifies the DB in place (updates current month rollover_amount fields).
+    """
+    # Load budgets for prev month
+    prev_budgets = MonthlyBudget.query.filter(
+        MonthlyBudget.user_id == user_id,
+        MonthlyBudget.year == prev_year,
+        MonthlyBudget.month == prev_month,
+    ).all()
+
+    if not prev_budgets:
+        return {'surplus': 0, 'total_budget': 0, 'total_spending': 0,
+                'previous_month': {'year': prev_year, 'month': prev_month}, 'rollovers': []}
+
+    # Build budget map and find excluded categories
+    excluded_cat_ids = set()
+    try:
+        rows = CustomCategory.query.filter(
+            CustomCategory.user_id == user_id,
+            CustomCategory.budget_excluded.is_(True)
+        ).with_entities(CustomCategory.id).all()
+        excluded_cat_ids = {r[0] for r in rows}
+    except Exception:
+        pass
+
+    # Map category labels to their budget amount
+    budget_map = {}
+    for mb in prev_budgets:
+        budget_map[mb.category_label.strip().lower()] = Decimal(mb.amount or 0).quantize(CENT)
+
+    # Load all transactions for prev month to compute actual spending
+    from datetime import date as dt_date
+    month_start = dt_date(prev_year, prev_month, 1)
+    if prev_month == 12:
+        month_end = dt_date(prev_year + 1, 1, 1)
+    else:
+        month_end = dt_date(prev_year, prev_month + 1, 1)
+
+    txns = Transaction.query.options(
+        joinedload(Transaction.custom_category)
+    ).filter(
+        Transaction.user_id == user_id,
+        Transaction.is_removed.is_(False),
+        Transaction.date >= month_start,
+        Transaction.date < month_end,
+    ).all()
+
+    override_map = _load_overrides([t.id for t in txns])
+
+    # Compute spending per label
+    spending_map = defaultdict(Decimal)
+    excluded_spending_total = Decimal('0.00')
+
+    for txn in txns:
+        if txn.has_split_children and not txn.is_split_child:
+            continue
+        label = _resolve_custom_category_label(txn, override_map)
+        amount = Decimal(txn.amount or 0).quantize(CENT)
+        is_excluded = txn.custom_category_id in excluded_cat_ids if txn.custom_category_id is not None else False
+
+        # Skip excluded categories entirely — they're irrelevant for budget
+        if is_excluded:
+            continue
+        elif label:
+            label_key = label.strip().lower()
+            if amount < 0:
+                spending_map[label_key] += abs(amount)
+        else:
+            if amount < 0:
+                excluded_spending_total += abs(amount)
+
+    ee_label = 'everything else'
+
+    total_budget = sum(budget_map.values())
+
+    total_spending = excluded_spending_total
+    for label_key, spent in spending_map.items():
+        if label_key in budget_map:
+            total_spending += spent
+
+    total_budget = total_budget.quantize(CENT)
+    total_spending = total_spending.quantize(CENT)
+
+    surplus = total_budget - total_spending
+
+    # Per-category surplus
+    per_cat_surplus = {}
+    for label_key, budget_amt in budget_map.items():
+        if label_key == ee_label:
+            spent = excluded_spending_total
+        else:
+            spent = spending_map.get(label_key, Decimal('0.00'))
+        per_cat_surplus[label_key] = budget_amt - spent
+
+    # Build rollover list
+    rollovers_to_apply = []
+    if surplus > Decimal('0.00'):
+        under_labels = {lk: s for lk, s in per_cat_surplus.items() if s > Decimal('0.00')}
+        total_under = sum(under_labels.values())
+
+        if total_under > Decimal('0.00'):
+            for label_key, saved_amt in under_labels.items():
+                proportion = saved_amt / total_under
+                rollover_amt = (surplus * proportion).quantize(CENT)
+
+                current_mb = MonthlyBudget.query.filter(
+                    MonthlyBudget.user_id == user_id,
+                    MonthlyBudget.category_label.ilike(label_key),
+                    MonthlyBudget.year == current_year,
+                    MonthlyBudget.month == current_month,
+                ).first()
+
+                if current_mb:
+                    current_mb.rollover_amount = (getattr(current_mb, 'rollover_amount', Decimal('0.00')) or Decimal('0.00')) + rollover_amt
+                else:
+                    recent_mb = MonthlyBudget.query.filter(
+                        MonthlyBudget.user_id == user_id,
+                        MonthlyBudget.category_label.ilike(label_key),
+                    ).order_by(MonthlyBudget.year.desc(), MonthlyBudget.month.desc()).first()
+
+                    if recent_mb:
+                        new_mb = MonthlyBudget(
+                            user_id=user_id,
+                            category_label=recent_mb.category_label,
+                            year=current_year,
+                            month=current_month,
+                            amount=recent_mb.amount,
+                            rollover_amount=rollover_amt,
+                            is_automatic=False,
+                        )
+                        db.session.add(new_mb)
+
+                rollovers_to_apply.append({
+                    'category_label': label_key,
+                    'rollover_amount': float(rollover_amt),
+                    'budget_saved': float(saved_amt),
+                })
+
+        db.session.commit()
+
+    return {
+        'surplus': float(surplus),
+        'total_budget': float(total_budget),
+        'total_spending': float(total_spending),
+        'previous_month': {'year': prev_year, 'month': prev_month},
+        'rollovers': rollovers_to_apply,
+    }
+
+
+@core.route('/api/budgets/rollover', methods=['POST'])
+@login_required
+def apply_budget_rollover():
+    """Calculate and apply surplus rollover for the most recent completed month.
+
+    Rules (per user's design — NO NEGATIVE ROLLOVERS):
+    1. Look at the most recent complete month (previous month).
+    2. Calculate total_budget vs total_spending across ALL budget categories
+       (including Everything Else). Only categories with budget_excluded=FALSE
+       are included in the budget total — excluded categories are ignored.
+    3. If total_spending > total_budget → month is overspent. Set all rollover to 0.
+    4. If total_spending <= total_budget → surplus = total_budget - total_spending.
+       Distribute proportionally among categories that were under budget.
+
+    Returns the rollover amounts applied to the current month.
+    """
+    today = date.today()
+    current_month = today.month
+    current_year = today.year
+
+    if current_month == 1:
+        prev_month = 12
+        prev_year = current_year - 1
+    else:
+        prev_month = current_month - 1
+        prev_year = current_year
+
+    result = _apply_rollover(
+        current_user.id, prev_year, prev_month,
+        current_year, current_month
+    )
+
+    return jsonify(result)
+
+
+@core.route('/api/categories/<int:category_id>/toggle-budget-exclusion', methods=['POST'])
+@login_required
+def toggle_category_budget_exclusion(category_id):
+    """Toggle the budget_excluded flag on a custom category.
+
+    When budget_excluded=True, the category's transactions are not included
+    in per-category budget tracking. Instead they flow into the Everything
+    Else bucket for spending report purposes.
+    """
+    category = CustomCategory.query.filter_by(
+        id=category_id,
+        user_id=current_user.id
+    ).first()
+
+    if not category:
+        return jsonify({'error': 'Custom category not found.'}), 404
+
+    category.budget_excluded = not category.budget_excluded
+    db.session.commit()
+
+    return jsonify({
+        'category': _serialize_custom_category(category),
+        'budget_excluded': category.budget_excluded,
+    })
 
 
 @core.route('/api/balance', methods=['POST'])

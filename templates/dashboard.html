@@ -1036,6 +1036,7 @@
                                                                 <tr
                                                                     v-for="category in month.spending_categories"
                                                                     :key="`spending-${selectedSpendingYear}-${month.month}-${category.label}`"
+                                                                    :class="{ 'budget-excluded-row': category._budget_excluded }"
                                                                 >
                                                                     <td class="align-middle">
                                                                         <button
@@ -1045,6 +1046,16 @@
                                                                         >
                                                                             [[ category.label ]]
                                                                         </button>
+                                                                        <button
+                                                                            v-if="category._category_id && !category._is_everything_else"
+                                                                            type="button"
+                                                                            class="btn btn-link p-0 budget-exclude-toggle"
+                                                                            :class="{ 'text-muted': category._budget_excluded }"
+                                                                            :title="category._budget_excluded ? 'Include in budget' : 'Exclude from budget'"
+                                                                            @click.stop="toggleBudgetExclusion(category)"
+                                                                        >
+                                                                            <i :class="category._budget_excluded ? 'fas fa-eye-slash' : 'fas fa-eye'"></i>
+                                                                        </button>
                                                                     </td>
                                                                     <td class="align-middle">
                                                                         [[ formatDashboardAmount(category.value, null) ]]
@@ -1053,31 +1064,39 @@
                                                                         [[ formatDashboardAmount(category.six_month_average, null) ]]
                                                                     </td>
                                                                     <td class="align-middle">
-                                                                        <div
-                                                                            class="budget-inline-edit"
-                                                                            :class="{ 'budget-inline-editing': category._editingBudget }"
-                                                                            @click.stop="startBudgetEdit(category, $event)"
-                                                                        >
-                                                                            <template v-if="category._editingBudget">
-                                                                                <input
-                                                                                    type="number"
-                                                                                    class="form-control form-control-sm budget-inline-input"
-                                                                                    v-model.number="category._budgetDraft"
-                                                                                    @keydown.enter="saveBudgetInline(category, month.month, selectedSpendingYear)"
-                                                                                    @keydown.escape="cancelBudgetEdit(category)"
-                                                                                    @blur="saveBudgetInline(category, month.month, selectedSpendingYear)"
-                                                                                    step="0.01"
-                                                                                    min="0"
-                                                                                    ref="budgetInput"
-                                                                                    autofocus
-                                                                                >
-                                                                            </template>
-                                                                            <template v-else>
-                                                                                <span :class="{ 'text-muted': category.budget === null, 'budget-has-value': category.budget !== null }">
-                                                                                    [[ category.budget !== null ? formatDashboardAmount(category.budget, null) : '—' ]]
-                                                                                </span>
-                                                                            </template>
-                                                                        </div>
+                                                                        <template v-if="category.budget !== null || category._category_id">
+                                                                            <div
+                                                                                class="budget-inline-edit"
+                                                                                :class="{ 'budget-inline-editing': category._editingBudget }"
+                                                                                @click.stop="startBudgetEdit(category, $event)"
+                                                                            >
+                                                                                <template v-if="category._editingBudget">
+                                                                                    <input
+                                                                                        type="number"
+                                                                                        class="form-control form-control-sm budget-inline-input"
+                                                                                        v-model.number="category._budgetDraft"
+                                                                                        @keydown.enter="saveBudgetInline(category, month.month, selectedSpendingYear)"
+                                                                                        @keydown.escape="cancelBudgetEdit(category)"
+                                                                                        @blur="saveBudgetInline(category, month.month, selectedSpendingYear)"
+                                                                                        step="0.01"
+                                                                                        min="0"
+                                                                                        ref="budgetInput"
+                                                                                        autofocus
+                                                                                    >
+                                                                                </template>
+                                                                                <template v-else>
+                                                                                    <span :class="{ 'text-muted': category.budget === null, 'budget-has-value': category.budget !== null }">
+                                                                                        [[ category.budget !== null ? formatDashboardAmount(category.budget, null) : '—' ]]
+                                                                                    </span>
+                                                                                    <span v-if="category._rollover_amount && category._rollover_amount > 0" class="budget-rollover-badge" title="Rollover from previous month">
+                                                                                        +[[ formatDashboardAmount(category._rollover_amount, null) ]]
+                                                                                    </span>
+                                                                                </template>
+                                                                            </div>
+                                                                        </template>
+                                                                        <template v-else>
+                                                                            <span class="text-muted">—</span>
+                                                                        </template>
                                                                     </td>
                                                                     <td
                                                                         class="align-middle"
@@ -1207,7 +1226,8 @@
                                         :class="{
                                             'table-warning': category.isDirty && !category.saving,
                                             'table-active': category.isEditing,
-                                            'highlighted-category': highlightedCategoryLocalId === category.localId
+                                            'highlighted-category': highlightedCategoryLocalId === category.localId,
+                                            'text-muted': category.budget_excluded
                                         }"
                                     >
                                         <td>
@@ -1309,6 +1329,14 @@
                                                     @click="deleteCustomCategory(category)"
                                                 >
                                                     <i class="fas fa-trash-alt"></i>
+                                                </button>
+                                                <button
+                                                    class="btn btn-outline-info btn-toggle-exclude"
+                                                    :disabled="category.saving"
+                                                    :title="category.budget_excluded ? 'Include in budget' : 'Exclude from budget'"
+                                                    @click="toggleBudgetExclusion(category)"
+                                                >
+                                                    <i class="fas" :class="category.budget_excluded ? 'fa-toggle-off' : 'fa-toggle-on'"></i>
                                                 </button>
                                             </div>
                                         </td>

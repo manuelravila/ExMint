@@ -880,6 +880,8 @@ const app = new Vue({
         /* ── Inline budget editing ────────────────────────── */
         startBudgetEdit: function(category, event) {
             if (category._editingBudget) return;
+            // Uncategorized and Everything Else should never be editable
+            if (!category._category_id) return;
             // If no budget yet, pre-fill with 6-month average
             if (category.budget === null || category.budget === undefined) {
                 category._budgetDraft = Math.abs(category.six_month_average || 0);
@@ -2282,6 +2284,7 @@ const app = new Vue({
                 rule_count: Number.isFinite(raw.rule_count) ? raw.rule_count : 0,
                 transaction_count: Number.isFinite(raw.transaction_count) ? raw.transaction_count : 0,
                 override_count: Number.isFinite(raw.override_count) ? raw.override_count : 0,
+                budget_excluded: raw.budget_excluded || false,
                 isDirty: false,
                 isNew: !categoryId,
                 saving: false,
@@ -2356,6 +2359,7 @@ const app = new Vue({
                 rule_count: 0,
                 transaction_count: 0,
                 override_count: 0,
+                budget_excluded: false,
                 isDirty: initial.isDirty !== undefined ? initial.isDirty : true,
                 isNew: true,
                 saving: false,
@@ -2497,6 +2501,33 @@ const app = new Vue({
             } catch (error) {
                 console.error('Error deleting custom category:', error);
                 this.customCategoriesError = error.message || 'Failed to delete category.';
+            } finally {
+                category.saving = false;
+            }
+        },
+        toggleBudgetExclusion: async function(category) {
+            const catId = category._category_id || category.id;
+            if (!catId || category.saving) {
+                return;
+            }
+            category.saving = true;
+            try {
+                const response = await fetch(`/api/categories/${catId}/toggle-budget-exclusion`, {
+                    method: 'POST',
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to toggle budget exclusion.');
+                }
+                category.budget_excluded = data.budget_excluded;
+                category._budget_excluded = data.budget_excluded;
+                this.customCategoriesError = null;
+                if (this.dashboardLoaded) {
+                    await this.fetchDashboard({ suppressLoader: true, force: true });
+                }
+            } catch (error) {
+                console.error('Error toggling budget exclusion:', error);
+                this.customCategoriesError = error.message || 'Failed to toggle budget exclusion.';
             } finally {
                 category.saving = false;
             }
