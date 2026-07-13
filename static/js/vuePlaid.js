@@ -880,8 +880,8 @@ const app = new Vue({
         /* ── Inline budget editing ────────────────────────── */
         startBudgetEdit: function(category, event) {
             if (category._editingBudget) return;
-            // Uncategorized and Everything Else should never be editable
-            if (!category._category_id) return;
+            // Uncategorized should never be editable; Everything Else IS editable
+            if (!category._category_id && !category._is_everything_else) return;
             // If no budget yet, pre-fill with 6-month average
             if (category.budget === null || category.budget === undefined) {
                 category._budgetDraft = Math.abs(category.six_month_average || 0);
