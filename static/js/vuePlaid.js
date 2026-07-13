@@ -3258,7 +3258,7 @@ const app = new Vue({
             if (matchedCategory) {
                 nextCategoryId = String(matchedCategory.id);
                 nextSearch = '';
-            } else if (normalized === 'uncategorized') {
+            } else if (normalized === 'uncategorized' || normalized === 'everything else') {
                 nextCategoryId = '__uncategorized__';
                 nextSearch = '';
             } else {
