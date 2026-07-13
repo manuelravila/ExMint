@@ -3,6 +3,21 @@
 
 changelog = [
     {
+        "version": "1.8.1",
+        "date": "2026-07-13",
+        "changes": [
+            "Excluded categories now stay visible in table (strikethrough+dim) instead of disappearing",
+            "Override-to-excluded leak fixed — transactions overridden to excluded categories (e.g. Vehicle→Transfer) now properly excluded",
+            "Duplicate Everything Else row fixed — budget-only lines no longer add EE, handled solely by dedicated section",
+            "Everything Else now shows even with $0 uncategorized spending (if a budget exists)",
+            "Header labels reordered: Total → Budget → Remainder",
+            "Remainder turns green (positive) or red (negative) instead of always orange",
+            "Remainder now calculated as Budget − Total (not sum of per-category remainders)",
+            "Clicking Everything Else searches uncategorized transactions (instead of returning no results)",
+            "Budget-exclusion check honours transaction overrides (not just custom_category_id)"
+        ]
+    },
+    {
         "version": "1.8.0",
         "date": "2026-07-13",
         "changes": [
