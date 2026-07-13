@@ -1040,12 +1040,14 @@
                                                                 >
                                                                     <td class="align-middle">
                                                                         <button
+                                                                            v-if="!category._is_everything_else"
                                                                             type="button"
                                                                             class="btn btn-link p-0 spending-category-link"
                                                                             @click="applySpendingCategoryFilter(category.label, month.month, selectedSpendingYear)"
                                                                         >
                                                                             [[ category.label ]]
                                                                         </button>
+                                                                        <span v-else class="spending-category-plain">[[ category.label ]]</span>
                                                                         <button
                                                                             v-if="category._category_id && !category._is_everything_else"
                                                                             type="button"
@@ -1064,7 +1066,7 @@
                                                                         [[ formatDashboardAmount(category.six_month_average, null) ]]
                                                                     </td>
                                                                     <td class="align-middle">
-                                                                        <template v-if="category.budget !== null || category._category_id">
+                                                                        <template v-if="category.budget !== null || category._category_id || category._is_everything_else">
                                                                             <div
                                                                                 class="budget-inline-edit"
                                                                                 :class="{ 'budget-inline-editing': category._editingBudget }"

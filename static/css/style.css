@@ -1441,6 +1441,14 @@ tr.budget-excluded-row .spending-category-link {
     outline: none;
 }
 
+.spending-category-plain {
+    display: inline-block;
+    text-align: left;
+    white-space: normal;
+    font-weight: 600;
+    color: #555;
+}
+
 @media (max-width: 767.98px) {
     .pane-content {
         padding: 1rem;
