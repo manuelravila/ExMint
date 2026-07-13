@@ -45,7 +45,7 @@
     {% block scripts %}{% endblock %}
 </body>
 <footer class="text-center bg-light py-3">
-    <p class="mb-0">exMint version {{ config.VERSION }} &copy; {{ current_year }} <a href="https://automatos.ca" target="_blank" rel="noopener noreferrer">Automatos Consulting Inc.</a> All rights reserved.</p>
+    <p class="mb-0">exMint version <a href="{{ url_for('views.changelog_page') }}" class="text-reset text-decoration-none" title="View changelog">{{ config.VERSION }}</a> &copy; {{ current_year }} <a href="https://automatos.ca" target="_blank" rel="noopener noreferrer">Automatos Consulting Inc.</a> All rights reserved.</p>
 </footer>
 
 </html>

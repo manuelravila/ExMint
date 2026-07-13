@@ -1,0 +1,35 @@
+<!-- changelog.html -->
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="container py-4" style="max-width: 800px;">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h1 class="mb-0">Changelog</h1>
+        <a href="{{ url_for('views.dashboard') }}" class="btn btn-outline-primary btn-sm">&larr; Back to Dashboard</a>
+    </div>
+
+    {% if current_user.is_authenticated %}
+    <div class="alert alert-info py-2 mb-4">
+        <strong>Current version:</strong> {{ config.VERSION }}
+    </div>
+    {% endif %}
+
+    {% for entry in changelog %}
+    <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <h5 class="mb-0">v{{ entry.version }}</h5>
+            <small class="text-muted">{{ entry.date }}</small>
+        </div>
+        <div class="card-body py-2">
+            <ul class="list-unstyled mb-0">
+                {% for change in entry.changes %}
+                <li class="py-1">
+                    <span class="text-success mr-2">&#10003;</span> {{ change }}
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endblock %}

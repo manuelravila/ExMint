@@ -198,6 +198,7 @@ def handle_login_request():
                 return handle_unsuccessful_login(error_message)
             
             login_user(user, remember=False)
+            session['_login_time'] = datetime.utcnow().isoformat()
             reset_new_transaction_flags(user)
             return handle_successful_login(user)
         else:
@@ -617,3 +618,9 @@ def admin_reject_via_email(token):
     send_user_rejected_email(user.email)
     flash(f'{email} has been rejected and notified.', 'success')
     return redirect(url_for('views.login'))
+
+
+@views.route('/changelog')
+def changelog_page():
+    from changelog import changelog as cl_data
+    return render_template('changelog.html', changelog=cl_data, title='Changelog')
