@@ -2964,10 +2964,18 @@ const app = new Vue({
                 if (!r.ok) throw new Error('Failed to reconcile');
                 return r.json();
             }).then(function(data) {
-                // Update the local balance to match what was set
+                // Update the local balance to match what was set.
+                // Apply the same sign convention as _collect_balances_summary:
+                // credit/loan accounts are displayed negated (debt = negative).
+                var displayBalance = data.last_known_balance;
+                if (account.type && account.type.toLowerCase() === 'credit') {
+                    displayBalance = -displayBalance;
+                } else if (account.subtype && account.subtype.toLowerCase() === 'loan') {
+                    displayBalance = -displayBalance;
+                }
                 account.last_known_balance = data.last_known_balance;
                 account.balance_date = data.balance_date;
-                account.balance = data.last_known_balance;
+                account.balance = displayBalance;
             }).catch(function(err) {
                 console.error('Error reconciling:', err);
             });
