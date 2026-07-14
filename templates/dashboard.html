@@ -891,7 +891,7 @@
                                                                 <small v-if="account.is_reconcilable" class="text-muted reconcilable-hint">✎</small>
                                                             </span>
                                                             <span v-else class="tree-value">
-                                                                $<input type="number" step="0.01" class="reconcile-input" v-model.number="reconcileValue" @keydown.enter="saveReconcile(account)" @keydown.escape="cancelReconcile" @blur="saveReconcile(account)" ref="reconcileInput" autofocus>
+                                                                $<input type="number" step="0.01" min="-999999999" class="reconcile-input" v-model.number="reconcileValue" @keydown.enter="saveReconcile(account)" @keydown.escape="cancelReconcile" @blur="saveReconcile(account)" ref="reconcileInput" autofocus>
                                                             </span>
                                                         </div>
                                                     </div>
