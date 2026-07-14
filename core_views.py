@@ -1097,6 +1097,8 @@ def _collect_balances_summary(user_id):
             'id': account.id,
             'name': account.name or 'Account',
             'mask': account.mask,
+            'type': account.type,
+            'subtype': account.subtype,
             'balance': float(account_balance),
             'current_balance': float(account.current_balance) if account.current_balance is not None else None,
             'available_balance': float(account.available_balance) if account.available_balance is not None else None,
