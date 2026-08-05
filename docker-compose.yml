@@ -29,6 +29,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    dns:
+      - 8.8.8.8  # Google DNS
+      - 8.8.4.4  # Secondary Google DNS
     env_file:
       - .env.${FLASK_ENV:-dev}
     environment:
