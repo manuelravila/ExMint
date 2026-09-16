@@ -1802,12 +1802,13 @@
                             </table>
                         </div>
 
-                        <!-- Conditional Account Selector (only when no account_number mapped) -->
-                        <div v-if="!hasAccountNumberMapping" class="card mt-3 border-warning">
+                        <!-- Destination / fallback account selector -->
+                        <div class="card mt-3 border-warning">
                             <div class="card-body py-2">
                                 <div class="d-flex align-items-center">
-                                    <i class="fas fa-exclamation-triangle text-warning mr-2"></i>
-                                    <span class="small text-muted">No account number column mapped. All transactions will go to:</span>
+                                    <i class="fas mr-2" :class="hasAccountNumberMapping ? 'fa-info-circle text-info' : 'fa-exclamation-triangle text-warning'"></i>
+                                    <span class="small text-muted" v-if="hasAccountNumberMapping">Fallback account (used for rows whose account number doesn't match):</span>
+                                    <span class="small text-muted" v-else>No account number column mapped. All transactions will go to:</span>
                                 </div>
                                 <select class="form-control form-control-sm mt-2" v-model.number="csvImport.accountId">
                                     <option value="" disabled>— Select destination account —</option>
@@ -1821,7 +1822,7 @@
                                 </select>
                             </div>
                         </div>
-                        <div v-else class="alert alert-success py-2">
+                        <div v-if="hasAccountNumberMapping" class="alert alert-success py-2">
                             <i class="fas fa-check-circle mr-1"></i>
                             <strong>Account Number</strong> column detected — transactions will be routed to matching accounts automatically.
                         </div>

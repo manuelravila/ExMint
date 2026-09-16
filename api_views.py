@@ -29,6 +29,7 @@ from werkzeug.security import check_password_hash
 
 from config import Config
 from version import __version__ as VERSION
+from csv_import_routing import build_mask_index, resolve_row_account, unroutable_reason
 
 # Reuse internal helpers from core_views to stay in sync with UI behaviour.
 from core_views import (
@@ -1449,10 +1450,7 @@ def api_csv_import_execute():
             Credential.user_id == g.api_user.id,
             Account.status == 'Active',
         ).all()
-        for acct in all_user_accounts:
-            if acct.mask:
-                account_by_mask[acct.mask] = acct.id
-                account_by_mask[acct.mask.lstrip('0')] = acct.id
+        account_by_mask = build_mask_index((acct.id, acct.mask) for acct in all_user_accounts)
 
     for row_idx, row in enumerate(rows):
         try:
@@ -1510,30 +1508,27 @@ def api_csv_import_execute():
                 continue
 
             target_account_id = None
+            row_credential_id = credential_id
+            raw_acct = ''
             if account_number_header:
-                csv_acct = row.get(account_number_header, '').strip()
-                lookup_key = csv_acct[-4:] if len(csv_acct) >= 4 else csv_acct
-                lookup_key = lookup_key.replace('-', '').replace(' ', '')
-                matched_acct_id = account_by_mask.get(lookup_key)
+                raw_acct = row.get(account_number_header, '').strip()
+                matched_acct_id = resolve_row_account(raw_acct, account_by_mask)
                 if matched_acct_id:
                     target_account_id = matched_acct_id
                     matched_acct = Account.query.get(matched_acct_id)
                     if matched_acct:
-                        credential_id = matched_acct.credential_id
-                else:
-                    last4 = csv_acct[-4:].replace('-', '').replace(' ', '')
-                    matched_acct_id = account_by_mask.get(last4)
-                    if matched_acct_id:
-                        target_account_id = matched_acct_id
-                        matched_acct = Account.query.get(matched_acct_id)
-                        if matched_acct:
-                            credential_id = matched_acct.credential_id
+                        row_credential_id = matched_acct.credential_id
 
             if not target_account_id and default_account:
                 target_account_id = default_account.id
+                row_credential_id = default_account.credential_id
 
             if not target_account_id:
-                errors.append({'row': row_idx + 2, 'error': 'Could not determine target account'})
+                errors.append({'row': row_idx + 2, 'error': 'could not determine target account — ' + unroutable_reason(raw_acct or None)})
+                continue
+
+            if not row_credential_id:
+                errors.append({'row': row_idx + 2, 'error': 'target account is not linked to a bank connection; row skipped'})
                 continue
 
             existing = Transaction.query.filter(
@@ -1578,7 +1573,7 @@ def api_csv_import_execute():
             new_txn = Transaction(
                 plaid_transaction_id=f'csv_{uuid4().hex}',
                 user_id=g.api_user.id,
-                credential_id=credential_id,
+                credential_id=row_credential_id,
                 account_id=target_account_id,
                 name=name_val,
                 amount=final_amount,
@@ -1592,6 +1587,9 @@ def api_csv_import_execute():
             inserted += 1
 
         except Exception as exc:
+            # A failed flush leaves the session unusable; roll back so the
+            # remaining rows (and the final commit) are not poisoned.
+            db.session.rollback()
             current_app.logger.exception('CSV import row %s error: %s', row_idx + 2, exc)
             errors.append({'row': row_idx + 2, 'error': str(exc)})
 

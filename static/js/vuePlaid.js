@@ -3691,13 +3691,13 @@ const app = new Vue({
             try {
                 const formData = new FormData();
                 formData.append('file', this.csvImport.file);
-                // If account_number is mapped, let backend route per-row; otherwise send fallback account_id
-                if (!this.hasAccountNumberMapping) {
-                    if (!this.csvImport.accountId) {
-                        this.csvImport.error = 'Please select a destination account.';
-                        return;
-                    }
+                // account_id is the fallback for rows whose account number does
+                // not match an account; send it whenever one is selected.
+                if (this.csvImport.accountId) {
                     formData.append('account_id', this.csvImport.accountId);
+                } else if (!this.hasAccountNumberMapping) {
+                    this.csvImport.error = 'Please select a destination account.';
+                    return;
                 }
                 formData.append('mapping', JSON.stringify(this.csvImport.userMapping));
                 formData.append('save_template', this.csvImport.saveTemplate ? 'true' : 'false');
@@ -3709,7 +3709,24 @@ const app = new Vue({
                     method: 'POST',
                     body: formData,
                 });
-                const data = await resp.json();
+                let data = null;
+                try {
+                    data = await resp.json();
+                } catch (parseErr) {
+                    data = null;
+                }
+
+                if (!resp.ok) {
+                    this.csvImport.error = (data && data.error)
+                        ? data.error
+                        : 'Import failed (server error, HTTP ' + resp.status + '). No transactions were saved — please retry or check the log.';
+                    return;
+                }
+
+                if (!data) {
+                    this.csvImport.error = 'Import failed: the server returned an invalid response. No transactions were saved — please retry or check the log.';
+                    return;
+                }
 
                 if (data.error) {
                     this.csvImport.error = data.error;

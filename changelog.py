@@ -3,6 +3,17 @@
 
 changelog = [
     {
+        "version": "1.8.2",
+        "date": "2026-09-15",
+        "changes": [
+            "CSV import no longer 500s on rows whose account number matches no account — such rows are reported per-row instead of aborting the import",
+            "A failed row no longer poisons the whole import: the SQLAlchemy session is rolled back per row",
+            "Row errors now name the offending account number so the bad row is easy to find",
+            "The import dialog offers a fallback account so rows with an unmatched account number can still be imported",
+            "Import failures now show a readable message instead of a JSON parse error"
+        ]
+    },
+    {
         "version": "1.8.1",
         "date": "2026-07-13",
         "changes": [

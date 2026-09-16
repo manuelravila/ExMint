@@ -36,6 +36,7 @@ except ImportError:  # pragma: no cover - Excel export optional
     Workbook = None
 from config import Config
 from version import __version__ as VERSION
+from csv_import_routing import build_mask_index, resolve_row_account, unroutable_reason
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from sqlalchemy.exc import OperationalError, IntegrityError
 from uuid import uuid4
@@ -5214,11 +5215,7 @@ def csv_import_execute():
             Credential.user_id == current_user.id,
             Account.status == 'Active',
         ).all()
-        for acct in all_user_accounts:
-            if acct.mask:
-                # Store by raw mask, last 4 chars, and any short variant
-                account_by_mask[acct.mask] = acct.id
-                account_by_mask[acct.mask.lstrip('0')] = acct.id
+        account_by_mask = build_mask_index((acct.id, acct.mask) for acct in all_user_accounts)
 
     for row_idx, row in enumerate(rows):
         try:
@@ -5295,25 +5292,25 @@ def csv_import_execute():
             # ── Multi-account: resolve account for this row ─────────────────
             row_account_id = account_id
             row_credential_id = credential_id
+            raw_acct = ''
             if account_number_header:
                 raw_acct = row.get(account_number_header, '').strip()
-                if raw_acct:
-                    # Try exact match, then last 4 chars
-                    lookup_key = raw_acct.replace(' ', '').replace('-', '').replace('*', '')
-                    matched_acct_id = account_by_mask.get(lookup_key)
-                    if matched_acct_id is None and len(lookup_key) >= 4:
-                        # Try last 4 chars only
-                        last4 = lookup_key[-4:]
-                        matched_acct_id = account_by_mask.get(last4)
-                        if matched_acct_id is None:
-                            # Also try without leading zeros
-                            matched_acct_id = account_by_mask.get(last4.lstrip('0'))
-                    if matched_acct_id:
-                        row_account_id = matched_acct_id
-                        # Resolve the credential for this account
-                        matched_acct = Account.query.get(matched_acct_id)
-                        if matched_acct:
-                            row_credential_id = matched_acct.credential_id
+                matched_acct_id = resolve_row_account(raw_acct, account_by_mask)
+                if matched_acct_id:
+                    row_account_id = matched_acct_id
+                    # Resolve the credential for this account
+                    matched_acct = Account.query.get(matched_acct_id)
+                    if matched_acct:
+                        row_credential_id = matched_acct.credential_id
+
+            # Guard: reject unroutable/orphan rows instead of inserting a row
+            # with a NULL account_id/credential_id (credential_id is NOT NULL).
+            if not row_account_id:
+                errors.append(f'Row {row_idx + 2}: could not determine target account — {unroutable_reason(raw_acct or None)}')
+                continue
+            if not row_credential_id:
+                errors.append(f'Row {row_idx + 2}: target account is not linked to a bank connection; row skipped')
+                continue
 
             # Generate unique synthetic ID
             synthetic_id = f'csv_{uuid4().hex}'
@@ -5385,6 +5382,9 @@ def csv_import_execute():
                 db.session.commit()
 
         except Exception as e:
+            # A failed flush leaves the session unusable; roll back so the
+            # remaining rows (and the final commit) are not poisoned.
+            db.session.rollback()
             errors.append(f'Row {row_idx + 2}: {str(e)}')
             continue
 
