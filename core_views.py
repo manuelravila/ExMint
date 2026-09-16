@@ -1098,6 +1098,8 @@ def _collect_balances_summary(user_id):
             'id': account.id,
             'name': account.name or 'Account',
             'mask': account.mask,
+            'type': account.type,
+            'subtype': account.subtype,
             'balance': float(account_balance),
             'current_balance': float(account.current_balance) if account.current_balance is not None else None,
             'available_balance': float(account.available_balance) if account.available_balance is not None else None,
@@ -2705,13 +2707,16 @@ def reconcile_account(account_id):
         return jsonify(error='Only paused (CSV Only) accounts can be reconciled'), 400
 
     from datetime import date
-    account.last_known_balance = balance
+    # Store the absolute value. The balance display convention negates credit/loan
+    # balances in _collect_balances_summary, so we always store the positive amount
+    # owed and let the dashboard handle the sign flip for display purposes.
+    account.last_known_balance = abs(balance)
     account.balance_date = date.today()
     db.session.commit()
 
     return jsonify(
         success=True,
-        last_known_balance=float(balance),
+        last_known_balance=float(abs(balance)),
         balance_date=account.balance_date.isoformat()
     )
 

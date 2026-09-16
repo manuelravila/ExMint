@@ -2937,6 +2937,8 @@ const app = new Vue({
         },
         startReconcile: function(account) {
             if (!account.is_reconcilable) return;
+            // Store the original balance so we can restore on cancel
+            this._originalBalance = account.balance;
             this.reconcilingAccountId = account.id;
             this.reconcileValue = account.balance;
             this.$nextTick(() => {
@@ -2951,11 +2953,16 @@ const app = new Vue({
         cancelReconcile: function() {
             this.reconcilingAccountId = null;
             this.reconcileValue = 0;
+            delete this._originalBalance;
         },
         saveReconcile: function(account) {
             const val = this.reconcileValue;
+            // If value hasn't changed from original, cancel instead of saving
+            if (val === null || val === undefined || val === '' || val === this._originalBalance) {
+                this.cancelReconcile();
+                return;
+            }
             this.reconcilingAccountId = null;
-            if (val === null || val === undefined || val === '') return;
             fetch('/api/accounts/' + account.id + '/reconcile', {
                 method: 'PUT',
                 headers: {'Content-Type': 'application/json'},
@@ -2964,10 +2971,21 @@ const app = new Vue({
                 if (!r.ok) throw new Error('Failed to reconcile');
                 return r.json();
             }).then(function(data) {
-                // Update the local balance to match what was set
+                // Update the local balance to match what was set.
+                // Apply the same sign convention as _collect_balances_summary:
+                // credit/loan accounts are displayed negated (debt = negative).
+                var displayBalance = data.last_known_balance;
+                var t = account.type ? account.type.toLowerCase() : '';
+                var st = account.subtype ? account.subtype.toLowerCase() : '';
+                if (t === 'credit') {
+                    displayBalance = -displayBalance;
+                } else if (t === 'loan' || st === 'line_of_credit' || st === 'revolving') {
+                    // Loan accounts are also debt — negate for display
+                    displayBalance = -displayBalance;
+                }
                 account.last_known_balance = data.last_known_balance;
                 account.balance_date = data.balance_date;
-                account.balance = data.last_known_balance;
+                account.balance = displayBalance;
             }).catch(function(err) {
                 console.error('Error reconciling:', err);
             });

@@ -31,6 +31,48 @@ from config import Config
 from version import __version__ as VERSION
 from csv_import_routing import build_mask_index, resolve_row_account, unroutable_reason
 
+
+# ---------------------------------------------------------------------------
+#  Account balance helpers
+# ---------------------------------------------------------------------------
+
+def _get_account_computed_balance(user_id, account_id):
+    """Sum of all non-removed transactions for an account (fallback when no live Plaid balance)."""
+    try:
+        total = db.session.query(
+            func.coalesce(func.sum(Transaction.amount), Decimal('0.00'))
+        ).filter(
+            Transaction.user_id == user_id,
+            Transaction.account_id == account_id,
+            Transaction.is_removed.is_(False)
+        ).scalar() or Decimal('0.00')
+        return float(total)
+    except Exception:
+        return None
+
+
+def _parse_int_list(raw):
+    """Parse a comma-separated string into a list of ints (for institution_ids)."""
+    if not raw:
+        return []
+    result = []
+    for part in raw.split(','):
+        try:
+            result.append(int(part.strip()))
+        except (TypeError, ValueError):
+            pass
+    return result
+
+
+def _parse_date(raw):
+    """Parse an ISO date string."""
+    if not raw:
+        return None
+    try:
+        return date.fromisoformat(raw.strip())
+    except (ValueError, AttributeError):
+        return None
+
 # Reuse internal helpers from core_views to stay in sync with UI behaviour.
 from core_views import (
     _sync_credential_transactions,
@@ -1131,6 +1173,12 @@ def list_accounts():
             'credential_id': a.credential_id,
             'institution_name': a.credential.institution_name if a.credential else None,
             'status': a.status,
+            # Balance fields — live from Plaid or computed from transactions
+            'current_balance': float(a.current_balance) if a.current_balance is not None else None,
+            'available_balance': float(a.available_balance) if a.available_balance is not None else None,
+            'last_known_balance': float(a.last_known_balance) if a.last_known_balance is not None else None,
+            # Computed balance for accounts without live Plaid data: sum of transactions
+            '_computed_balance': _get_account_computed_balance(user_id, a.id),
         }
         for a in query.all()
     ]
@@ -1157,6 +1205,9 @@ def list_institutions():
                 'subtype': a.subtype,
                 'is_enabled': a.is_enabled,
                 'status': a.status,
+                # Balance fields — live from Plaid or computed from transactions
+                'current_balance': float(a.current_balance) if a.current_balance is not None else None,
+                'available_balance': float(a.available_balance) if a.available_balance is not None else None,
             }
             for a in b.accounts
             if a.status in ('Active', 'Revoked')
