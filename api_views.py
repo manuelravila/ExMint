@@ -1426,6 +1426,8 @@ def api_csv_import_execute():
       - account_id: int (optional if account_number in mapping)
       - save_template: bool (optional)
       - template_label: str (required if save_template=true)
+      - create_missing_accounts: bool (optional, default false)
+      - new_account_credential_id: int (optional institution for created accounts)
     """
     data = request.get_json(silent=True) or {}
     csv_text = data.get('csv_content', '')
@@ -1433,6 +1435,17 @@ def api_csv_import_execute():
     account_id = data.get('account_id')
     save_template = data.get('save_template', False)
     template_label = data.get('template_label', '')
+    create_missing_accounts = data.get('create_missing_accounts', False)
+    if isinstance(create_missing_accounts, str):
+        create_missing_accounts = create_missing_accounts.lower() == 'true'
+    else:
+        create_missing_accounts = bool(create_missing_accounts)
+    new_account_credential_id = data.get('new_account_credential_id')
+    if new_account_credential_id is not None:
+        try:
+            new_account_credential_id = int(new_account_credential_id)
+        except (TypeError, ValueError):
+            return jsonify(error='new_account_credential_id must be an integer'), 400
 
     if not csv_text:
         return jsonify(error='csv_content required'), 400
@@ -1442,7 +1455,11 @@ def api_csv_import_execute():
     # Reuse core_views helpers
     from core_views import (
         _parse_date, _parse_amount, _auto_detect_mapping,
-        _compute_header_hash,
+        _compute_header_hash, _csv_collect_routing_facts,
+        _csv_get_or_create_account,
+    )
+    from csv_import_routing import (
+        resolve_creation_credential, creation_target_unknown_reason,
     )
 
     try:
@@ -1485,23 +1502,45 @@ def api_csv_import_execute():
     skipped = 0
     updated = 0
     errors = []
+    created_accounts = []
 
     credential_id = default_account.credential_id if default_account else None
 
     # Multi-account routing by mask
     account_number_header = None
     account_by_mask = {}
+    account_credential_map = {}
     for h, f in header_to_field.items():
         if f == 'account_number':
             account_number_header = h
             break
 
+    matched_credential_ids = set()
+    unmatched_numbers = []
     if account_number_header:
         all_user_accounts = Account.query.join(Credential).filter(
             Credential.user_id == g.api_user.id,
             Account.status == 'Active',
         ).all()
         account_by_mask = build_mask_index((acct.id, acct.mask) for acct in all_user_accounts)
+        account_credential_map = {acct.id: acct.credential_id for acct in all_user_accounts}
+        # Pure pre-pass: decide the institution before any row is inserted.
+        matched_credential_ids, unmatched_numbers = _csv_collect_routing_facts(
+            rows, account_number_header, account_by_mask, account_credential_map,
+            fallback_credential_id=credential_id,
+        )
+
+    target_credential = None
+    if create_missing_accounts and unmatched_numbers:
+        chosen_credential_id = resolve_creation_credential(
+            matched_credential_ids, new_account_credential_id
+        )
+        if chosen_credential_id is not None:
+            target_credential = Credential.query.filter_by(
+                id=chosen_credential_id, user_id=g.api_user.id
+            ).first()
+            if target_credential is None:
+                return jsonify(error='new_account_credential_id does not belong to you'), 400
 
     for row_idx, row in enumerate(rows):
         try:
@@ -1513,6 +1552,7 @@ def api_csv_import_execute():
             amount_cad_val = None
             amount_usd_val = None
             merchant_val = None
+            account_type_val = None
             currency_code = None
 
             for header, field in header_to_field.items():
@@ -1535,6 +1575,8 @@ def api_csv_import_execute():
                 elif field == 'amount_usd':
                     amount_usd_val = _parse_amount(raw)
                     currency_code = 'USD'
+                elif field == 'account_type':
+                    account_type_val = raw
                 elif field == 'merchant':
                     merchant_val = raw
 
@@ -1563,14 +1605,38 @@ def api_csv_import_execute():
             raw_acct = ''
             if account_number_header:
                 raw_acct = row.get(account_number_header, '').strip()
-                matched_acct_id = resolve_row_account(raw_acct, account_by_mask)
-                if matched_acct_id:
-                    target_account_id = matched_acct_id
-                    matched_acct = Account.query.get(matched_acct_id)
-                    if matched_acct:
-                        row_credential_id = matched_acct.credential_id
-
-            if not target_account_id and default_account:
+                if raw_acct:
+                    matched_acct_id = resolve_row_account(raw_acct, account_by_mask)
+                    if matched_acct_id:
+                        target_account_id = matched_acct_id
+                        row_credential_id = account_credential_map.get(matched_acct_id)
+                    elif create_missing_accounts:
+                        if target_credential is None:
+                            errors.append({
+                                'row': row_idx + 2,
+                                'error': creation_target_unknown_reason(raw_acct),
+                            })
+                            continue
+                        new_acct, created_info = _csv_get_or_create_account(
+                            g.api_user.id, target_credential, raw_acct,
+                            account_type_val, account_by_mask, account_credential_map,
+                        )
+                        if created_info:
+                            created_accounts.append(created_info)
+                        target_account_id = new_acct.id
+                        row_credential_id = new_acct.credential_id
+                    elif default_account:
+                        # v1.8.2 behaviour preserved when the caller opts out.
+                        target_account_id = default_account.id
+                        row_credential_id = default_account.credential_id
+                    else:
+                        errors.append({'row': row_idx + 2, 'error': 'could not determine target account — ' + unroutable_reason(raw_acct)})
+                        continue
+                elif default_account:
+                    # Empty account-number cell only: use the submitted fallback.
+                    target_account_id = default_account.id
+                    row_credential_id = default_account.credential_id
+            elif default_account:
                 target_account_id = default_account.id
                 row_credential_id = default_account.credential_id
 
@@ -1675,6 +1741,7 @@ def api_csv_import_execute():
         skipped=skipped,
         updated=updated,
         errors=errors,
+        created_accounts=created_accounts,
     )
 
 

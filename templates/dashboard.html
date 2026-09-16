@@ -1789,6 +1789,7 @@
                                                 <option value="amount_usd" :disabled="isFieldTaken('amount_usd', header)">Amount (USD)</option>
                                                 <option value="check_number" :disabled="isFieldTaken('check_number', header)">Check / Reference #</option>
                                                 <option value="category" :disabled="isFieldTaken('category', header)">Category</option>
+                                                <option value="account_type" :disabled="isFieldTaken('account_type', header)">Account Type</option>
                                                 <option value="account_number" :disabled="isFieldTaken('account_number', header)">Account Number</option>
                                                 <option value="balance" :disabled="isFieldTaken('balance', header)">Balance</option>
                                             </select>
@@ -1807,7 +1808,8 @@
                             <div class="card-body py-2">
                                 <div class="d-flex align-items-center">
                                     <i class="fas mr-2" :class="hasAccountNumberMapping ? 'fa-info-circle text-info' : 'fa-exclamation-triangle text-warning'"></i>
-                                    <span class="small text-muted" v-if="hasAccountNumberMapping">Fallback account (used for rows whose account number doesn't match):</span>
+                                    <span class="small text-muted" v-if="hasAccountNumberMapping && csvImport.createMissingAccounts">Fallback account (used only for rows with NO account number):</span>
+                                    <span class="small text-muted" v-else-if="hasAccountNumberMapping">Fallback account (used for rows whose account number doesn't match):</span>
                                     <span class="small text-muted" v-else>No account number column mapped. All transactions will go to:</span>
                                 </div>
                                 <select class="form-control form-control-sm mt-2" v-model.number="csvImport.accountId">
@@ -1822,6 +1824,33 @@
                                 </select>
                             </div>
                         </div>
+
+                        <!-- Auto-create unmatched CSV accounts -->
+                        <div v-if="hasAccountNumberMapping" class="card mt-3 border-info">
+                            <div class="card-body py-2">
+                                <div class="form-check">
+                                    <input type="checkbox" class="form-check-input" id="csvCreateMissingAccounts" v-model="csvImport.createMissingAccounts">
+                                    <label class="form-check-label" for="csvCreateMissingAccounts">
+                                        <strong>Create accounts that don't exist yet</strong>
+                                    </label>
+                                    <div class="small text-muted mt-1">
+                                        Rows whose account number matches no existing account will be created
+                                        automatically. Rows with an empty account-number cell still use the fallback account above.
+                                    </div>
+                                </div>
+                                <div v-if="csvImport.createMissingAccounts" class="form-group mt-3 mb-0">
+                                    <label class="small mb-1"><strong>Create them under:</strong></label>
+                                    <select class="form-control form-control-sm" v-model="csvImport.newAccountCredentialId">
+                                        <option value="">Auto-detect from this file</option>
+                                        <option v-for="bank in banks" :key="'newacct-'+bank.id" :value="bank.id">
+                                            [[ bank.institution_name ]]<span v-if="bank.label"> ([[ bank.label ]])</span>
+                                        </option>
+                                    </select>
+                                    <small class="text-muted">Auto-detect only works when every matched row belongs to one institution; otherwise pick the institution here.</small>
+                                </div>
+                            </div>
+                        </div>
+
                         <div v-if="hasAccountNumberMapping" class="alert alert-success py-2">
                             <i class="fas fa-check-circle mr-1"></i>
                             <strong>Account Number</strong> column detected — transactions will be routed to matching accounts automatically.
@@ -1888,6 +1917,12 @@
                                     <td class="text-muted">[[ csvImport.result.skipped ]]</td>
                                 </tr>
                             </table>
+                            <div v-if="csvImport.result.created_accounts && csvImport.result.created_accounts.length" class="alert alert-info mt-3">
+                                <strong>Created [[ csvImport.result.created_accounts.length ]] new account<span v-if="csvImport.result.created_accounts.length > 1">s</span>:</strong>
+                                <ul class="mb-0">
+                                    <li v-for="acct in csvImport.result.created_accounts" :key="'newacct-'+acct.id">[[ acct.name ]]</li>
+                                </ul>
+                            </div>
                             <div v-if="csvImport.result.errors && csvImport.result.errors.length" class="alert alert-warning mt-3">
                                 <strong>[[ csvImport.result.total_errors ]] errors:</strong>
                                 <ul class="mb-0">

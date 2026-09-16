@@ -302,6 +302,8 @@ const app = new Vue({
             file: null,
             fileName: '',
             accountId: null,
+            createMissingAccounts: false,
+            newAccountCredentialId: '',
             headers: [],
             sampleValues: {},
             autoMapping: {},
@@ -3568,6 +3570,8 @@ const app = new Vue({
                 });
             }, 50);
             this.csvImport.accountId = null;
+            this.csvImport.createMissingAccounts = false;
+            this.csvImport.newAccountCredentialId = '';
             this.csvImport.headers = [];
             this.csvImport.sampleValues = {};
             this.csvImport.autoMapping = {};
@@ -3719,6 +3723,10 @@ const app = new Vue({
                 }
                 formData.append('mapping', JSON.stringify(this.csvImport.userMapping));
                 formData.append('save_template', this.csvImport.saveTemplate ? 'true' : 'false');
+                formData.append('create_missing_accounts', this.csvImport.createMissingAccounts ? 'true' : 'false');
+                if (this.csvImport.createMissingAccounts && this.csvImport.newAccountCredentialId) {
+                    formData.append('new_account_credential_id', this.csvImport.newAccountCredentialId);
+                }
                 if (this.csvImport.saveTemplate && this.csvImport.newTemplateLabel) {
                     formData.append('template_label', this.csvImport.newTemplateLabel);
                 }
@@ -3756,6 +3764,11 @@ const app = new Vue({
 
                 // Refresh transactions after import
                 await this.fetchTransactions();
+
+                // New accounts were created — refresh the sidebar account data
+                if (data.created_accounts && data.created_accounts.length) {
+                    await this.fetchBanks();
+                }
             } catch (err) {
                 this.csvImport.error = 'Import failed: ' + err.message;
             } finally {
@@ -3768,6 +3781,11 @@ const app = new Vue({
         },
     },
     watch: {
+        // Default the "create missing accounts" opt-in to ON as soon as an
+        // Account Number column is mapped (it is pointless otherwise).
+        hasAccountNumberMapping: function(newValue) {
+            this.csvImport.createMissingAccounts = !!newValue;
+        },
         selectedSpendingYear: function() {
             this.resetOpenSpendingMonths();
         },

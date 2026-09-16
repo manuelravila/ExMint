@@ -36,7 +36,15 @@ except ImportError:  # pragma: no cover - Excel export optional
     Workbook = None
 from config import Config
 from version import __version__ as VERSION
-from csv_import_routing import build_mask_index, resolve_row_account, unroutable_reason
+from csv_import_routing import (
+    build_mask_index,
+    resolve_row_account,
+    unroutable_reason,
+    derive_mask,
+    build_synthetic_external_id,
+    resolve_creation_credential,
+    creation_target_unknown_reason,
+)
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from sqlalchemy.exc import OperationalError, IntegrityError
 from uuid import uuid4
@@ -2048,19 +2056,37 @@ def handle_token_and_accounts():
                     )
                     .first()
                 )
-                if existing_account and existing_account.status == 'Active':
+                # v1.9.0: also match an account auto-created from a CSV import.
+                # Its generated name will never equal Plaid's, so match the same
+                # institution + mask against the csv_acct_ synthetic id.
+                if not existing_account:
+                    existing_account = (
+                        Account.query
+                        .join(Credential)
+                        .filter(
+                            Credential.user_id == current_user.id,
+                            Credential.institution_name == credential.institution_name,
+                            Account.mask == mask,
+                            Account.plaid_account_id.like('csv_acct_%'),
+                        )
+                        .first()
+                    )
+                if (existing_account and existing_account.status == 'Active'
+                        and not (existing_account.plaid_account_id or '').startswith('csv_acct_')):
                     current_app.logger.warning(
                         'Skipping duplicate active account mask=%s name=%r institution=%r for user=%s',
                         mask, name, credential.institution_name, current_user.id
                     )
             if existing_account:
-                if existing_account.status == 'Revoked':
-                    # Re-adding a previously removed bank: reactivate the old account row
-                    # in-place so all historical transactions keep their account_id FK and
-                    # are immediately visible again without any data migration.
+                is_csv_created = (existing_account.plaid_account_id or '').startswith('csv_acct_')
+                if existing_account.status == 'Revoked' or is_csv_created:
+                    # Re-adding a previously removed bank, or linking the real Plaid
+                    # account for a CSV-auto-created row: re-parent the existing
+                    # account row in-place so all historical transactions keep their
+                    # account_id FK and become visible again without any data migration.
                     current_app.logger.info(
-                        'Reactivating revoked account mask=%s name=%r institution=%r for user=%s '
-                        'under new credential %s (new plaid_account_id=%s)',
+                        'Reactivating/re-parenting account mask=%s name=%r institution=%r for user=%s '
+                        'under credential %s (new plaid_account_id=%s)',
                         mask, name, credential.institution_name, current_user.id,
                         credential_id, plaid_account_id
                     )
@@ -4924,6 +4950,10 @@ _CSV_FIELD_ALIASES = {
         'category', 'type', 'transaction type', 'classification',
         'txn type', 'trans type', 'transaction_type',
     ],
+    'account_type': [
+        'account type', 'account_type', 'account type description',
+        'account type desc', 'acct type',
+    ],
     'balance': [
         'balance', 'running balance', 'available balance',
         'closing balance', 'opening balance', 'ledger balance',
@@ -5045,6 +5075,111 @@ def _preview_rows(rows, max_rows=3):
     return result
 
 
+def _csv_collect_routing_facts(rows, account_number_header, mask_index,
+                               account_credential_map, fallback_credential_id=None):
+    """Pre-pass over parsed CSV rows (pure, before any insert).
+
+    Returns ``(matched_credential_ids, unmatched_numbers)``:
+
+    * ``matched_credential_ids`` — credentials of the accounts matched by any
+      row (the institution-inference signal). A row with an empty account-number
+      cell resolves to the fallback account, so the fallback credential counts.
+    * ``unmatched_numbers`` — distinct non-empty raw account numbers that
+      resolved to no account (the auto-create candidates).
+
+    Per-row resolution mirrors the main loop exactly: the mapped
+    account-number column decides the route, and only an empty cell falls back
+    to the submitted ``account_id``.
+    """
+    matched_credential_ids = set()
+    unmatched_numbers = []
+    seen_unmatched = set()
+    if not account_number_header:
+        return matched_credential_ids, unmatched_numbers
+    for row in rows:
+        raw = row.get(account_number_header)
+        raw = '' if raw is None else str(raw).strip()
+        if not raw:
+            # Empty cell -> the main loop uses the submitted fallback account.
+            if fallback_credential_id is not None:
+                matched_credential_ids.add(fallback_credential_id)
+            continue
+        matched_id = resolve_row_account(raw, mask_index)
+        if matched_id is not None:
+            credential_id = account_credential_map.get(matched_id)
+            if credential_id is not None:
+                matched_credential_ids.add(credential_id)
+        elif raw not in seen_unmatched:
+            seen_unmatched.add(raw)
+            unmatched_numbers.append(raw)
+    return matched_credential_ids, unmatched_numbers
+
+
+def _csv_get_or_create_account(user_id, target_credential, raw_account_number,
+                               account_type, mask_index, account_credential_map):
+    """Get-or-create the Account for an unmatched CSV account number.
+
+    Mirrors the Plaid path in ``handle_token_and_accounts``: a stable synthetic
+    ``plaid_account_id`` is looked up first, then a secondary match by
+    ``(credential, mask)`` for the same user. A ``Revoked`` match is
+    reactivated and an ``Active`` match is reused untouched; otherwise a new
+    Account is created. The in-memory mask index and credential map are
+    extended so later rows in the same file route to the account.
+
+    Returns ``(account, created_info)`` where ``created_info`` is a
+    response-shaped dict only when a new Account row was created.
+    """
+    synthetic_id = build_synthetic_external_id(target_credential.id, raw_account_number)
+    mask = derive_mask(raw_account_number)
+
+    existing = Account.query.filter_by(plaid_account_id=synthetic_id).first()
+    if existing is None and mask:
+        existing = (
+            Account.query.join(Credential)
+            .filter(
+                Credential.user_id == user_id,
+                Account.credential_id == target_credential.id,
+                Account.mask == mask,
+            )
+            .first()
+        )
+
+    created_info = None
+    if existing is not None:
+        if existing.status == 'Revoked':
+            existing.status = 'Active'
+    else:
+        institution_name = target_credential.institution_name
+        if institution_name:
+            name = f'{institution_name} ••••{mask}'
+        else:
+            name = f'Imported account ••••{mask}'
+        existing = Account(
+            status='Active',
+            credential_id=target_credential.id,
+            plaid_account_id=synthetic_id,
+            name=name,
+            mask=mask,
+            is_enabled=True,
+            type=None,
+            subtype=(account_type or None),
+        )
+        db.session.add(existing)
+        db.session.flush()
+        created_info = {
+            'id': existing.id,
+            'name': existing.name,
+            'mask': existing.mask,
+            'credential_id': existing.credential_id,
+            'institution_name': institution_name,
+        }
+
+    if mask:
+        mask_index.update(build_mask_index([(existing.id, mask)]))
+    account_credential_map[existing.id] = existing.credential_id
+    return existing, created_info
+
+
 @core.route('/api/transactions/import-csv/analyze', methods=['POST'])
 @login_required
 def csv_import_analyze():
@@ -5119,6 +5254,8 @@ def csv_import_execute():
       - mapping: str (JSON dict of csv_header -> field_name)
       - save_template: str ('true'/'false')
       - template_label: str (required if save_template=true)
+      - create_missing_accounts: str ('true'/'false', default false)
+      - new_account_credential_id: int (optional institution for created accounts)
       - file: the CSV file
 
     Returns:
@@ -5126,12 +5263,15 @@ def csv_import_execute():
       - skipped: count of duplicates skipped
       - updated: count of pending transactions replaced
       - errors: list of row-level errors
+      - created_accounts: accounts auto-created for unrecognised numbers
     """
     # Read fields from multipart form (not JSON — frontend sends FormData)
     account_id = request.form.get('account_id', type=int)
     mapping_raw = request.form.get('mapping', '{}')
     save_template = request.form.get('save_template', 'false').lower() == 'true'
     template_label = request.form.get('template_label', '')
+    create_missing_accounts = request.form.get('create_missing_accounts', 'false').lower() == 'true'
+    new_account_credential_id = request.form.get('new_account_credential_id', type=int)
 
     try:
         mapping = json.loads(mapping_raw)
@@ -5199,6 +5339,7 @@ def csv_import_execute():
     skipped = 0
     updated = 0
     errors = []
+    created_accounts = []
 
     credential_id = default_account.credential_id if default_account else None
 
@@ -5209,11 +5350,14 @@ def csv_import_execute():
     # This lets a user import a CSV that contains multiple accounts at once.
     account_number_header = None
     account_by_mask = {}
+    account_credential_map = {}
     for h, f in header_to_field.items():
         if f == 'account_number':
             account_number_header = h
             break
 
+    matched_credential_ids = set()
+    unmatched_numbers = []
     if account_number_header:
         # Fetch ALL active accounts for this user
         all_user_accounts = Account.query.join(Credential).filter(
@@ -5221,6 +5365,24 @@ def csv_import_execute():
             Account.status == 'Active',
         ).all()
         account_by_mask = build_mask_index((acct.id, acct.mask) for acct in all_user_accounts)
+        account_credential_map = {acct.id: acct.credential_id for acct in all_user_accounts}
+        # Pure pre-pass: decide the institution before any row is inserted.
+        matched_credential_ids, unmatched_numbers = _csv_collect_routing_facts(
+            rows, account_number_header, account_by_mask, account_credential_map,
+            fallback_credential_id=credential_id,
+        )
+
+    target_credential = None
+    if create_missing_accounts and unmatched_numbers:
+        chosen_credential_id = resolve_creation_credential(
+            matched_credential_ids, new_account_credential_id
+        )
+        if chosen_credential_id is not None:
+            target_credential = Credential.query.filter_by(
+                id=chosen_credential_id, user_id=current_user.id
+            ).first()
+            if target_credential is None:
+                return jsonify(error='new_account_credential_id does not belong to you'), 400
 
     for row_idx, row in enumerate(rows):
         try:
@@ -5235,6 +5397,7 @@ def csv_import_execute():
             merchant_val = None
             check_val = None
             category_val = None
+            account_type_val = None
             currency_code = None
 
             for header, field in header_to_field.items():
@@ -5262,6 +5425,8 @@ def csv_import_execute():
                     check_val = raw
                 elif field == 'category':
                     category_val = raw
+                elif field == 'account_type':
+                    account_type_val = raw
 
             # Determine amount: CAD/USD columns take priority over debit/credit
             if amount_cad_val is not None:
@@ -5295,18 +5460,44 @@ def csv_import_execute():
                 merchant_val = name_val
 
             # ── Multi-account: resolve account for this row ─────────────────
+            # With auto-create OFF the v1.8.2 behaviour is preserved exactly: a
+            # non-empty number that matches nothing uses the submitted fallback
+            # account (or errors when there is none). With auto-create ON such a
+            # row is created under the resolved institution, or reported when no
+            # institution could be determined — it is never sent to the fallback.
             row_account_id = account_id
             row_credential_id = credential_id
             raw_acct = ''
             if account_number_header:
                 raw_acct = row.get(account_number_header, '').strip()
-                matched_acct_id = resolve_row_account(raw_acct, account_by_mask)
-                if matched_acct_id:
-                    row_account_id = matched_acct_id
-                    # Resolve the credential for this account
-                    matched_acct = Account.query.get(matched_acct_id)
-                    if matched_acct:
-                        row_credential_id = matched_acct.credential_id
+                if raw_acct:
+                    row_account_id = None
+                    row_credential_id = None
+                    matched_acct_id = resolve_row_account(raw_acct, account_by_mask)
+                    if matched_acct_id:
+                        row_account_id = matched_acct_id
+                        row_credential_id = account_credential_map.get(matched_acct_id)
+                    elif create_missing_accounts:
+                        if target_credential is None:
+                            errors.append(
+                                f'Row {row_idx + 2}: '
+                                f'{creation_target_unknown_reason(raw_acct)}'
+                            )
+                            continue
+                        new_acct, created_info = _csv_get_or_create_account(
+                            current_user.id, target_credential, raw_acct,
+                            account_type_val, account_by_mask, account_credential_map,
+                        )
+                        if created_info:
+                            created_accounts.append(created_info)
+                        row_account_id = new_acct.id
+                        row_credential_id = new_acct.credential_id
+                    elif default_account:
+                        row_account_id = default_account.id
+                        row_credential_id = default_account.credential_id
+                    else:
+                        errors.append(f'Row {row_idx + 2}: could not determine target account — {unroutable_reason(raw_acct)}')
+                        continue
 
             # Guard: reject unroutable/orphan rows instead of inserting a row
             # with a NULL account_id/credential_id (credential_id is NOT NULL).
@@ -5435,6 +5626,7 @@ def csv_import_execute():
         updated=updated,
         errors=errors[:20],  # limit error reporting
         total_errors=len(errors),
+        created_accounts=created_accounts,
     )
 
 

@@ -165,5 +165,32 @@ Pre-fix line numbers (branch `dev`, version 1.8.1):
 - Unroutable rows are **rejected**, never imported under a wrong account. This is
   deliberate: an account number that matches no account must not silently land in
   the fallback account unless the user picked one.
-- The fallback account remains optional; if the user selects one, unmatched rows
-  route there instead of erroring.
+- The fallback account remains optional. In v1.8.2, if the user selected one, an
+  unmatched row routed there instead of erroring; see the follow-up below for how
+  v1.9.0 auto-creation supersedes that for non-empty unmatched numbers.
+
+---
+
+## Follow-up (v1.9.0)
+
+Unroutable rows can now be **auto-created** instead of only being rejected. When
+the caller opts in (`create_missing_accounts=true`, exposed as the "Create
+accounts that don't exist yet" checkbox in the CSV import dialog), a row whose
+account number matches no active account creates a new `Account` under either:
+
+- the institution explicitly chosen in the dialog (`new_account_credential_id`), or
+- the one institution inferred from the other matched rows in the file.
+
+If the file's matched rows span more than one institution and no institution was
+chosen, the row is still reported as an error (the import never guesses). When
+the caller does **not** opt in, the v1.8.2 behaviour is unchanged: an unmatched
+row uses the selected fallback account when one was supplied, and is reported
+only when no fallback was selected. A row with an empty account-number cell
+continues to use the fallback account, and is never auto-created. Auto-created
+accounts use the stable id `csv_acct_{credential_id}_{normalized number}` and a
+secondary `(credential, mask)` lookup, so a second import of the same file
+reuses the account rather than duplicating it. Plaid linking was also extended
+to recognise a CSV-created account (same institution + mask with a `csv_acct_`
+`plaid_account_id`) and re-parent it to the real Plaid account instead of
+creating a duplicate.
+

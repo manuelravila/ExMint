@@ -3,6 +3,17 @@
 
 changelog = [
     {
+        "version": "1.9.0",
+        "date": "2026-09-15",
+        "changes": [
+            "CSV import can auto-create accounts for unrecognised account numbers (opt-in)",
+            "New-account institution is inferred from the file when every matched row belongs to one institution; otherwise the user must choose — the import never guesses",
+            "Auto-created accounts use an idempotent get-or-create: re-importing a file reuses the account instead of duplicating it",
+            "New optional 'account type' CSV mapping sets the subtype of accounts the import creates (existing accounts are never modified)",
+            "Plaid linking now recognises CSV-auto-created accounts by institution + mask, re-parenting them instead of creating a duplicate"
+        ]
+    },
+    {
         "version": "1.8.2",
         "date": "2026-09-15",
         "changes": [
