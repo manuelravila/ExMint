@@ -990,6 +990,7 @@
                                                                 <tr
                                                                     v-for="category in month.income_categories"
                                                                     :key="`income-${selectedSpendingYear}-${month.month}-${category.label}`"
+                                                                    :class="{ 'budget-excluded-row': category._budget_excluded }"
                                                                 >
                                                                     <td class="align-middle">
                                                                         <button
@@ -998,6 +999,16 @@
                                                                             @click="applySpendingCategoryFilter(category.label, month.month, selectedSpendingYear)"
                                                                         >
                                                                             [[ category.label ]]
+                                                                        </button>
+                                                                        <button
+                                                                            v-if="category._category_id"
+                                                                            type="button"
+                                                                            class="btn btn-link p-0 budget-exclude-toggle"
+                                                                            :class="{ 'text-muted': category._budget_excluded }"
+                                                                            :title="category._budget_excluded ? 'Include in income' : 'Hide from income'"
+                                                                            @click.stop="toggleBudgetExclusion(category)"
+                                                                        >
+                                                                            <i :class="category._budget_excluded ? 'fas fa-eye-slash' : 'fas fa-eye'"></i>
                                                                         </button>
                                                                     </td>
                                                                     <td class="align-middle">
@@ -1360,6 +1371,22 @@
                         </div>
                     </div>
                     <div v-else class="card shadow-sm categories-card">
+                        <div v-if="ruleConflicts.length" class="alert alert-warning mb-0 rounded-0">
+                            <div class="d-flex align-items-start">
+                                <i class="fas fa-exclamation-triangle mr-2 mt-1"></i>
+                                <div>
+                                    <strong>[[ ruleConflicts.length ]] overlapping rule[[ ruleConflicts.length === 1 ? '' : 's' ]]</strong> —
+                                    more than one rule matches the same transactions. The most specific rule wins; adjust the others so each rule is unique:
+                                    <ul class="mb-0 mt-2">
+                                        <li v-for="conflict in ruleConflicts" :key="`conflict-${conflict.overridden_rule_id}-${conflict.winning_rule_id}`">
+                                            Rule "[[ conflict.overridden_text ]]" (→ [[ conflict.overridden_category ]]) is overridden by
+                                            "[[ conflict.winning_text ]]" (→ [[ conflict.winning_category ]]) on [[ conflict.count ]] transaction[[ conflict.count === 1 ? '' : 's' ]].
+                                            <span class="text-muted" v-if="conflict.sample_transactions.length">e.g. [[ conflict.sample_transactions[0] ]]</span>
+                                        </li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
                         <div v-if="!categoryRules.length" class="card-body text-center text-muted py-5">
                             No category rules yet. Add one to get started.
                         </div>
@@ -1397,6 +1424,11 @@
                                             >
                                                 <span v-if="rule.text_to_match">[[ rule.text_to_match ]]</span>
                                                 <span v-else class="text-muted">Tap to edit</span>
+                                                <i
+                                                    v-if="rule.hasConflict"
+                                                    class="fas fa-exclamation-triangle text-warning ml-1"
+                                                    title="This rule is overridden by a more specific rule on some transactions. Adjust it so each rule is unique."
+                                                ></i>
                                             </div>
                                             <input
                                                 v-else
