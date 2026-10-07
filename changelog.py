@@ -3,6 +3,15 @@
 
 changelog = [
     {
+        "version": "1.10.0",
+        "date": "2026-10-07",
+        "changes": [
+            "Hidden (eye) categories are now hidden from Income too, not just from Expenses: excluded categories appear dimmed in the income section with their own toggle and no longer inflate the income subtotal",
+            "Automatic rules now resolve conflicts by specificity instead of creation order: amount-bounded rules beat unbounded ones, longer match text beats shorter, so 'PAYMENT FROM' >= $1000 wins over a bare 'Deposit' rule",
+            "New overlap alerts: when two rules match the same transactions but target different categories, the rules page shows a warning listing each overlap with affected counts and sample transactions, a warning icon marks the overridden rule, and saving a new overlapping rule shows an immediate notice so you can adjust rules to keep them unique"
+        ]
+    },
+    {
         "version": "1.9.0",
         "date": "2026-09-15",
         "changes": [

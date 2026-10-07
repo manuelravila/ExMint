@@ -2731,6 +2731,10 @@ const app = new Vue({
                 this.updateCategoryLabels(data.labels);
                 await this.fetchCustomCategories({ force: true, suppressLoader: true, refresh: true });
                 await this.fetchTransactions({ reset: true, skipLoadingState: true });
+                await this.fetchRuleConflicts();
+                if (data.summary && data.summary.conflicts && data.summary.conflicts.length) {
+                    this.categoriesError = `${data.summary.conflicts.length} rule(s) overlap with existing rules. The most specific rule wins; adjust the overlapping rules so each is unique.`;
+                }
             } catch (error) {
                 console.error('Error saving category rule:', error);
                 this.categoriesError = error.message || 'Failed to save category rule.';
@@ -2766,6 +2770,10 @@ const app = new Vue({
                 this.updateCategoryLabels(data.labels);
                 await this.fetchCustomCategories({ force: true, suppressLoader: true, refresh: true });
                 await this.fetchTransactions({ reset: true, skipLoadingState: true });
+                await this.fetchRuleConflicts();
+                if (data.summary && data.summary.conflicts && data.summary.conflicts.length) {
+                    this.categoriesError = `${data.summary.conflicts.length} rule(s) overlap with existing rules. The most specific rule wins; adjust the overlapping rules so each is unique.`;
+                }
             } catch (error) {
                 console.error('Error deleting category rule:', error);
                 this.categoriesError = error.message || 'Failed to delete category rule.';

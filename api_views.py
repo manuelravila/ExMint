@@ -95,6 +95,7 @@ from core_views import (
     _extract_label,
     apply_category_rules,
     apply_rules_to_transactions,
+    detect_rule_conflicts,
     ensure_category_schema,
     _with_schema_retry,
     DEFAULT_MANUAL_COLOR,
@@ -1257,7 +1258,10 @@ def budget_summary():
                         'spending_subtotal': m['spending_subtotal'],
                         'remainder_total': m['remainder_total'],
                         'spending_categories': [],
-                        'income_categories': m.get('income_categories', []),
+                        'income_categories': [
+                            c for c in m.get('income_categories', [])
+                            if not c.get('_budget_excluded')
+                        ],
                     }
                     for cat in m['spending_categories']:
                         if cat.get('_budget_excluded'):

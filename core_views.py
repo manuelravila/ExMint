@@ -627,17 +627,109 @@ def _compile_category_rules(user_id):
             'type': _resolve_rule_type(rule.transaction_type),
             'amount_min': Decimal(str(rule.amount_min)) if rule.amount_min is not None else None,
             'amount_max': Decimal(str(rule.amount_max)) if rule.amount_max is not None else None,
+            'text': pattern,
             'label': label,
             'color': category.color or DEFAULT_MANUAL_COLOR
         })
     return compiled
 
 
-def apply_rules_to_transactions(user_id, transaction_ids=None, include_removed=False):
+def _rule_specificity_score(compiled):
+    """Rank matching rules so more specific rules win over broad ones.
+
+    When several rules match the same transaction, the winner is chosen by
+    specificity instead of creation order:
+    1. Rules with an amount constraint beat unconstrained ones
+       (e.g. 'PAYMENT FROM' >= $1000 beats a bare 'Deposit' rule).
+    2. Longer match text beats shorter text
+       (e.g. 'PAYROLL DEPOSIT' beats 'Deposit').
+    3. Newer rule id wins ties, preserving last-created-wins for rules of
+       equal specificity.
     """
-    Apply category rules to the user's transactions. If transaction_ids is provided,
-    only those transactions are evaluated.
+    has_amount = 1 if (compiled['amount_min'] is not None or compiled['amount_max'] is not None) else 0
+    text_len = len(compiled.get('text') or '')
+    return (has_amount, text_len, compiled['rule_id'])
+
+
+def _match_transaction_rules(txn, valid_rules):
+    """Return (chosen_rule, overridden_rules) for one transaction.
+
+    overridden_rules are rules that also matched the transaction but lost to
+    the chosen rule (different target category). They are the rules being
+    'overlapped' and should be surfaced to the user so they can adjust them.
     """
+    txn_amount = Decimal(str(txn.amount)) if txn.amount is not None else None
+    abs_amount = txn_amount.copy_abs() if txn_amount is not None else None
+    txn_flow = _determine_transaction_flow(txn_amount)
+    chosen_rule = None
+    matching_rules = []
+
+    for compiled in valid_rules:
+        if compiled['type'] and compiled['type'] != txn_flow:
+            continue
+
+        if compiled['amount_min'] is not None and (abs_amount is None or abs_amount < compiled['amount_min']):
+            continue
+        if compiled['amount_max'] is not None and (abs_amount is None or abs_amount > compiled['amount_max']):
+            continue
+
+        field_value = _extract_field_value(txn, compiled['field'])
+        if not field_value:
+            continue
+
+        if compiled['regex'].search(field_value):
+            matching_rules.append(compiled)
+            score = _rule_specificity_score(compiled)
+            if chosen_rule is None or score > chosen_rule['_score']:
+                chosen_rule = dict(compiled)
+                chosen_rule['_score'] = score
+
+    overridden = []
+    if chosen_rule is not None and len(matching_rules) > 1:
+        seen = set()
+        for rule in matching_rules:
+            if rule['category_id'] == chosen_rule['category_id']:
+                continue
+            if rule['rule_id'] in seen:
+                continue
+            seen.add(rule['rule_id'])
+            overridden.append(rule)
+
+    return chosen_rule, overridden
+
+
+def _record_conflict(conflict_map, loser, winner, txn):
+    key = (loser['rule_id'], winner['rule_id'])
+    entry = conflict_map.get(key)
+    if entry is None:
+        entry = {
+            'overridden_rule_id': loser['rule_id'],
+            'overridden_text': loser.get('text') or '',
+            'overridden_category': loser.get('label') or '',
+            'winning_rule_id': winner['rule_id'],
+            'winning_text': winner.get('text') or '',
+            'winning_category': winner.get('label') or '',
+            'count': 0,
+            'sample_transactions': []
+        }
+        conflict_map[key] = entry
+    entry['count'] += 1
+    if len(entry['sample_transactions']) < 3 and txn.name:
+        entry['sample_transactions'].append(
+            f"{txn.date.isoformat() if txn.date else '?'} {txn.name[:60]} ({txn.amount})"
+        )
+
+
+def _finalize_conflicts(conflict_map):
+    conflicts = list(conflict_map.values())
+    conflicts.sort(key=lambda c: (-c['count'], c['overridden_rule_id']))
+    return conflicts
+
+
+def _evaluate_rule_matches(user_id, transaction_ids=None, include_removed=False, apply=True):
+    """Core rule-matching pass. When apply=True the winning category is written
+    to each transaction; when False the pass is read-only (conflict detection).
+    Both modes return the conflict report."""
     valid_rules = _compile_category_rules(user_id)
     rule_count = len(valid_rules)
 
@@ -651,6 +743,7 @@ def apply_rules_to_transactions(user_id, transaction_ids=None, include_removed=F
 
     updated = 0
     matched = 0
+    conflict_map = {}
 
     for txn in transactions:
         if txn.is_split_child:
@@ -658,34 +751,17 @@ def apply_rules_to_transactions(user_id, transaction_ids=None, include_removed=F
         if txn.id in override_map:
             continue
 
-        txn_amount = Decimal(str(txn.amount)) if txn.amount is not None else None
-        abs_amount = txn_amount.copy_abs() if txn_amount is not None else None
-        txn_flow = _determine_transaction_flow(txn_amount)
-        chosen_rule = None
-
-        for compiled in valid_rules:
-            if compiled['type'] and compiled['type'] != txn_flow:
-                continue
-
-            if compiled['amount_min'] is not None and (abs_amount is None or abs_amount < compiled['amount_min']):
-                continue
-            if compiled['amount_max'] is not None and (abs_amount is None or abs_amount > compiled['amount_max']):
-                continue
-
-            field_value = _extract_field_value(txn, compiled['field'])
-            if not field_value:
-                continue
-
-            if compiled['regex'].search(field_value):
-                chosen_rule = compiled
+        chosen_rule, overridden = _match_transaction_rules(txn, valid_rules)
 
         if chosen_rule is not None:
+            for loser in overridden:
+                _record_conflict(conflict_map, loser, chosen_rule, txn)
             category_id = chosen_rule['category_id']
-            if txn.custom_category_id != category_id:
+            if apply and txn.custom_category_id != category_id:
                 txn.custom_category_id = category_id
                 updated += 1
             matched += 1
-        else:
+        elif apply:
             if txn.custom_category_id is not None:
                 txn.custom_category_id = None
                 updated += 1
@@ -693,15 +769,33 @@ def apply_rules_to_transactions(user_id, transaction_ids=None, include_removed=F
     return {
         'rules_processed': rule_count,
         'matched_transactions': matched,
-        'transactions_updated': updated
+        'transactions_updated': updated,
+        'conflicts': _finalize_conflicts(conflict_map)
     }
+
+
+def apply_rules_to_transactions(user_id, transaction_ids=None, include_removed=False):
+    """
+    Apply category rules to the user's transactions. If transaction_ids is provided,
+    only those transactions are evaluated.
+    """
+    return _evaluate_rule_matches(user_id, transaction_ids=transaction_ids,
+                                  include_removed=include_removed, apply=True)
 
 
 def apply_category_rules(user_id, include_removed=False):
     """
     Apply category rules to all of the user's transactions.
     """
-    return apply_rules_to_transactions(user_id, transaction_ids=None, include_removed=include_removed)
+    return _evaluate_rule_matches(user_id, transaction_ids=None,
+                                  include_removed=include_removed, apply=True)
+
+
+def detect_rule_conflicts(user_id):
+    """Read-only pass: report rules that overlap (match the same transactions
+    but target different categories) without modifying any transaction."""
+    result = _evaluate_rule_matches(user_id, apply=False)
+    return result['conflicts']
 
 
 def _serialize_custom_category(category, extras=None):
@@ -1458,6 +1552,9 @@ def _collect_spending_summary(user_id):
                 })
 
         # Income categories (positive amounts)
+        # Budget-excluded categories are hidden from income exactly like they
+        # are hidden from spending: shown dimmed, but never counted in the
+        # income subtotal or the month net total.
         for year, months in info['income_totals'].items():
             for month, value in months.items():
                 if value == Decimal('0.00'):
@@ -1465,7 +1562,9 @@ def _collect_spending_summary(user_id):
                 me = year_map[year][month]
                 me['month'] = month
                 me['label'] = calendar.month_abbr[month]
-                me['income_subtotal'] += value
+                cat_info = cat_id_map.get(label_key, (None, None))
+                if not cat_info[1]:  # not budget-excluded
+                    me['income_subtotal'] += value
                 income_avg = metrics_entry.get('six_month_average', Decimal('0.00'))
                 if income_avg < 0:
                     income_avg = abs(income_avg)
@@ -1474,6 +1573,8 @@ def _collect_spending_summary(user_id):
                     'value': float(value.quantize(CENT, rounding=ROUND_HALF_UP)),
                     'six_month_average': float(income_avg.quantize(CENT, rounding=ROUND_HALF_UP)),
                     'classification': 'income',
+                    '_category_id': cat_info[0],
+                    '_budget_excluded': cat_info[1],
                 })
 
     # ── Everything Else (moved to after budget-only lines) ──────────────────
@@ -3791,6 +3892,21 @@ def delete_category_rule(category_id):
             'labels': _collect_category_labels(current_user.id)
         })
 
+    return _with_schema_retry(handler)
+
+
+@core.route('/api/categories/rules/conflicts', methods=['GET'])
+@login_required
+def category_rule_conflicts():
+    """Read-only report of rules that overlap: rules matching the same
+    transactions but targeting different categories. The winning rule is
+    chosen by specificity; the losing rules are reported so the user can
+    adjust them (tighten text, type or amount bounds) to make each rule
+    unambiguous."""
+    ensure_category_schema()
+    def handler():
+        conflicts = detect_rule_conflicts(current_user.id)
+        return jsonify({'conflicts': conflicts})
     return _with_schema_retry(handler)
 
 
