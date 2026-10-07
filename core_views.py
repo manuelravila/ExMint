@@ -798,6 +798,29 @@ def detect_rule_conflicts(user_id):
     return result['conflicts']
 
 
+def find_matched_rule(user_id, transaction_id):
+    """Return the rule that currently decides the category of one transaction
+    (the specificity winner among the rules matching it), or None."""
+    txn = Transaction.query.filter_by(id=transaction_id, user_id=user_id).first()
+    if txn is None or txn.is_split_child:
+        return None
+    override_map = _load_overrides([txn.id])
+    if txn.id in override_map:
+        return None  # manual override wins over rules
+    valid_rules = _compile_category_rules(user_id)
+    chosen_rule, overridden = _match_transaction_rules(txn, valid_rules)
+    if chosen_rule is None:
+        return None
+    return {
+        'rule_id': chosen_rule['rule_id'],
+        'text_to_match': chosen_rule.get('text') or '',
+        'field_to_match': chosen_rule.get('field') or 'description',
+        'category_id': chosen_rule['category_id'],
+        'category_name': chosen_rule.get('label') or '',
+        'overridden_rule_ids': [r['rule_id'] for r in overridden]
+    }
+
+
 def _serialize_custom_category(category, extras=None):
     if not category:
         return None
@@ -3892,6 +3915,18 @@ def delete_category_rule(category_id):
             'labels': _collect_category_labels(current_user.id)
         })
 
+    return _with_schema_retry(handler)
+
+
+@core.route('/api/transactions/<int:transaction_id>/matched-rule', methods=['GET'])
+@login_required
+def transaction_matched_rule(transaction_id):
+    """Return the automatic rule that currently categorizes this transaction,
+    so the UI can jump to the exact rule row."""
+    ensure_category_schema()
+    def handler():
+        rule = find_matched_rule(current_user.id, transaction_id)
+        return jsonify({'rule': rule})
     return _with_schema_retry(handler)
 
 

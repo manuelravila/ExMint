@@ -1330,7 +1330,7 @@ const app = new Vue({
             }
             const transaction = this.transactions.find(txn => txn.id === contextTransaction.id) || contextTransaction;
             if (transaction.custom_category_source === 'rule' && transaction.custom_category_id) {
-                await this.focusRuleById(transaction.custom_category_id);
+                await this.focusRuleForTransaction(transaction);
                 return;
             }
 
@@ -1769,16 +1769,41 @@ const app = new Vue({
                 }
             }
         },
-        focusRuleById: async function(ruleId) {
+        focusRuleById: async function(ruleId, options = {}) {
             if (!ruleId) {
                 return;
             }
             await this.ensureCategoriesPane();
             await this.setCategoryTab('rules');
-            const rule = this.categoryRules.find(item => item.id === ruleId);
-            if (rule) {
-                this.highlightRuleRow(rule.localId);
+            let rule = this.categoryRules.find(item => item.id === ruleId);
+            if (!rule) {
+                await this.fetchCategoryRules({ force: true, suppressLoader: true, refresh: true });
+                rule = this.categoryRules.find(item => item.id === ruleId);
             }
+            if (rule) {
+                this.highlightRuleRow(rule.localId, options);
+            }
+        },
+        focusRuleForTransaction: async function(transaction) {
+            // Ask the backend which rule actually decided this transaction's
+            // category (the specificity winner), then jump to that exact row.
+            try {
+                const response = await fetch(`/api/transactions/${transaction.id}/matched-rule`);
+                if (!response.ok) {
+                    throw new Error('Failed to resolve matched rule.');
+                }
+                const data = await response.json();
+                if (data.rule && data.rule.rule_id) {
+                    await this.focusRuleById(data.rule.rule_id, { duration: 6000 });
+                    return;
+                }
+            } catch (error) {
+                console.error('Error resolving matched rule for transaction:', error);
+            }
+            // Fallback: no single rule resolved (e.g. manual override cleared
+            // meanwhile) — open the rules tab and let the user add one.
+            await this.ensureCategoriesPane();
+            await this.setCategoryTab('rules');
         },
         highlightRuleRow: function(localId, options = {}) {
             if (!localId) {
