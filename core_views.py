@@ -17,7 +17,6 @@ from models import (
 )
 from plaid.model.item_remove_request import ItemRemoveRequest
 from plaid.model.accounts_get_request import AccountsGetRequest
-from plaid.model.item_webhook_update_request import ItemWebhookUpdateRequest
 from plaid.model.accounts_balance_get_request import AccountsBalanceGetRequest
 from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
 from sqlalchemy import and_, or_, func, asc, desc, inspect, text
@@ -34,7 +33,6 @@ try:
     from openpyxl import Workbook
 except ImportError:  # pragma: no cover - Excel export optional
     Workbook = None
-from config import Config
 from version import __version__ as VERSION
 from csv_import_routing import (
     build_mask_index,
@@ -1132,9 +1130,6 @@ def _format_decimal(value):
 
 
 def _collect_balances_summary(user_id):
-    from datetime import date as date_func
-    today = date_func.today()
-
     # Subquery: sum of all non-removed transactions per account
     raw_totals = db.session.query(
         Transaction.account_id.label('account_id'),
@@ -1334,7 +1329,6 @@ def _ensure_monthly_budgets(user_id):
 
     Copies budgets from the previous month when a new month appears.
     """
-    today = date.today()
 
     # Find all months with transactions that might not have budgets
     result = db.session.query(
@@ -1428,13 +1422,11 @@ def _collect_spending_summary(user_id):
     override_map = _load_overrides([txn.id for txn in transactions])
 
     # ── Load budget_excluded categories ────────────────────────────────
-    excluded_cat_ids = set()
     cat_id_map = {}  # label_key -> (category_id, budget_excluded)
     try:
         rows = CustomCategory.query.filter(
             CustomCategory.user_id == user_id,
         ).with_entities(CustomCategory.id, CustomCategory.name, CustomCategory.budget_excluded).all()
-        excluded_cat_ids = {r[0] for r in rows if r[2]}
         for r in rows:
             label_key = r[1].strip().lower()
             cat_id_map[label_key] = (r[0], bool(r[2]))
@@ -1617,8 +1609,6 @@ def _collect_spending_summary(user_id):
                 if budget_amount is None:
                     continue
                 # Budget-excluded categories appear in the table (dimmed/strikethrough)
-                cat_info_bo = cat_id_map.get(label_key, (None, None))
-                is_excluded_bo = bool(cat_info_bo[1])
                 display_label = None
                 for lk, info in category_entries.items():
                     if lk == label_key:
@@ -1638,10 +1628,16 @@ def _collect_spending_summary(user_id):
                 rollover_amt = _get_rollover(label_key, year, month)
                 is_auto = _get_is_automatic(label_key, year, month)
 
+                # 6M average must reflect real trailing-6-month activity even
+                # when this month has $0 spending (metrics are computed from
+                # the trailing 6 months, skipping zero months).
+                metrics_entry_bo = metrics.get(label_key, {})
+                six_month_avg_bo = abs(metrics_entry_bo.get('six_month_average', Decimal('0.00')))
+
                 entry['spending_categories'].append({
                     'label': display_label,
                     'value': 0.0,
-                    'six_month_average': 0.0,
+                    'six_month_average': float(six_month_avg_bo.quantize(CENT, rounding=ROUND_HALF_UP)),
                     'budget': float(budget_amount.quantize(CENT, rounding=ROUND_HALF_UP)),
                     'remainder': float(budget_amount.quantize(CENT, rounding=ROUND_HALF_UP)),
                     'classification': 'expense',
@@ -1707,7 +1703,11 @@ def _collect_spending_summary(user_id):
                 if not cat.get('_budget_excluded')
             )).quantize(CENT, rounding=ROUND_HALF_UP))
             # Remainder = budget - total (non-excluded) spending
-            entry['remainder_total'] = float((Decimal(str(entry['budget_total'])) - Decimal(str(entry['spending_subtotal']))).quantize(CENT, rounding=ROUND_HALF_UP))
+            entry['remainder_total'] = float(
+                (Decimal(str(entry['budget_total'])) - Decimal(str(entry['spending_subtotal']))).quantize(
+                    CENT, rounding=ROUND_HALF_UP
+                )
+            )
 
     years_output = []
     for year in sorted(year_map.keys(), reverse=True):
@@ -1742,7 +1742,6 @@ def _collect_spending_summary(user_id):
 
 def _collect_cashflow_summary(user_id):
     today = date.today()
-    months = []
     month_order = []
     month_map = {}
 
@@ -2236,11 +2235,6 @@ def handle_token_and_accounts():
                 db.session.add(new_account)
         db.session.commit()
 
-        filtered_response = {
-            'item': accounts_response['item'],
-            'request_id': accounts_response['request_id']
-        }
-
         db.session.refresh(credential)
 
         # Clear any update flags and run an initial sync so that Plaid webhooks can begin firing.
@@ -2661,7 +2655,7 @@ def sync_transactions():
                         'institution_name': credential.institution_name,
                         **credential_error
                     })
-            except plaid.ApiException as e:
+            except plaid.ApiException:
                 errors.append({
                     'credential_id': credential.id,
                     'institution_name': credential.institution_name,
@@ -2878,7 +2872,6 @@ def get_transactions():
 
     def handler():
         filter_options = _parse_transaction_filters(request.args)
-        account_ids = filter_options['account_ids']
         page = filter_options['page']
         page_size = filter_options['page_size']
         sort_key = filter_options['sort_key']
@@ -3028,7 +3021,13 @@ def export_balances():
                     'account': acct['name'],
                     'mask': acct.get('mask', ''),
                     'balance': acct['balance'],
-                    'type': 'Plaid (live)' if not acct.get('is_reconcilable') and acct.get('current_balance') is not None else 'Reconciled' if acct.get('is_reconcilable') and acct.get('last_known_balance') is not None else 'Calculated'
+                    'type': (
+                        'Plaid (live)'
+                        if not acct.get('is_reconcilable') and acct.get('current_balance') is not None
+                        else 'Reconciled'
+                        if acct.get('is_reconcilable') and acct.get('last_known_balance') is not None
+                        else 'Calculated'
+                    )
                 })
 
     timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
@@ -3165,7 +3164,8 @@ def export_spending():
         return response
 
     # ── XLSX: single sheet, 4 tables with blank-row separators ─────────
-    import tempfile, os
+    import tempfile
+    import os
     workbook = Workbook()
     default = workbook.active
     default.title = f'Spending {target_year}'
@@ -3487,7 +3487,10 @@ def bulk_update_transaction_category():
                         if candidate_trimmed and trimmed.lower() == candidate_trimmed.lower():
                             return jsonify({
                                 'confirmation_required': True,
-                                'message': 'An Automatic category with this name already exists. Do you want to create a new custom category with the same name?'
+                                'message': (
+                                    'An Automatic category with this name already exists. '
+                                    'Do you want to create a new custom category with the same name?'
+                                )
                             }), 409
 
             category = CustomCategory(
@@ -5331,18 +5334,7 @@ def _csv_get_or_create_account(user_id, target_credential, raw_account_number,
     return existing, created_info
 
 
-@core.route('/api/transactions/import-csv/analyze', methods=['POST'])
-@login_required
-def csv_import_analyze():
-    """
-    Upload a CSV file for analysis. Returns:
-      - headers: list of column header strings
-      - auto_mapping: dict of header -> field (or null if unmapped)
-      - has_template: whether a saved template matches this header signature
-      - template_label: the matched template's label, if any
-      - preview: first 3 rows of data
-      - row_count: total number of data rows
-    """
+def _csv_import_analyze_payload(user_id):
     if 'file' not in request.files:
         return jsonify(error='No file provided'), 400
 
@@ -5375,7 +5367,7 @@ def csv_import_analyze():
     # Check for a saved template matching this header signature
     header_hash = _compute_header_hash(headers)
     template = CsvImportTemplate.query.filter_by(
-        user_id=current_user.id,
+        user_id=user_id,
         header_hash=header_hash,
     ).first()
 
@@ -5392,6 +5384,21 @@ def csv_import_analyze():
         preview=_preview_rows(rows[:5]),
         row_count=len(rows),
     )
+
+
+@core.route('/api/transactions/import-csv/analyze', methods=['POST'])
+@login_required
+def csv_import_analyze():
+    """
+    Upload a CSV file for analysis. Returns:
+      - headers: list of column header strings
+      - auto_mapping: dict of header -> field (or null if unmapped)
+      - has_template: whether a saved template matches this header signature
+      - template_label: the matched template's label, if any
+      - preview: first 3 rows of data
+      - row_count: total number of data rows
+    """
+    return _csv_import_analyze_payload(current_user.id)
 
 
 @core.route('/api/transactions/import-csv/import', methods=['POST'])
@@ -5546,7 +5553,6 @@ def csv_import_execute():
             amount_cad_val = None
             amount_usd_val = None
             merchant_val = None
-            check_val = None
             category_val = None
             account_type_val = None
             currency_code = None
@@ -5572,8 +5578,6 @@ def csv_import_execute():
                     amount_usd_val = _parse_amount(raw)
                 elif field == 'merchant':
                     merchant_val = raw
-                elif field == 'check_number':
-                    check_val = raw
                 elif field == 'category':
                     category_val = raw
                 elif field == 'account_type':

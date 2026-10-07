@@ -16,7 +16,7 @@ from models import (
     TransactionCategoryOverride,
     ApiKey,
 )
-from sqlalchemy import and_, or_, func, asc, desc
+from sqlalchemy import func, asc, desc
 from sqlalchemy.orm import joinedload, aliased
 from decimal import Decimal
 from datetime import datetime, date
@@ -25,9 +25,6 @@ import hashlib
 import secrets
 from uuid import uuid4
 import plaid
-from werkzeug.security import check_password_hash
-
-from config import Config
 from version import __version__ as VERSION
 from csv_import_routing import build_mask_index, resolve_row_account, unroutable_reason
 
@@ -51,28 +48,6 @@ def _get_account_computed_balance(user_id, account_id):
         return None
 
 
-def _parse_int_list(raw):
-    """Parse a comma-separated string into a list of ints (for institution_ids)."""
-    if not raw:
-        return []
-    result = []
-    for part in raw.split(','):
-        try:
-            result.append(int(part.strip()))
-        except (TypeError, ValueError):
-            pass
-    return result
-
-
-def _parse_date(raw):
-    """Parse an ISO date string."""
-    if not raw:
-        return None
-    try:
-        return date.fromisoformat(raw.strip())
-    except (ValueError, AttributeError):
-        return None
-
 # Reuse internal helpers from core_views to stay in sync with UI behaviour.
 from core_views import (
     _sync_credential_transactions,
@@ -95,13 +70,11 @@ from core_views import (
     _extract_label,
     apply_category_rules,
     apply_rules_to_transactions,
-    detect_rule_conflicts,
     ensure_category_schema,
     _with_schema_retry,
     DEFAULT_MANUAL_COLOR,
-    UNCATEGORIZED_LABEL,
-    FALLBACK_CATEGORY_COLOR,
     _collect_spending_summary,
+    _csv_import_analyze_payload,
 )
 
 api_v1 = Blueprint('api_v1', __name__, url_prefix='/api/v1')
@@ -226,7 +199,7 @@ def sync_all():
                         'institution_name': cred.institution_name,
                         **cred_error,
                     })
-            except plaid.ApiException as e:
+            except plaid.ApiException:
                 errors.append({
                     'credential_id': cred.id,
                     'institution_name': cred.institution_name,
@@ -1359,7 +1332,6 @@ def revoke_api_key(key_id):
 
 import csv as _csv
 from io import StringIO as _StringIO
-from functools import wraps
 
 
 @api_v1.route('/transactions/import-csv/analyze', methods=['POST'])
@@ -1372,7 +1344,7 @@ def api_csv_import_analyze():
       - multipart/form-data with a `file` field (same as UI)
     """
     if 'file' in request.files:
-        return csv_import_analyze()
+        return _csv_import_analyze_payload(g.api_user.id)
 
     data = request.get_json(silent=True) or {}
     csv_text = data.get('csv_content', '')
@@ -1458,7 +1430,7 @@ def api_csv_import_execute():
 
     # Reuse core_views helpers
     from core_views import (
-        _parse_date, _parse_amount, _auto_detect_mapping,
+        _parse_date, _parse_amount,
         _compute_header_hash, _csv_collect_routing_facts,
         _csv_get_or_create_account,
     )
@@ -1690,7 +1662,6 @@ def api_csv_import_execute():
                 skipped += 1
                 continue
 
-            from uuid import uuid4
             new_txn = Transaction(
                 plaid_transaction_id=f'csv_{uuid4().hex}',
                 user_id=g.api_user.id,

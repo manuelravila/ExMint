@@ -1,0 +1,42 @@
+[flake8]
+# exMint lint gate.
+# The goal of this gate is to catch real defects (undefined names, unused
+# imports, shadowed/redefined helpers, unused locals) -- not whitespace taste.
+# Legacy style noise that a formatter would rewrite is ignored on purpose.
+max-line-length = 160
+extend-ignore =
+    E122,
+    E128,
+    E203,
+    E231,
+    E265,
+    E302,
+    E303,
+    E305,
+    E306,
+    E402,
+    E712,
+    E713,
+    E721,
+    E722,
+    E731,
+    E741,
+    F402,
+    F523,
+    F541,
+    W291,
+    W292,
+    W293,
+    W503
+exclude =
+    .git,
+    __pycache__,
+    venv,
+    .venv,
+    env,
+    build,
+    dist,
+    landing,
+    node_modules,
+    migrations,
+    bug

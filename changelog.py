@@ -3,26 +3,43 @@
 
 changelog = [
     {
+        "version": "1.10.3",
+        "date": "2026-10-07",
+        "changes": [
+            "Spending Report: a category with a budget but no spending in the displayed month now shows its "
+            "real trailing 6-month average instead of 0 (fixes budget-only rows showing 6M Average = 0)"
+        ]
+    },
+    {
         "version": "1.10.2",
         "date": "2026-10-07",
         "changes": [
-            "Auto-categorize on a transaction that was categorized by a rule now jumps to the exact rule row that decided it (the specificity winner), not just the category"
+            "Auto-categorize on a transaction that was categorized by a rule now jumps to the exact "
+            "rule row that decided it (the specificity winner), not just the category"
         ]
     },
     {
         "version": "1.10.1",
         "date": "2026-10-07",
         "changes": [
-            "Fixes the v1.10.0 regression that broke the Automatic rules tab and the Auto-categorize transaction menu (missing Vue state and conflict-fetch method in the release commit)"
+            "Fixes the v1.10.0 regression that broke the Automatic rules tab and the Auto-categorize "
+            "transaction menu (missing Vue state and conflict-fetch method in the release commit)"
         ]
     },
     {
         "version": "1.10.0",
         "date": "2026-10-07",
         "changes": [
-            "Hidden (eye) categories are now hidden from Income too, not just from Expenses: excluded categories appear dimmed in the income section with their own toggle and no longer inflate the income subtotal",
-            "Automatic rules now resolve conflicts by specificity instead of creation order: amount-bounded rules beat unbounded ones, longer match text beats shorter, so 'PAYMENT FROM' >= $1000 wins over a bare 'Deposit' rule",
-            "New overlap alerts: when two rules match the same transactions but target different categories, the rules page shows a warning listing each overlap with affected counts and sample transactions, a warning icon marks the overridden rule, and saving a new overlapping rule shows an immediate notice so you can adjust rules to keep them unique"
+            "Hidden (eye) categories are now hidden from Income too, not just from Expenses: excluded "
+            "categories appear dimmed in the income section with their own toggle and no longer inflate "
+            "the income subtotal",
+            "Automatic rules now resolve conflicts by specificity instead of creation order: amount-bounded "
+            "rules beat unbounded ones, longer match text beats shorter, so 'PAYMENT FROM' >= $1000 wins "
+            "over a bare 'Deposit' rule",
+            "New overlap alerts: when two rules match the same transactions but target different "
+            "categories, the rules page shows a warning listing each overlap with affected counts "
+            "and sample transactions, a warning icon marks the overridden rule, and saving a new "
+            "overlapping rule shows an immediate notice so you can adjust rules to keep them unique"
         ]
     },
     {
@@ -30,7 +47,8 @@ changelog = [
         "date": "2026-09-15",
         "changes": [
             "CSV import can auto-create accounts for unrecognised account numbers (opt-in)",
-            "New-account institution is inferred from the file when every matched row belongs to one institution; otherwise the user must choose — the import never guesses",
+            "New-account institution is inferred from the file when every matched row belongs to one "
+            "institution; otherwise the user must choose — the import never guesses",
             "Auto-created accounts use an idempotent get-or-create: re-importing a file reuses the account instead of duplicating it",
             "New optional 'account type' CSV mapping sets the subtype of accounts the import creates (existing accounts are never modified)",
             "Plaid linking now recognises CSV-auto-created accounts by institution + mask, re-parenting them instead of creating a duplicate"
