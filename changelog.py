@@ -3,6 +3,13 @@
 
 changelog = [
     {
+        "version": "1.10.2",
+        "date": "2026-10-07",
+        "changes": [
+            "Auto-categorize on a transaction that was categorized by a rule now jumps to the exact rule row that decided it (the specificity winner), not just the category"
+        ]
+    },
+    {
         "version": "1.10.1",
         "date": "2026-10-07",
         "changes": [
