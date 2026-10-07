@@ -3,6 +3,13 @@
 
 changelog = [
     {
+        "version": "1.10.1",
+        "date": "2026-10-07",
+        "changes": [
+            "Fixes the v1.10.0 regression that broke the Automatic rules tab and the Auto-categorize transaction menu (missing Vue state and conflict-fetch method in the release commit)"
+        ]
+    },
+    {
         "version": "1.10.0",
         "date": "2026-10-07",
         "changes": [

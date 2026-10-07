@@ -161,6 +161,7 @@ const app = new Vue({
         selectedAccountIds: [],
         transactions: [],
         categoryRules: [],
+        ruleConflicts: [],
         customCategories: [],
         categoryLabels: [],
         categoriesError: null,
@@ -2264,11 +2265,30 @@ const app = new Vue({
                     this.updateCategoryLabels();
                 }
                 this.categoryRules.forEach(rule => this.resetRuleDraft(rule));
+                await this.fetchRuleConflicts();
             } catch (error) {
                 console.error('Error fetching category rules:', error);
                 this.categoriesError = error.message || 'Failed to load category rules.';
             } finally {
                 this.categoriesLoading = false;
+            }
+        },
+        fetchRuleConflicts: async function() {
+            try {
+                const response = await fetch('/api/categories/rules/conflicts');
+                if (!response.ok) {
+                    this.ruleConflicts = [];
+                    return;
+                }
+                const data = await response.json();
+                this.ruleConflicts = data.conflicts || [];
+                const overriddenIds = new Set(this.ruleConflicts.map(c => c.overridden_rule_id));
+                this.categoryRules.forEach(rule => {
+                    rule.hasConflict = rule.id ? overriddenIds.has(rule.id) : false;
+                });
+            } catch (error) {
+                console.error('Error fetching rule conflicts:', error);
+                this.ruleConflicts = [];
             }
         },
         fetchCategories: async function(options = {}) {
