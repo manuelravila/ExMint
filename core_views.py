@@ -189,6 +189,26 @@ def _with_schema_retry(handler):
         current_app.logger.error(f"An unhandled exception occurred: {e}", exc_info=True)
         return jsonify({"error": "An unexpected error occurred. Please try again later."}), 500
 
+
+def _cursor_valid_for_item(stored_item_id, new_item_id, stored_cursor):
+    """Return the stored Plaid cursor only when it still belongs to the Item.
+
+    Plaid scopes a ``transactions/sync`` cursor to the single Item that produced
+    it: reusing a cursor belonging to a different Item is documented to cause
+    errors or an incomplete transaction history.  Therefore a cursor may only be
+    replayed against the Item it came from.  When either Item id is unknown
+    (``None`` or ``''``) the Item is treated as changed and the cursor is
+    discarded, so an unknown stored Item never keeps a cursor.
+    """
+    if stored_item_id is None or stored_item_id == '':
+        return None
+    if new_item_id is None or new_item_id == '':
+        return None
+    if stored_item_id != new_item_id:
+        return None
+    return stored_cursor
+
+
 _FIELD_MAP = {
     'description': 'description',
     'merchant': 'merchant',
@@ -2071,11 +2091,21 @@ def handle_token_and_accounts():
                     'Reconnecting paused credential %s (%s)',
                     paused_cred.id, institution_name
                 )
+                previous_item_id = paused_cred.item_id
+                previous_cursor = paused_cred.transactions_cursor
+                valid_cursor = _cursor_valid_for_item(previous_item_id, item_id, previous_cursor)
                 paused_cred.access_token = access_token
                 paused_cred.item_id = item_id
                 paused_cred.soft_disconnected = False
                 paused_cred.requires_update = False
+                paused_cred.transactions_cursor = valid_cursor
                 db.session.flush()
+                current_app.logger.info(
+                    'Reconnect cursor check for credential %s: old_item_id=%s '
+                    'new_item_id=%s cursor_dropped=%s',
+                    paused_cred.id, previous_item_id, item_id,
+                    previous_cursor is not None and valid_cursor is None
+                )
                 credential = paused_cred
                 credential_id = credential.id
                 # Fetch accounts from Plaid for the account sync below

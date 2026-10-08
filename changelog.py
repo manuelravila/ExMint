@@ -3,6 +3,16 @@
 
 changelog = [
     {
+        "version": "1.10.5",
+        "date": "2026-10-08",
+        "changes": [
+            "Plaid sync fix: reconnecting a paused (soft-disconnected) institution now discards the stored "
+            "transactions cursor when Plaid assigns a new Item. A Plaid cursor is scoped to the Item that "
+            "produced it, so replaying a cursor from a removed Item causes errors or an incomplete transaction "
+            "history; the reconnect now drops it and the next sync bootstraps a fresh cursor."
+        ]
+    },
+    {
         "version": "1.10.4",
         "date": "2026-10-08",
         "changes": [
