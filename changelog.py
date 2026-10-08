@@ -7,7 +7,7 @@ changelog = [
         "date": "2026-10-08",
         "changes": [
             "Security patch: bumped Flask 3.1.3, Werkzeug 3.1.9, Jinja2 3.1.6, Mako 1.4.3, urllib3 2.8.0, requests 2.34.2, "
-            "idna 3.15, PyJWT 2.15.1, Flask-Cors 6.0.5, cryptography 49.0.0, filelock 3.20.3 to clear 100 open OSV advisories "
+            "idna 3.15, PyJWT 2.15.1, Flask-Cors 6.0.5, cryptography 50.0.2, filelock 3.20.3 to clear 100 open OSV advisories "
             "(incl. PyJWT critical token-forgery CVE-2026-102268 and six urllib3 HIGH decompression-bomb/redirect issues)"
         ]
     },
