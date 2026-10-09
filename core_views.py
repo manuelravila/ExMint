@@ -42,6 +42,7 @@ from csv_import_routing import (
     build_synthetic_external_id,
     resolve_creation_credential,
     creation_target_unknown_reason,
+    find_header_line,
 )
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from sqlalchemy.exc import OperationalError, IntegrityError
@@ -207,6 +208,40 @@ def _cursor_valid_for_item(stored_item_id, new_item_id, stored_cursor):
     if stored_item_id != new_item_id:
         return None
     return stored_cursor
+
+
+def _account_needs_reparent(existing_account, credential_id, new_plaid_account_id):
+    """Return True when a linked account row must adopt a new Plaid account id.
+
+    Re-linking a previously paused credential makes Plaid create a brand new
+    Item and issue brand new ``account_id`` values for the same physical
+    accounts.  The stored row is still matched by (institution, mask, name) and
+    still belongs to the very credential being linked, but its
+    ``plaid_account_id`` is the stale id from the old Item.  Such a row must
+    follow the credential and adopt the incoming id, otherwise downstream
+    transaction persistence cannot map ``payload['account_id']`` back to the
+    row and silently drops every transaction for that account.
+
+    A row owned by a different credential is the genuine-duplicate case and is
+    deliberately left untouched (returns False), as is a row whose stored id is
+    a synthetic ``csv_acct_`` id (handled by the CSV re-parent branch) or that
+    already carries the incoming id.  Attributes are read defensively so a
+    simple stand-in object works in unit tests.
+    """
+    if existing_account is None:
+        return False
+    if getattr(existing_account, 'credential_id', None) != credential_id:
+        return False
+    if not new_plaid_account_id:
+        return False
+    stored_plaid_account_id = getattr(existing_account, 'plaid_account_id', None)
+    if not stored_plaid_account_id:
+        return False
+    if stored_plaid_account_id == new_plaid_account_id:
+        return False
+    if str(stored_plaid_account_id).startswith('csv_acct_'):
+        return False
+    return True
 
 
 _FIELD_MAP = {
@@ -2246,6 +2281,19 @@ def handle_token_and_accounts():
                     existing_account.credential_id = credential_id
                     existing_account.plaid_account_id = plaid_account_id
                     existing_account.status = 'Active'
+                elif _account_needs_reparent(existing_account, credential_id, plaid_account_id):
+                    # A paused credential was re-linked: Plaid created a new Item and
+                    # issued new account_id values, so this row (owned by the credential
+                    # being linked) must adopt the incoming id to keep receiving
+                    # transactions.  credential_id and status are left untouched.
+                    stale_plaid_account_id = existing_account.plaid_account_id
+                    current_app.logger.info(
+                        'Re-parenting account mask=%s name=%r institution=%r for user=%s '
+                        'under credential %s: plaid_account_id %s -> %s',
+                        mask, name, credential.institution_name, current_user.id,
+                        credential_id, stale_plaid_account_id, plaid_account_id
+                    )
+                    existing_account.plaid_account_id = plaid_account_id
                 existing_account.name = name
                 existing_account.type = type_
                 existing_account.subtype = subtype
@@ -5120,6 +5168,9 @@ _CSV_FIELD_ALIASES = {
         'deposit amount', 'inflow', 'credit_amount', 'credited',
         'paid in', 'received', 'refund', 'repayment',
     ],
+    'amount': [
+        'amount', 'transaction amount', 'amt', 'amount ($)', 'value',
+    ],
     'account_number': [
         'account number', 'account #', 'account no',
         'account no.', 'account_number', 'accountno', 'acct',
@@ -5162,16 +5213,78 @@ def _normalise_header(name):
     return ' '.join(name.strip().lower().split())
 
 
+_CSV_KNOWN_HEADERS = frozenset(
+    _normalise_header(alias)
+    for aliases in _CSV_FIELD_ALIASES.values()
+    for alias in aliases
+)
+
+
+def _csv_content_without_preamble(content):
+    """Drop any metadata preamble so the real header is the first line.
+
+    Many bank exports prefix the table with informational lines.  Detection is
+    delegated to the pure ``find_header_line`` helper: the first line among the
+    first 25 that parses into at least two non-empty fields and carries a known
+    alias.  When line 1 already qualifies (or nothing qualifies) the original
+    text is returned unchanged, preserving the historical behaviour.
+    """
+    line_no = find_header_line(content, _CSV_KNOWN_HEADERS, _normalise_header)
+    if line_no <= 1:
+        return content
+    return ''.join(content.splitlines(keepends=True)[line_no - 1:])
+
+
 def _compute_header_hash(headers):
     """SHA-256 of sorted, normalised header names."""
     normalised = sorted(_normalise_header(h) for h in headers)
     return hashlib.sha256('|'.join(normalised).encode()).hexdigest()
 
 
+def _header_match_score(header, alias):
+    """Score how well a normalised header matches a normalised alias.
+
+    Higher is better; ``0`` means no plausible match. Whole-word matches beat
+    raw substring containment and, among word matches, agreement on the
+    header's final word (its head noun) is strongly preferred. That sends
+    ``transaction amount`` to ``amount`` rather than ``description`` (whose
+    ``transaction`` alias shares only the first word) while keeping
+    ``transaction description`` on ``description``.
+    """
+    if not header or not alias:
+        return 0
+    if header == alias:
+        return 1000
+
+    def _words(text):
+        return [w for w in text.split() if any(c.isalnum() for c in w)]
+
+    header_words = _words(header)
+    alias_words = _words(alias)
+    header_set = set(header_words)
+
+    overlap = [w for w in alias_words if w in header_set]
+    if overlap:
+        score = len(overlap)
+        if header_words and alias_words and alias_words[-1] == header_words[-1]:
+            score += 100
+        if len(overlap) == len(alias_words):
+            score += 10
+        if alias in header:
+            score += 5
+        return score
+
+    # No shared word: fall back to raw containment for aliases that differ in
+    # punctuation or abbreviation only (e.g. "trans. date" vs "trans date").
+    if len(alias) >= 4 and (alias in header or header in alias):
+        return len(alias)
+    return 0
+
+
 def _auto_detect_mapping(headers):
     """
     Given a list of CSV column headers (strings), attempt to auto-detect
-    the best field mapping. Returns a dict: normalised_header -> field_name.
+    the best field mapping. Returns a dict: header -> field_name (or None).
     """
     normalised = [_normalise_header(h) for h in headers]
     mapping = {}
@@ -5184,35 +5297,65 @@ def _auto_detect_mapping(headers):
             normalised_alias = _normalise_header(alias)
             alias_to_field[normalised_alias] = field
 
+    # Pass 1: exact alias matches win outright, in column order.
+    remaining = []
     for idx, norm in enumerate(normalised):
-        # Direct match
-        if norm in alias_to_field:
-            field = alias_to_field[norm]
-            if field not in used_fields:
-                mapping[headers[idx]] = field
-                used_fields.add(field)
-                continue
+        field = alias_to_field.get(norm)
+        if field is not None and field not in used_fields:
+            mapping[headers[idx]] = field
+            used_fields.add(field)
+        else:
+            remaining.append(idx)
 
-        # Substring match (e.g. "Transaction Amount" -> "amount")
-        matched = False
+    # Pass 2: score every remaining header against every unused field's aliases
+    # and keep the best candidate instead of the first field in dict order.
+    for idx in remaining:
+        norm = normalised[idx]
+        best_field = None
+        best_score = 0
         for field, aliases in _CSV_FIELD_ALIASES.items():
             if field in used_fields:
                 continue
             for alias in aliases:
-                normalised_alias = _normalise_header(alias)
-                # Check if either string contains the other
-                if norm in normalised_alias or normalised_alias in norm:
-                    mapping[headers[idx]] = field
-                    used_fields.add(field)
-                    matched = True
-                    break
-            if matched:
-                break
-
-        if not matched:
+                score = _header_match_score(norm, _normalise_header(alias))
+                if score > best_score:
+                    best_score = score
+                    best_field = field
+        if best_field is not None:
+            mapping[headers[idx]] = best_field
+            used_fields.add(best_field)
+        else:
             mapping[headers[idx]] = None  # unmapped
 
     return mapping
+
+
+def _csv_date_candidates(headers):
+    """Return the headers whose best alias match resolves to the ``date`` field.
+
+    A file can legitimately carry more than one date-ish column (for example a
+    transaction date and a posting date). ``_auto_detect_mapping`` only lets one
+    of them claim ``date``, which hides the others from callers that need to
+    warn about the choice. This helper scores every header independently --
+    without the exclusive used-fields rule -- and keeps the ones whose best
+    match is ``date``, in column order. It reuses the same alias tables and
+    scoring as ``_auto_detect_mapping`` and returns an empty list when no header
+    looks like a date column.
+    """
+    candidates = []
+    for header in headers:
+        norm = _normalise_header(header)
+        best_field = None
+        best_score = 0
+        for field, aliases in _CSV_FIELD_ALIASES.items():
+            for alias in aliases:
+                score = _header_match_score(norm, _normalise_header(alias))
+                if score > best_score:
+                    best_score = score
+                    best_field = field
+        if best_field == 'date':
+            candidates.append(header)
+    return candidates
 
 
 def _parse_date(value):
@@ -5247,6 +5390,92 @@ def _parse_amount(value):
         return Decimal(cleaned)
     except (InvalidOperation, TypeError):
         return None
+
+
+def _apply_amount_sign(amount, amount_sign):
+    """Apply a bank's amount-sign convention to a parsed CSV amount.
+
+    Some card exports write spending as a positive number and payments or
+    refunds as negative (an "owe" convention), while ExMint stores money out as
+    negative.  ``amount_sign`` selects the convention:
+
+      * ``None``, ``''`` or ``'as_is'`` — return ``amount`` unchanged (the
+        historical behaviour and the default);
+      * ``'invert'`` — return ``-amount`` so an owe-style export is stored in
+        the ExMint convention.
+
+    Any other value raises ``ValueError``; the caller turns that into a 400.
+    """
+    if amount_sign in (None, '', 'as_is'):
+        return amount
+    if amount_sign == 'invert':
+        return -amount
+    raise ValueError("amount_sign must be one of: 'as_is', 'invert'")
+
+
+class _CsvDedupTracker:
+    """Count-aware, per-import-run dedup bookkeeping for CSV rows.
+
+    A CSV statement can contain the same ``(account, date, amount, name)`` more
+    than once (two genuinely separate identical charges on one day), so dedup
+    cannot simply ask "does a matching row exist?".  It must count how many
+    occurrences the run may match against rows that already exist and insert the
+    remainder.
+
+    Two keys are tracked:
+
+      * K1 = ``(account_id, date, amount, name)`` — the exact-row key.  The first
+        ``len(existing)`` occurrences of K1 map to the pre-existing rows in
+        order; later occurrences are new.
+      * K2 = ``(account_id, date, amount)`` — the Plaid-overlap guard, counted
+        only over pre-existing synced rows (a non-null, non-``csv_`` Plaid id).
+        Each matching CSV row consumes one unit of budget; once the budget is
+        exhausted the row is a genuine extra occurrence.
+
+    It is deliberately pure and database-free so its multiplicity semantics can
+    be unit-tested in memory; the caller supplies the pre-existing row facts the
+    first time a key is seen (before this run inserts anything for that key).
+    """
+
+    def __init__(self):
+        self._k1 = {}   # k1 -> {'existing': [...], 'seen': n}
+        self._k2 = {}   # k2 -> {'budget': n, 'used': n}
+
+    def next_k1(self, key, existing_rows):
+        """Return the pre-existing row this K1 occurrence duplicates, or None.
+
+        ``existing_rows`` is the full ordered list of pre-existing non-removed
+        rows for ``key``, captured before this run inserted anything for it.  The
+        first ``len(existing_rows)`` occurrences map to those rows in order;
+        later occurrences return ``None`` so the caller falls through to the
+        Plaid-overlap guard and then to an insert.
+        """
+        state = self._k1.get(key)
+        if state is None:
+            state = {'existing': list(existing_rows), 'seen': 0}
+            self._k1[key] = state
+        state['seen'] += 1
+        index = state['seen'] - 1
+        if index < len(state['existing']):
+            return state['existing'][index]
+        return None
+
+    def is_plaid_duplicate(self, key, budget):
+        """Return True while ``key`` still has unused Plaid-overlap budget.
+
+        ``budget`` is the number of pre-existing Plaid-synced rows for
+        ``(account_id, date, amount)``.  Each skipped CSV row consumes one unit;
+        once the budget is exhausted the row is a genuine extra occurrence and
+        the caller inserts it.
+        """
+        state = self._k2.get(key)
+        if state is None:
+            state = {'budget': int(budget or 0), 'used': 0}
+            self._k2[key] = state
+        if state['used'] < state['budget']:
+            state['used'] += 1
+            return True
+        return False
 
 
 def _preview_rows(rows, max_rows=3):
@@ -5381,6 +5610,7 @@ def _csv_import_analyze_payload(user_id):
         except Exception as e:
             return jsonify(error=f'Cannot decode file: {str(e)}'), 400
 
+    content = _csv_content_without_preamble(content)
     reader = csv.DictReader(StringIO(content))
     if not reader.fieldnames:
         return jsonify(error='CSV has no headers'), 400
@@ -5409,6 +5639,7 @@ def _csv_import_analyze_payload(user_id):
     return jsonify(
         headers=[h for h in headers if h is not None],
         auto_mapping={k: v for k, v in auto_mapping.items() if k is not None},
+        date_candidates=_csv_date_candidates(headers),
         has_template=template is not None,
         template_label=template.label if template else None,
         preview=_preview_rows(rows[:5]),
@@ -5423,6 +5654,10 @@ def csv_import_analyze():
     Upload a CSV file for analysis. Returns:
       - headers: list of column header strings
       - auto_mapping: dict of header -> field (or null if unmapped)
+      - date_candidates: list of headers that could be the date column, in
+        column order. Unlike auto_mapping this does not apply the exclusive
+        used-fields rule, so a file with both a transaction date and a posting
+        date reports both; empty when no header looks like a date column.
       - has_template: whether a saved template matches this header signature
       - template_label: the matched template's label, if any
       - preview: first 3 rows of data
@@ -5444,6 +5679,11 @@ def csv_import_execute():
       - template_label: str (required if save_template=true)
       - create_missing_accounts: str ('true'/'false', default false)
       - new_account_credential_id: int (optional institution for created accounts)
+      - amount_sign: str, how to read the sign of the amount column, one of
+        'as_is' (default) or 'invert'.  Use 'invert' for card exports that write
+        spending as a positive number and payments/refunds as negative, so the
+        stored row follows the ExMint convention (money out negative); it is
+        applied before dedup, so the dedup keys and stored rows agree.
       - file: the CSV file
 
     Returns:
@@ -5460,6 +5700,11 @@ def csv_import_execute():
     template_label = request.form.get('template_label', '')
     create_missing_accounts = request.form.get('create_missing_accounts', 'false').lower() == 'true'
     new_account_credential_id = request.form.get('new_account_credential_id', type=int)
+    amount_sign = request.form.get('amount_sign', 'as_is')
+    try:
+        _apply_amount_sign(Decimal('0'), amount_sign)
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
 
     try:
         mapping = json.loads(mapping_raw)
@@ -5512,6 +5757,7 @@ def csv_import_execute():
     else:
         return jsonify(error='No file or csv_content provided. Re-upload the file or include csv_content.'), 400
 
+    content = _csv_content_without_preamble(content)
     reader = csv.DictReader(StringIO(content))
     if not reader.fieldnames:
         return jsonify(error='CSV has no headers'), 400
@@ -5571,6 +5817,13 @@ def csv_import_execute():
             ).first()
             if target_credential is None:
                 return jsonify(error='new_account_credential_id does not belong to you'), 400
+
+    # Count-aware dedup state for this run.  The row caches hold the pre-existing
+    # rows for a key, captured the first time that key is seen so rows inserted
+    # earlier in this same run do not masquerade as churn.
+    dedup = _CsvDedupTracker()
+    k1_rows_cache = {}
+    k2_budget_cache = {}
 
     for row_idx, row in enumerate(rows):
         try:
@@ -5632,6 +5885,10 @@ def csv_import_execute():
             else:
                 errors.append(f'Row {row_idx + 2}: no amount column mapped')
                 continue
+
+            # Apply the bank's sign convention BEFORE dedup/insert so the dedup
+            # keys and the stored row both use the ExMint convention.
+            amount = _apply_amount_sign(amount, amount_sign)
 
             if date_val is None:
                 errors.append(f'Row {row_idx + 2}: invalid or missing date')
@@ -5696,16 +5953,21 @@ def csv_import_execute():
             # Generate unique synthetic ID
             synthetic_id = f'csv_{uuid4().hex}'
 
-            # Dedup: check for existing (account_id, date, amount, name)
-            existing = Transaction.query.filter_by(
-                account_id=row_account_id,
-                date=date_val,
-                amount=amount,
-                name=name_val,
-                is_removed=False,
-            ).first()
+            # Count-aware dedup.  K1 (account, date, amount, name) is matched at
+            # most as many times as rows already exist, so a second genuinely
+            # separate identical charge is inserted rather than silently dropped.
+            k1_key = (row_account_id, date_val, amount, name_val)
+            if k1_key not in k1_rows_cache:
+                k1_rows_cache[k1_key] = Transaction.query.filter_by(
+                    account_id=row_account_id,
+                    date=date_val,
+                    amount=amount,
+                    name=name_val,
+                    is_removed=False,
+                ).order_by(Transaction.id).all()
+            existing = dedup.next_k1(k1_key, k1_rows_cache[k1_key])
 
-            if existing:
+            if existing is not None:
                 if existing.pending:
                     # Overwrite pending transaction
                     existing.plaid_transaction_id = synthetic_id
@@ -5720,21 +5982,22 @@ def csv_import_execute():
                     skipped += 1
                     continue
             else:
-                # Second dedup pass: check for Plaid-synced duplicate by
-                # (account_id, date, amount) only. Catches the case where a
-                # Plaid-synced transaction already exists with a different
-                # description/name than the CSV column provides, preventing
-                # double-counting when CSV re-imports overlap with Plaid data.
-                existing_plaid = Transaction.query.filter(
-                    Transaction.account_id == row_account_id,
-                    Transaction.date == date_val,
-                    Transaction.amount == amount,
-                    Transaction.is_removed.is_(False),
-                    Transaction.plaid_transaction_id.isnot(None),
-                    ~Transaction.plaid_transaction_id.like('csv_%'),
-                ).first()
+                # Second dedup pass: the Plaid-overlap guard is count-aware too.
+                # Each pre-existing synced row (non-null, non-``csv_`` Plaid id)
+                # absorbs one CSV occurrence; extra occurrences are genuine and
+                # are inserted rather than counted as duplicates.
+                k2_key = (row_account_id, date_val, amount)
+                if k2_key not in k2_budget_cache:
+                    k2_budget_cache[k2_key] = Transaction.query.filter(
+                        Transaction.account_id == row_account_id,
+                        Transaction.date == date_val,
+                        Transaction.amount == amount,
+                        Transaction.is_removed.is_(False),
+                        Transaction.plaid_transaction_id.isnot(None),
+                        ~Transaction.plaid_transaction_id.like('csv_%'),
+                    ).count()
 
-                if existing_plaid:
+                if dedup.is_plaid_duplicate(k2_key, k2_budget_cache[k2_key]):
                     # Already exists via Plaid sync with the same
                     # account/date/amount — this is a CSV re-import duplicate
                     skipped += 1

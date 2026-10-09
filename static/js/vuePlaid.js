@@ -309,6 +309,8 @@ const app = new Vue({
             sampleValues: {},
             autoMapping: {},
             userMapping: {},
+            dateCandidates: [],
+            amountSign: 'as_is',
             hasTemplate: false,
             templateLabel: '',
             preview: [],
@@ -3629,6 +3631,8 @@ const app = new Vue({
             this.csvImport.sampleValues = {};
             this.csvImport.autoMapping = {};
             this.csvImport.userMapping = {};
+            this.csvImport.dateCandidates = [];
+            this.csvImport.amountSign = 'as_is';
             this.csvImport.hasTemplate = false;
             this.csvImport.templateLabel = '';
             this.csvImport.preview = [];
@@ -3688,6 +3692,7 @@ const app = new Vue({
                 this.csvImport.sampleValues = samples;
                 this.csvImport.autoMapping = data.auto_mapping;
                 this.csvImport.userMapping = Object.assign({}, data.auto_mapping);
+                this.csvImport.dateCandidates = data.date_candidates || [];
                 this.csvImport.hasTemplate = data.has_template;
                 this.csvImport.templateLabel = data.template_label || '';
                 this.csvImport.preview = data.preview || [];
@@ -3777,6 +3782,7 @@ const app = new Vue({
                 formData.append('mapping', JSON.stringify(this.csvImport.userMapping));
                 formData.append('save_template', this.csvImport.saveTemplate ? 'true' : 'false');
                 formData.append('create_missing_accounts', this.csvImport.createMissingAccounts ? 'true' : 'false');
+                formData.append('amount_sign', this.csvImport.amountSign || 'as_is');
                 if (this.csvImport.createMissingAccounts && this.csvImport.newAccountCredentialId) {
                     formData.append('new_account_credential_id', this.csvImport.newAccountCredentialId);
                 }

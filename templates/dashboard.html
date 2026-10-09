@@ -1784,6 +1784,13 @@
                             </button>
                         </div>
 
+                        <!-- Informational: more than one date-like column -->
+                        <div v-if="csvImport.dateCandidates.length > 1" class="alert alert-warning py-2 mb-3">
+                            <i class="fas fa-exclamation-triangle mr-1"></i>
+                            More than one date column found: <strong>[[ csvImport.dateCandidates.join(', ') ]]</strong>.
+                            Only the column mapped to Date decides the ledger date, and synced credit-card rows use the posting date.
+                        </div>
+
                         <p class="text-muted">
                             [[ csvImport.rowCount ]] rows found in [[ csvImport.fileName ]]. Map each CSV column to a transaction field.
                         </p>
@@ -1833,6 +1840,23 @@
                                     </tr>
                                 </tbody>
                             </table>
+                        </div>
+
+                        <!-- Amount sign convention (applied before dedup/insert) -->
+                        <div class="card mt-3 border-secondary">
+                            <div class="card-body py-2">
+                                <div class="small mb-2"><strong>Amount sign in this file:</strong></div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" name="csvAmountSign" id="csvAmountSignAsIs" value="as_is" v-model="csvImport.amountSign">
+                                    <label class="form-check-label" for="csvAmountSignAsIs">Store amounts as written</label>
+                                    <div class="small text-muted">Store the amount column exactly as the file writes it.</div>
+                                </div>
+                                <div class="form-check mt-2">
+                                    <input class="form-check-input" type="radio" name="csvAmountSign" id="csvAmountSignInvert" value="invert" v-model="csvImport.amountSign">
+                                    <label class="form-check-label" for="csvAmountSignInvert">Invert the sign</label>
+                                    <div class="small text-muted">The file writes spending as positive (owe-style); store it negated so it matches synced rows.</div>
+                                </div>
+                            </div>
                         </div>
 
                         <!-- Destination / fallback account selector -->
