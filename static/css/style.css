@@ -1701,3 +1701,5 @@ tr.budget-excluded-row .spending-category-link {
 .project-row-label:disabled { opacity: 1; cursor: default; }
 .project-months { padding-left: 1.4rem; }
 .project-month-row .project-total-link { font-weight: 500; }
+.project-categories { margin-top: 0.15rem; }
+.category-project-select { min-width: 9rem; }

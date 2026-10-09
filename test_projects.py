@@ -237,6 +237,41 @@ def part_b():
             untouched = db.session.get(Transaction, t1)
             check('a plain row does follow the rule (control)', untouched.custom_category_id == state['cat_a'])
 
+        # --- category linked to a project ---
+        r = client.post('/api/projects', json={'name': '%s Pocket' % tag})
+        pocket = r.get_json()['project']
+        state['project_ids'].append(pocket['id'])
+        with app.app_context():
+            cat_b_id = CustomCategory.query.filter_by(user_id=state['user_id'], name='%s CatB' % tag).first().id
+        r = client.patch('/api/custom-categories/%d/project' % cat_b_id, json={'project_id': pocket['id']})
+        check('link category → project', r.status_code == 200 and r.get_json()['category']['project_id'] == pocket['id'],
+              r.get_data(as_text=True)[:200])
+        r = client.patch('/api/custom-categories/%d/project' % cat_b_id, json={'project_id': 999999999})
+        check('link to unknown project → 404', r.status_code == 404)
+        listed = {p['id']: p for p in client.get('/api/projects').get_json()['projects']}
+        check('linked-category row counts in the project (t5, -12.00)',
+              listed[pocket['id']]['transaction_count'] == 1 and abs(listed[pocket['id']]['total'] - (-12.0)) < 1e-9,
+              repr(listed[pocket['id']]))
+        check('project lists its linked category', [c['id'] for c in listed[pocket['id']]['categories']] == [cat_b_id])
+        check('hand-assigned rows stay in their own project', listed[project['id']]['transaction_count'] == 3 + 2,
+              repr(listed[project['id']]['transaction_count']))
+        r = client.get('/api/transactions?project_id=%d&page_size=500' % pocket['id'])
+        got = r.get_json()['transactions']
+        check('filter by the pocket returns the linked row', [t['id'] for t in got] == [t5], repr([t['id'] for t in got]))
+        check('row says it is in the project via its category', got and got[0]['project_source'] == 'category')
+        r = client.get('/api/transactions?project_id=none&search=%s&page_size=500' % tag)
+        check('linked row is not under "No project"', t5 not in {t['id'] for t in r.get_json()['transactions']})
+        r = client.patch('/api/transactions/bulk-project', json={'transaction_ids': [t5], 'project_id': project['id']})
+        listed = {p['id']: p for p in client.get('/api/projects').get_json()['projects']}
+        check('assigning by hand wins over the category link',
+              listed[pocket['id']]['transaction_count'] == 0 and r.get_json()['transactions'][0]['project_source'] == 'manual')
+        client.patch('/api/transactions/bulk-project', json={'transaction_ids': [t5], 'project_id': None})
+        r = client.delete('/api/projects/%d' % pocket['id'])
+        check('deleting the project unlinks the category', r.get_json().get('categories_unlinked') == 1, repr(r.get_json()))
+        state['project_ids'].remove(pocket['id'])
+        with app.app_context():
+            check('category survives, unlinked', CustomCategory.query.get(cat_b_id).project_id is None)
+
         # --- rename + delete ---
         r = client.put('/api/projects/%d' % project['id'], json={'name': '%s Renamed' % tag})
         check('rename → 200', r.status_code == 200 and r.get_json()['project']['name'].endswith('Renamed'))

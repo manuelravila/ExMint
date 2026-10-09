@@ -455,9 +455,13 @@ def _build_transactions_query(user_id, filters):
 
     project_param = (filters.get('project_param') or '').lower()
     if project_param in ('none', '__none__', 'null'):
+        linked = list(_category_project_map(user_id))
+        effective = func.coalesce(override_alias.custom_category_id, Transaction.custom_category_id)
         query = query.filter(Transaction.project_id.is_(None))
+        if linked:
+            query = query.filter(or_(effective.is_(None), effective.notin_(linked)))
     elif project_param.isdigit():
-        query = query.filter(Transaction.project_id == int(project_param))
+        query = query.filter(_project_membership(user_id, [int(project_param)], override_alias))
 
     return query
 
@@ -591,9 +595,25 @@ def _serialize_transaction(txn, override_map):
         'split_children_count': txn.split_children.count() if getattr(txn, 'has_split_children', False) else 0,
         'is_new': bool(txn.is_new),
         'seen_by_user': bool(txn.seen_by_user),
-        'project_id': txn.project_id,
-        'project_name': txn.project.name if txn.project_id and txn.project else None,
-        'project_color': txn.project.color if txn.project_id and txn.project else None
+        **_serialize_transaction_project(txn, override)
+    }
+
+
+def _serialize_transaction_project(txn, override):
+    """The transaction's project: its own (assigned by hand), else the
+    project linked to its category (manual category first, then rule)."""
+    project, source = None, None
+    if txn.project_id and txn.project:
+        project, source = txn.project, 'manual'
+    else:
+        category = override.custom_category if override and override.custom_category else txn.custom_category
+        if category is not None and getattr(category, 'project_id', None) and category.project:
+            project, source = category.project, 'category'
+    return {
+        'project_id': project.id if project else None,
+        'project_name': project.name if project else None,
+        'project_color': project.color if project else None,
+        'project_source': source
     }
 
 _COLOR_RE = re.compile(r'^#([0-9a-fA-F]{6})$')
@@ -896,6 +916,8 @@ def _serialize_custom_category(category, extras=None):
         'created_at': category.created_at.isoformat() if category.created_at else None,
         'updated_at': category.updated_at.isoformat() if category.updated_at else None,
         'budget_excluded': getattr(category, 'budget_excluded', False),
+        'project_id': getattr(category, 'project_id', None),
+        'project_name': category.project.name if getattr(category, 'project_id', None) and category.project else None,
     }
     if extras:
         data.update(extras)
@@ -3823,19 +3845,46 @@ def delete_custom_category(category_id):
 PROJECT_NAME_MAX = 120
 
 
+def _category_project_map(user_id):
+    """category id -> project id, for the user's categories linked to a project."""
+    return {
+        category_id: project_id
+        for category_id, project_id in CustomCategory.query.with_entities(
+            CustomCategory.id, CustomCategory.project_id
+        ).filter(CustomCategory.user_id == user_id, CustomCategory.project_id.isnot(None)).all()
+    }
+
+
+def _project_membership(user_id, project_ids, override_alias):
+    """SQL condition: the transaction belongs to one of ``project_ids``.
+    A project assigned by hand wins; otherwise the project linked to the
+    transaction's category (its manual category, else its rule category).
+    ``override_alias`` must be outer-joined on the transaction."""
+    linked = [cid for cid, pid in _category_project_map(user_id).items() if pid in project_ids]
+    condition = Transaction.project_id.in_(project_ids)
+    if linked:
+        effective = func.coalesce(override_alias.custom_category_id, Transaction.custom_category_id)
+        condition = or_(condition, and_(Transaction.project_id.is_(None), effective.in_(linked)))
+    return condition
+
+
 def _project_transactions_query(user_id, project_ids):
     """Visible transactions of the given projects: the same rows the
     transactions list shows (no removed rows, split parents replaced by
     their children), so totals and the drilled-down list always agree."""
-    return Transaction.query.filter(
+    override_alias = aliased(TransactionCategoryOverride)
+    effective = func.coalesce(override_alias.custom_category_id, Transaction.custom_category_id)
+    return Transaction.query.outerjoin(
+        override_alias, override_alias.transaction_id == Transaction.id
+    ).filter(
         Transaction.user_id == user_id,
-        Transaction.project_id.in_(project_ids),
+        _project_membership(user_id, project_ids, override_alias),
         Transaction.is_removed.is_(False),
         or_(
             Transaction.has_split_children.is_(False),
             Transaction.is_split_child.is_(True)
         )
-    )
+    ), effective
 
 
 def _collect_project_totals(user_id, project_ids):
@@ -3844,10 +3893,13 @@ def _collect_project_totals(user_id, project_ids):
     stats = {pid: {'count': 0, 'total': Decimal('0'), 'years': {}} for pid in project_ids}
     if not project_ids:
         return stats
-    rows = _project_transactions_query(user_id, project_ids).with_entities(
-        Transaction.project_id, Transaction.date, Transaction.amount
+    category_projects = _category_project_map(user_id)
+    query, effective = _project_transactions_query(user_id, project_ids)
+    rows = query.with_entities(
+        Transaction.project_id, effective, Transaction.date, Transaction.amount
     ).all()
-    for project_id, txn_date, amount in rows:
+    for own_project_id, category_id, txn_date, amount in rows:
+        project_id = own_project_id or category_projects.get(category_id)
         entry = stats.get(project_id)
         if entry is None or txn_date is None:
             continue
@@ -3885,6 +3937,10 @@ def _serialize_project(project, stats=None):
         'id': project.id,
         'name': project.name,
         'color': project.color,
+        'categories': [
+            {'id': c.id, 'name': c.name, 'color': c.color}
+            for c in sorted(getattr(project, 'categories', None) or [], key=lambda c: (c.name or '').lower())
+        ],
         'transaction_count': stats['count'],
         'total': float(stats['total']),
         'by_year': by_year,
@@ -3996,9 +4052,35 @@ def delete_project(project_id):
         Transaction.user_id == current_user.id,
         Transaction.project_id == project.id
     ).update({Transaction.project_id: None}, synchronize_session=False)
+    unlinked = CustomCategory.query.filter(
+        CustomCategory.user_id == current_user.id,
+        CustomCategory.project_id == project.id
+    ).update({CustomCategory.project_id: None}, synchronize_session=False)
     db.session.delete(project)
     db.session.commit()
-    return jsonify({'deleted': project_id, 'unassigned': int(unassigned or 0)})
+    return jsonify({'deleted': project_id, 'unassigned': int(unassigned or 0),
+                    'categories_unlinked': int(unlinked or 0)})
+
+
+@core.route('/api/custom-categories/<int:category_id>/project', methods=['PATCH'])
+@login_required
+def set_custom_category_project(category_id):
+    """Link a category to a project ({project_id: id}) or unlink it (null).
+    A category belongs to at most one project."""
+    category = CustomCategory.query.filter_by(id=category_id, user_id=current_user.id).first()
+    if not category:
+        return jsonify({'error': 'Custom category not found.'}), 404
+    project_id = (request.get_json() or {}).get('project_id')
+    if project_id is not None:
+        try:
+            project_id = int(project_id)
+        except (TypeError, ValueError):
+            return jsonify({'error': 'project_id must be a number or null.'}), 400
+        if not Project.query.filter_by(id=project_id, user_id=current_user.id).first():
+            return jsonify({'error': 'Project not found.'}), 404
+    category.project_id = project_id
+    db.session.commit()
+    return jsonify({'category': _serialize_custom_category(category)})
 
 
 @core.route('/api/transactions/bulk-project', methods=['PATCH'])

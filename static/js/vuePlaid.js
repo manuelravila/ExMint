@@ -1288,6 +1288,32 @@ const app = new Vue({
                 alert(error.message || 'Failed to delete the project.');
             }
         },
+        setCategoryProject: async function(category, value) {
+            const projectId = value ? Number(value) : null;
+            const previous = category.project_id;
+            category.project_id = projectId;
+            category.saving = true;
+            try {
+                const response = await fetch(`/api/custom-categories/${category.id}/project`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ project_id: projectId })
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to link the category.');
+                }
+                await this.fetchProjects();
+                if (this.transactions.length) {
+                    this.fetchTransactions({ skipLoadingState: true });
+                }
+            } catch (error) {
+                category.project_id = previous;
+                alert(error.message || 'Failed to link the category.');
+            } finally {
+                category.saving = false;
+            }
+        },
         refreshProjectTags: function() {
             const byId = {};
             this.projects.forEach(project => { byId[project.id] = project; });
@@ -2545,6 +2571,7 @@ const app = new Vue({
                 transaction_count: Number.isFinite(raw.transaction_count) ? raw.transaction_count : 0,
                 override_count: Number.isFinite(raw.override_count) ? raw.override_count : 0,
                 budget_excluded: raw.budget_excluded || false,
+                project_id: raw.project_id || null,
                 isDirty: false,
                 isNew: !categoryId,
                 saving: false,

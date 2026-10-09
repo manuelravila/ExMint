@@ -539,7 +539,7 @@
                                     >
                                 </td>
                                 <td :style="rowSelectionStyle(transaction.id)">[[ formatDate(transaction.date) ]]<span v-if="transaction.pending" class="badge badge-warning ml-2">Pending</span></td>
-                                <td :style="rowSelectionStyle(transaction.id)"><span v-if="transaction.is_new" class="badge badge-success mr-2">New</span>[[ transaction.name ]]<span v-if="transaction.project_id" class="badge project-tag ml-2" :style="projectTagStyle(transaction.project_color)" :title="`Project: ${transaction.project_name}`"><i class="fas fa-folder mr-1"></i>[[ transaction.project_name ]]</span></td>
+                                <td :style="rowSelectionStyle(transaction.id)"><span v-if="transaction.is_new" class="badge badge-success mr-2">New</span>[[ transaction.name ]]<span v-if="transaction.project_id" class="badge project-tag ml-2" :style="projectTagStyle(transaction.project_color)" :title="transaction.project_source === 'category' ? `Project: ${transaction.project_name} (through its category)` : `Project: ${transaction.project_name}`"><i class="fas fa-folder mr-1"></i>[[ transaction.project_name ]]</span></td>
                                 <td :style="rowSelectionStyle(transaction.id)">[[ transaction.merchant_name || '—' ]]</td>
                                 <td :style="rowSelectionStyle(transaction.id)">
                                     <div>[[ transaction.account_name ]] <span class="text-muted" v-if="transaction.account_mask">••[[ transaction.account_mask ]]</span></div>
@@ -1223,6 +1223,16 @@
                                                     <span class="project-swatch" :style="{ backgroundColor: project.color || '#2C6B4F' }"></span>
                                                     <strong>[[ project.name ]]</strong>
                                                     <small class="text-muted ml-2">[[ project.transaction_count ]] transaction<span v-if="project.transaction_count !== 1">s</span></small>
+                                                    <div v-if="project.categories && project.categories.length" class="project-categories w-100">
+                                                        <span class="text-muted small mr-1">Includes:</span>
+                                                        <span
+                                                            v-for="cat in project.categories"
+                                                            :key="`project-${project.id}-cat-${cat.id}`"
+                                                            class="badge project-tag mr-1"
+                                                            :style="projectTagStyle(cat.color)"
+                                                            title="Every transaction of this category counts in the project"
+                                                        >[[ cat.name ]]</span>
+                                                    </div>
                                                 </div>
                                                 <div class="project-actions">
                                                     <button type="button" class="btn btn-sm btn-link text-muted" title="Rename or recolor" @click="startEditProject(project)"><i class="fas fa-pen"></i></button>
@@ -1378,6 +1388,7 @@
                                         <th scope="col" class="text-right">Rules</th>
                                         <th scope="col" class="text-right">Transactions</th>
                                         <th scope="col" class="text-right">Manual Overrides</th>
+                                        <th scope="col" title="Every transaction of this category also counts in this project">Project</th>
                                         <th scope="col" class="text-right">Actions</th>
                                     </tr>
                                 </thead>
@@ -1459,6 +1470,21 @@
                                         <td class="text-right">[[ category.rule_count ]]</td>
                                         <td class="text-right">[[ category.transaction_count ]]</td>
                                         <td class="text-right">[[ category.override_count ]]</td>
+                                        <td>
+                                            <select
+                                                v-if="category.id"
+                                                class="form-control form-control-sm category-project-select"
+                                                :value="category.project_id ? String(category.project_id) : ''"
+                                                :disabled="category.saving"
+                                                :aria-label="`Project for ${category.name}`"
+                                                @change="setCategoryProject(category, $event.target.value)"
+                                            >
+                                                <option value="">—</option>
+                                                <option v-for="project in projects" :key="`cat-project-${category.id}-${project.id}`" :value="String(project.id)">
+                                                    [[ project.name ]]
+                                                </option>
+                                            </select>
+                                        </td>
                                         <td class="text-right">
                                             <div class="btn-group btn-group-sm" role="group">
                                                 <button

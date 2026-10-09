@@ -16,6 +16,10 @@ changelog = [
             "remove them from their project; rows show a project tag",
             "The transactions list and its CSV/Excel export can be filtered by project (or No project); splitting a "
             "transaction copies its project onto the split parts",
+            "A category can be linked to one project (Categories list, Project column): every transaction of that "
+            "category then counts in the project too, while a transaction assigned to a project by hand keeps its own. "
+            "Project cards list the categories they include",
+            "Project cards are laid out side by side (two or more per row, depending on the screen)",
             "Regression test: re-applying category rules never reverses a manual category or a split"
         ]
     },

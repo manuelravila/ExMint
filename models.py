@@ -22,6 +22,9 @@ class CustomCategory(db.Model):
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
     budget_excluded = db.Column(db.Boolean, nullable=False, default=False)
+    # Optional: every transaction of this category counts in this project
+    # (a transaction assigned to a project by hand keeps its own project).
+    project_id = db.Column(db.Integer, db.ForeignKey('projects.id', ondelete='SET NULL'), nullable=True, index=True)
 
     user = db.relationship('User', backref=db.backref('custom_categories', lazy=True))
     transactions = db.relationship('Transaction', back_populates='custom_category', lazy=True)
@@ -47,6 +50,8 @@ class Project(db.Model):
 
     user = db.relationship('User', backref=db.backref('projects', lazy=True))
     transactions = db.relationship('Transaction', back_populates='project', lazy=True)
+    categories = db.relationship('CustomCategory', backref=db.backref('project', lazy=True), lazy=True,
+                                 foreign_keys='CustomCategory.project_id')
 
 
 class CategoryRule(db.Model):
