@@ -12,6 +12,7 @@ from models import (
     Budget,
     MonthlyBudget,
     CsvImportTemplate,
+    Project,
     get_app_setting,
     set_app_setting,
 )
@@ -366,6 +367,7 @@ def _parse_transaction_filters(args):
     max_amount = _parse_request_decimal((args.get('max_amount') or '').strip())
 
     custom_category_param = (args.get('custom_category_id') or '').strip()
+    project_param = (args.get('project_id') or '').strip()
 
     return {
         'account_ids': account_ids,
@@ -378,7 +380,8 @@ def _parse_transaction_filters(args):
         'end_date': end_date,
         'min_amount': min_amount,
         'max_amount': max_amount,
-        'custom_category_param': custom_category_param
+        'custom_category_param': custom_category_param,
+        'project_param': project_param
     }
 
 
@@ -449,6 +452,12 @@ def _build_transactions_query(user_id, filters):
                     Transaction.custom_category_id == custom_category_id,
                     override_alias.custom_category_id == custom_category_id
                 ))
+
+    project_param = (filters.get('project_param') or '').lower()
+    if project_param in ('none', '__none__', 'null'):
+        query = query.filter(Transaction.project_id.is_(None))
+    elif project_param.isdigit():
+        query = query.filter(Transaction.project_id == int(project_param))
 
     return query
 
@@ -581,7 +590,10 @@ def _serialize_transaction(txn, override_map):
         'has_split_children': bool(getattr(txn, 'has_split_children', False)),
         'split_children_count': txn.split_children.count() if getattr(txn, 'has_split_children', False) else 0,
         'is_new': bool(txn.is_new),
-        'seen_by_user': bool(txn.seen_by_user)
+        'seen_by_user': bool(txn.seen_by_user),
+        'project_id': txn.project_id,
+        'project_name': txn.project.name if txn.project_id and txn.project else None,
+        'project_color': txn.project.color if txn.project_id and txn.project else None
     }
 
 _COLOR_RE = re.compile(r'^#([0-9a-fA-F]{6})$')
@@ -1990,7 +2002,8 @@ def _create_split_children(parent_txn, split_specs):
             updated_at=timestamp,
             parent_transaction_id=parent_txn.id,
             is_split_child=True,
-            has_split_children=False
+            has_split_children=False,
+            project_id=parent_txn.project_id
         )
 
         normalized_label = cleaned_label.lower()
@@ -3018,7 +3031,8 @@ def get_transactions():
                 'end_date': end_date.isoformat() if end_date else None,
                 'min_amount': str(min_amount) if isinstance(min_amount, Decimal) else (str(min_amount) if min_amount not in (None, '') else None),
                 'max_amount': str(max_amount) if isinstance(max_amount, Decimal) else (str(max_amount) if max_amount not in (None, '') else None),
-                'custom_category_id': custom_category_param or None
+                'custom_category_id': custom_category_param or None,
+                'project_id': filter_options.get('project_param') or None
             }
         )
 
@@ -3801,6 +3815,232 @@ def delete_custom_category(category_id):
         })
 
     return _with_schema_retry(handler)
+
+
+# ---------------------------------------------------------------------------
+# Projects: user-named pockets of transactions (one project per transaction)
+# ---------------------------------------------------------------------------
+PROJECT_NAME_MAX = 120
+
+
+def _project_transactions_query(user_id, project_ids):
+    """Visible transactions of the given projects: the same rows the
+    transactions list shows (no removed rows, split parents replaced by
+    their children), so totals and the drilled-down list always agree."""
+    return Transaction.query.filter(
+        Transaction.user_id == user_id,
+        Transaction.project_id.in_(project_ids),
+        Transaction.is_removed.is_(False),
+        or_(
+            Transaction.has_split_children.is_(False),
+            Transaction.is_split_child.is_(True)
+        )
+    )
+
+
+def _collect_project_totals(user_id, project_ids):
+    """Per project: transaction count, signed net total (same sign as the
+    transactions table, negative = money out) and the year -> month tree."""
+    stats = {pid: {'count': 0, 'total': Decimal('0'), 'years': {}} for pid in project_ids}
+    if not project_ids:
+        return stats
+    rows = _project_transactions_query(user_id, project_ids).with_entities(
+        Transaction.project_id, Transaction.date, Transaction.amount
+    ).all()
+    for project_id, txn_date, amount in rows:
+        entry = stats.get(project_id)
+        if entry is None or txn_date is None:
+            continue
+        value = Decimal(amount or 0)
+        entry['count'] += 1
+        entry['total'] += value
+        year = entry['years'].setdefault(txn_date.year, {'total': Decimal('0'), 'count': 0, 'months': {}})
+        year['total'] += value
+        year['count'] += 1
+        month = year['months'].setdefault(txn_date.month, {'total': Decimal('0'), 'count': 0})
+        month['total'] += value
+        month['count'] += 1
+    return stats
+
+
+def _serialize_project(project, stats=None):
+    stats = stats or {'count': 0, 'total': Decimal('0'), 'years': {}}
+    by_year = []
+    for year in sorted(stats['years'], reverse=True):
+        year_entry = stats['years'][year]
+        by_year.append({
+            'year': year,
+            'total': float(year_entry['total']),
+            'count': year_entry['count'],
+            'by_month': [
+                {
+                    'month': month,
+                    'total': float(year_entry['months'][month]['total']),
+                    'count': year_entry['months'][month]['count']
+                }
+                for month in sorted(year_entry['months'], reverse=True)
+            ]
+        })
+    return {
+        'id': project.id,
+        'name': project.name,
+        'color': project.color,
+        'transaction_count': stats['count'],
+        'total': float(stats['total']),
+        'by_year': by_year,
+        'created_at': project.created_at.isoformat() if project.created_at else None,
+        'updated_at': project.updated_at.isoformat() if project.updated_at else None
+    }
+
+
+def _validate_project_name(raw_name):
+    name = _normalize_category_name(raw_name)
+    if len(name) < 3:
+        raise ValueError('Project name must be at least 3 characters.')
+    if len(name) > PROJECT_NAME_MAX:
+        raise ValueError('Project name must be at most %d characters.' % PROJECT_NAME_MAX)
+    return name
+
+
+def _find_project_by_name(user_id, name, exclude_id=None):
+    query = Project.query.filter(
+        Project.user_id == user_id,
+        func.lower(Project.name) == name.lower()
+    )
+    if exclude_id is not None:
+        query = query.filter(Project.id != exclude_id)
+    return query.first()
+
+
+def _serialize_one_project(project):
+    stats = _collect_project_totals(project.user_id, [project.id])
+    return _serialize_project(project, stats.get(project.id))
+
+
+@core.route('/api/projects', methods=['GET'])
+@login_required
+def list_projects():
+    projects = Project.query.filter_by(user_id=current_user.id).order_by(
+        func.lower(Project.name).asc(), Project.id.asc()
+    ).all()
+    stats = _collect_project_totals(current_user.id, [p.id for p in projects])
+    return jsonify({'projects': [_serialize_project(p, stats.get(p.id)) for p in projects]})
+
+
+@core.route('/api/projects', methods=['POST'])
+@login_required
+def create_project():
+    payload = request.get_json() or {}
+    try:
+        name = _validate_project_name(payload.get('name'))
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    color = None
+    if payload.get('color'):
+        try:
+            color = _normalize_color(payload.get('color'))
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
+    if _find_project_by_name(current_user.id, name):
+        return jsonify({'error': 'A project with this name already exists.'}), 409
+
+    project = Project(user_id=current_user.id, name=name, color=color)
+    db.session.add(project)
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({'error': 'A project with this name already exists.'}), 409
+    return jsonify({'project': _serialize_one_project(project)}), 201
+
+
+@core.route('/api/projects/<int:project_id>', methods=['PUT'])
+@login_required
+def update_project(project_id):
+    project = Project.query.filter_by(id=project_id, user_id=current_user.id).first()
+    if not project:
+        return jsonify({'error': 'Project not found.'}), 404
+    payload = request.get_json() or {}
+    if payload.get('name') is not None:
+        try:
+            name = _validate_project_name(payload.get('name'))
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
+        if _find_project_by_name(current_user.id, name, exclude_id=project.id):
+            return jsonify({'error': 'Another project with this name already exists.'}), 409
+        project.name = name
+    if 'color' in payload:
+        if payload.get('color'):
+            try:
+                project.color = _normalize_color(payload.get('color'))
+            except ValueError as exc:
+                return jsonify({'error': str(exc)}), 400
+        else:
+            project.color = None
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({'error': 'Another project with this name already exists.'}), 409
+    return jsonify({'project': _serialize_one_project(project)})
+
+
+@core.route('/api/projects/<int:project_id>', methods=['DELETE'])
+@login_required
+def delete_project(project_id):
+    """Delete a project. Its transactions are kept and only unassigned."""
+    project = Project.query.filter_by(id=project_id, user_id=current_user.id).first()
+    if not project:
+        return jsonify({'error': 'Project not found.'}), 404
+    unassigned = Transaction.query.filter(
+        Transaction.user_id == current_user.id,
+        Transaction.project_id == project.id
+    ).update({Transaction.project_id: None}, synchronize_session=False)
+    db.session.delete(project)
+    db.session.commit()
+    return jsonify({'deleted': project_id, 'unassigned': int(unassigned or 0)})
+
+
+@core.route('/api/transactions/bulk-project', methods=['PATCH'])
+@login_required
+def bulk_update_transaction_project():
+    """Assign the given transactions to a project, or clear it (project_id null)."""
+    payload = request.get_json() or {}
+    transaction_ids = payload.get('transaction_ids', [])
+    project_id = payload.get('project_id')
+
+    if not transaction_ids or not isinstance(transaction_ids, list):
+        return jsonify({'error': 'transaction_ids must be a non-empty list.'}), 400
+    if len(transaction_ids) > 500:
+        return jsonify({'error': 'Cannot update more than 500 transactions at once.'}), 400
+
+    project = None
+    if project_id is not None:
+        try:
+            project_id = int(project_id)
+        except (TypeError, ValueError):
+            return jsonify({'error': 'project_id must be a number or null.'}), 400
+        project = Project.query.filter_by(id=project_id, user_id=current_user.id).first()
+        if not project:
+            return jsonify({'error': 'Project not found.'}), 404
+
+    transactions = Transaction.query.options(
+        joinedload(Transaction.account),
+        joinedload(Transaction.credential),
+        joinedload(Transaction.custom_category)
+    ).filter(
+        Transaction.id.in_(transaction_ids),
+        Transaction.user_id == current_user.id
+    ).all()
+    if len(transactions) != len(set(transaction_ids)):
+        return jsonify({'error': 'One or more transactions not found.'}), 404
+
+    for txn in transactions:
+        txn.project_id = project.id if project else None
+    db.session.commit()
+
+    override_map = _load_overrides([t.id for t in transactions])
+    return jsonify({'transactions': [_serialize_transaction(t, override_map) for t in transactions]})
 
 
 @core.route('/api/categories', methods=['GET'])

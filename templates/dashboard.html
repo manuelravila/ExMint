@@ -57,6 +57,26 @@
                         <span v-if="bulkCategoryApplying"><i class="fas fa-spinner fa-spin mr-1"></i>Applying…</span>
                         <span v-else>Apply</span>
                     </button>
+                    <select
+                        class="form-control form-control-sm bulk-project-select mr-2"
+                        v-model="bulkProjectValue"
+                        aria-label="Assign selected transactions to a project"
+                    >
+                        <option value="">Assign project…</option>
+                        <option v-for="project in projects" :key="`bulk-project-${project.id}`" :value="String(project.id)">
+                            [[ project.name ]]
+                        </option>
+                        <option value="__new__">New project…</option>
+                        <option value="__none__">Remove from project</option>
+                    </select>
+                    <button
+                        class="btn btn-sm btn-primary mr-2"
+                        @click="applyBulkProjectAssign"
+                        :disabled="bulkProjectApplying || !bulkProjectValue"
+                    >
+                        <span v-if="bulkProjectApplying"><i class="fas fa-spinner fa-spin mr-1"></i>Applying…</span>
+                        <span v-else>Apply</span>
+                    </button>
                     <button class="btn btn-sm btn-outline-secondary" @click="clearTransactionSelection">
                         Clear
                     </button>
@@ -377,6 +397,21 @@
                                 </option>
                             </select>
                         </div>
+                        <div class="form-group col-sm-6 col-lg-3 mb-2">
+                            <label class="small text-muted text-uppercase font-weight-bold d-block mb-1" for="transactionsFilterProject">Project</label>
+                            <select
+                                id="transactionsFilterProject"
+                                class="form-control form-control-sm"
+                                v-model="filters.projectId"
+                                @change="applyTransactionFilters"
+                            >
+                                <option value="">All projects</option>
+                                <option value="__none__">No project</option>
+                                <option v-for="project in projects" :key="`filter-project-${project.id}`" :value="String(project.id)">
+                                    [[ project.name ]]
+                                </option>
+                            </select>
+                        </div>
                         <div class="form-group col-sm-6 col-lg-2 mb-2">
                             <label class="small text-muted text-uppercase font-weight-bold d-block mb-1" for="transactionsFilterMin">Min amount</label>
                             <input
@@ -504,7 +539,7 @@
                                     >
                                 </td>
                                 <td :style="rowSelectionStyle(transaction.id)">[[ formatDate(transaction.date) ]]<span v-if="transaction.pending" class="badge badge-warning ml-2">Pending</span></td>
-                                <td :style="rowSelectionStyle(transaction.id)"><span v-if="transaction.is_new" class="badge badge-success mr-2">New</span>[[ transaction.name ]]</td>
+                                <td :style="rowSelectionStyle(transaction.id)"><span v-if="transaction.is_new" class="badge badge-success mr-2">New</span>[[ transaction.name ]]<span v-if="transaction.project_id" class="badge project-tag ml-2" :style="projectTagStyle(transaction.project_color)" :title="`Project: ${transaction.project_name}`"><i class="fas fa-folder mr-1"></i>[[ transaction.project_name ]]</span></td>
                                 <td :style="rowSelectionStyle(transaction.id)">[[ transaction.merchant_name || '—' ]]</td>
                                 <td :style="rowSelectionStyle(transaction.id)">
                                     <div>[[ transaction.account_name ]] <span class="text-muted" v-if="transaction.account_mask">••[[ transaction.account_mask ]]</span></div>
@@ -789,6 +824,15 @@
                     >
                         <i class="fas fa-chart-line mr-2"></i>
                         Cash Flow
+                    </button>
+                    <button
+                        type="button"
+                        class="dashboard-tab-btn tab-switch-btn"
+                        :class="{ active: dashboardTab === 'projects' }"
+                        @click="setDashboardTab('projects')"
+                    >
+                        <i class="fas fa-folder-open mr-2"></i>
+                        Projects
                     </button>
                 </div>
                 <div v-if="dashboardError" class="alert alert-warning py-2 px-3 mb-3">
@@ -1125,6 +1169,111 @@
                                                 <div v-else class="text-muted small pt-2">
                                                     No spending recorded for this month yet.
                                                 </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+                    <template v-else-if="dashboardTab === 'projects'">
+                        <div class="card shadow-sm projects-card">
+                            <div class="card-header">
+                                <h5 class="mb-0">Projects</h5>
+                                <small class="text-muted">Group transactions into a project, then see its totals by year and month. Click any total to see its transactions.</small>
+                            </div>
+                            <div class="card-body">
+                                <form class="form-inline project-create-form mb-3" @submit.prevent="createProject">
+                                    <input
+                                        type="text"
+                                        class="form-control form-control-sm mr-2 mb-2"
+                                        v-model="newProjectName"
+                                        placeholder="Project name (e.g. Trip to Colombia)"
+                                        maxlength="120"
+                                        aria-label="New project name"
+                                    >
+                                    <input
+                                        type="color"
+                                        class="form-control form-control-sm project-color-input mr-2 mb-2"
+                                        v-model="newProjectColor"
+                                        aria-label="New project color"
+                                    >
+                                    <button type="submit" class="btn btn-sm btn-primary mb-2" :disabled="projectSaving || newProjectName.trim().length < 3">
+                                        <i class="fas fa-plus mr-1"></i>New Project
+                                    </button>
+                                </form>
+                                <div v-if="projectsError" class="alert alert-warning py-2 px-3">[[ projectsError ]]</div>
+                                <div v-if="projectsLoading && !projects.length" class="text-muted py-3">Loading projects…</div>
+                                <div v-else-if="!projects.length" class="text-muted py-3">
+                                    No projects yet. Create one above, then select transactions and use "Assign project…" in the toolbar.
+                                </div>
+                                <div v-else class="project-list">
+                                    <div v-for="project in projects" :key="`project-${project.id}`" class="project-block">
+                                        <div class="project-header">
+                                            <template v-if="editingProjectId === project.id">
+                                                <form class="form-inline flex-grow-1" @submit.prevent="saveProjectEdit(project)">
+                                                    <input type="text" class="form-control form-control-sm mr-2" v-model="editingProjectName" maxlength="120" aria-label="Project name">
+                                                    <input type="color" class="form-control form-control-sm project-color-input mr-2" v-model="editingProjectColor" aria-label="Project color">
+                                                    <button type="submit" class="btn btn-sm btn-primary mr-1" :disabled="projectSaving">Save</button>
+                                                    <button type="button" class="btn btn-sm btn-outline-secondary" @click="cancelProjectEdit">Cancel</button>
+                                                </form>
+                                            </template>
+                                            <template v-else>
+                                                <div class="project-title">
+                                                    <span class="project-swatch" :style="{ backgroundColor: project.color || '#2C6B4F' }"></span>
+                                                    <strong>[[ project.name ]]</strong>
+                                                    <small class="text-muted ml-2">[[ project.transaction_count ]] transaction<span v-if="project.transaction_count !== 1">s</span></small>
+                                                </div>
+                                                <div class="project-actions">
+                                                    <button
+                                                        type="button"
+                                                        class="btn btn-link p-0 project-total-link"
+                                                        :disabled="!project.transaction_count"
+                                                        title="Show this project's transactions"
+                                                        @click="applyProjectFilter(project.id)"
+                                                    >
+                                                        [[ formatCurrency(project.total, null) ]]
+                                                    </button>
+                                                    <button type="button" class="btn btn-sm btn-link text-muted ml-2" title="Rename or recolor" @click="startEditProject(project)"><i class="fas fa-pen"></i></button>
+                                                    <button type="button" class="btn btn-sm btn-link text-danger" title="Delete project (transactions are kept)" @click="deleteProject(project)"><i class="fas fa-trash"></i></button>
+                                                </div>
+                                            </template>
+                                        </div>
+                                        <!-- More than one year: year rows, each opening its months -->
+                                        <div v-if="project.by_year.length > 1" class="project-tree">
+                                            <div v-for="year in project.by_year" :key="`project-${project.id}-y${year.year}`" class="project-year">
+                                                <div class="project-row project-year-row">
+                                                    <button
+                                                        type="button"
+                                                        class="btn btn-link p-0 project-row-label"
+                                                        :disabled="year.by_month.length < 2"
+                                                        @click="toggleProjectYear(project.id, year.year)"
+                                                    >
+                                                        <i v-if="year.by_month.length > 1" :class="isProjectYearOpen(project.id, year.year) ? 'fas fa-chevron-down' : 'fas fa-chevron-right'"></i>
+                                                        [[ year.year ]]
+                                                        <small v-if="year.by_month.length === 1" class="text-muted ml-1">([[ projectMonthLabel(year.by_month[0].month) ]])</small>
+                                                    </button>
+                                                    <button type="button" class="btn btn-link p-0 project-total-link" @click="applyProjectFilter(project.id, year.year)">
+                                                        [[ formatCurrency(year.total, null) ]]
+                                                    </button>
+                                                </div>
+                                                <div v-if="year.by_month.length > 1 && isProjectYearOpen(project.id, year.year)" class="project-months">
+                                                    <div v-for="month in year.by_month" :key="`project-${project.id}-y${year.year}-m${month.month}`" class="project-row project-month-row">
+                                                        <span class="project-row-label">[[ projectMonthLabel(month.month) ]] <small class="text-muted">· [[ month.count ]]</small></span>
+                                                        <button type="button" class="btn btn-link p-0 project-total-link" @click="applyProjectFilter(project.id, year.year, month.month)">
+                                                            [[ formatCurrency(month.total, null) ]]
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <!-- One year, several months: the months directly -->
+                                        <div v-else-if="project.by_year.length === 1 && project.by_year[0].by_month.length > 1" class="project-tree">
+                                            <div v-for="month in project.by_year[0].by_month" :key="`project-${project.id}-m${month.month}`" class="project-row project-month-row">
+                                                <span class="project-row-label">[[ projectMonthLabel(month.month) ]] [[ project.by_year[0].year ]] <small class="text-muted">· [[ month.count ]]</small></span>
+                                                <button type="button" class="btn btn-link p-0 project-total-link" @click="applyProjectFilter(project.id, project.by_year[0].year, month.month)">
+                                                    [[ formatCurrency(month.total, null) ]]
+                                                </button>
                                             </div>
                                         </div>
                                     </div>

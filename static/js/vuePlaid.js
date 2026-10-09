@@ -173,6 +173,7 @@ const app = new Vue({
             startDate: '',
             endDate: '',
             customCategoryId: '',
+            projectId: '',
             amountMin: '',
             amountMax: ''
         },
@@ -213,6 +214,18 @@ const app = new Vue({
         selectedTransactionIds: [],
         bulkCategoryValue: '',
         bulkCategoryApplying: false,
+        bulkProjectValue: '',
+        bulkProjectApplying: false,
+        projects: [],
+        projectsLoading: false,
+        projectsError: '',
+        newProjectName: '',
+        newProjectColor: '#2C6B4F',
+        projectSaving: false,
+        editingProjectId: null,
+        editingProjectName: '',
+        editingProjectColor: '#2C6B4F',
+        openProjectYears: {},
         transactionMenu: {
             visible: false,
             x: 0,
@@ -386,6 +399,7 @@ const app = new Vue({
                 startDate: '',
                 endDate: '',
                 customCategoryId: '',
+                projectId: '',
                 amountMin: '',
                 amountMax: ''
             };
@@ -439,7 +453,7 @@ const app = new Vue({
             return this.splitModal.errors.length === 0;
         },
         hasActiveTransactionFilters: function() {
-            return !!(this.filters.search || this.filters.startDate || this.filters.endDate || this.filters.customCategoryId || this.filters.amountMin || this.filters.amountMax);
+            return !!(this.filters.search || this.filters.startDate || this.filters.endDate || this.filters.customCategoryId || this.filters.projectId || this.filters.amountMin || this.filters.amountMax);
         },
         hasAccountNumberMapping: function() {
             var self = this;
@@ -834,6 +848,9 @@ const app = new Vue({
         },
         setDashboardTab: function(tab) {
             this.dashboardTab = tab;
+            if (tab === 'projects') {
+                this.fetchProjects();
+            }
         },
         handleSpendingYearChange: function() {
             this.resetOpenSpendingMonths();
@@ -1184,6 +1201,197 @@ const app = new Vue({
                 this.bulkCategoryApplying = false;
             }
         },
+        fetchProjects: async function() {
+            this.projectsLoading = true;
+            this.projectsError = '';
+            try {
+                const response = await fetch('/api/projects');
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to load projects.');
+                }
+                this.projects = data.projects || [];
+            } catch (error) {
+                console.error('Error loading projects:', error);
+                this.projectsError = error.message || 'Failed to load projects.';
+            } finally {
+                this.projectsLoading = false;
+            }
+        },
+        saveProject: async function(url, method, payload) {
+            this.projectSaving = true;
+            try {
+                const response = await fetch(url, {
+                    method: method,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to save the project.');
+                }
+                await this.fetchProjects();
+                return data.project || null;
+            } catch (error) {
+                alert(error.message || 'Failed to save the project.');
+                return null;
+            } finally {
+                this.projectSaving = false;
+            }
+        },
+        createProject: async function() {
+            const name = (this.newProjectName || '').trim();
+            if (name.length < 3) {
+                alert('Project names must be at least 3 characters.');
+                return null;
+            }
+            const project = await this.saveProject('/api/projects', 'POST', { name: name, color: this.newProjectColor });
+            if (project) {
+                this.newProjectName = '';
+            }
+            return project;
+        },
+        startEditProject: function(project) {
+            this.editingProjectId = project.id;
+            this.editingProjectName = project.name;
+            this.editingProjectColor = project.color || '#2C6B4F';
+        },
+        cancelProjectEdit: function() {
+            this.editingProjectId = null;
+        },
+        saveProjectEdit: async function(project) {
+            const saved = await this.saveProject(`/api/projects/${project.id}`, 'PUT', {
+                name: (this.editingProjectName || '').trim(),
+                color: this.editingProjectColor
+            });
+            if (saved) {
+                this.editingProjectId = null;
+                this.refreshProjectTags();
+            }
+        },
+        deleteProject: async function(project) {
+            if (!confirm(`Delete the project "${project.name}"? Its ${project.transaction_count} transaction(s) are kept and only removed from the project.`)) {
+                return;
+            }
+            try {
+                const response = await fetch(`/api/projects/${project.id}`, { method: 'DELETE' });
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to delete the project.');
+                }
+                if (this.filters.projectId === String(project.id)) {
+                    this.filters.projectId = '';
+                }
+                await this.fetchProjects();
+                this.refreshProjectTags();
+            } catch (error) {
+                alert(error.message || 'Failed to delete the project.');
+            }
+        },
+        refreshProjectTags: function() {
+            const byId = {};
+            this.projects.forEach(project => { byId[project.id] = project; });
+            this.transactions.forEach(txn => {
+                if (!txn.project_id) return;
+                const project = byId[txn.project_id];
+                txn.project_name = project ? project.name : null;
+                txn.project_color = project ? project.color : null;
+                if (!project) txn.project_id = null;
+            });
+        },
+        projectTagStyle: function(color) {
+            const base = color || '#2C6B4F';
+            return { backgroundColor: `${base}22`, color: base, border: `1px solid ${base}66` };
+        },
+        projectMonthLabel: function(month) {
+            return new Date(2000, Number(month) - 1, 1).toLocaleString('en-US', { month: 'long' });
+        },
+        projectYearKey: function(projectId, year) {
+            return `${projectId}-${year}`;
+        },
+        isProjectYearOpen: function(projectId, year) {
+            return !!this.openProjectYears[this.projectYearKey(projectId, year)];
+        },
+        toggleProjectYear: function(projectId, year) {
+            const key = this.projectYearKey(projectId, year);
+            this.$set(this.openProjectYears, key, !this.openProjectYears[key]);
+        },
+        applyProjectFilter: async function(projectId, year, month) {
+            if (!projectId) {
+                return;
+            }
+            await this.setActivePane('transactions');
+            this.transactionsCollapsed = false;
+            if (this.isMobileView && this.mobileSidebarVisible) {
+                this.closeMobileSidebar();
+            }
+
+            // A drill-down shows exactly the clicked total: only the project
+            // and its period, no other filter left over.
+            this.filters.projectId = String(projectId);
+            this.filters.customCategoryId = '';
+            this.filters.search = '';
+            this.filters.amountMin = '';
+            this.filters.amountMax = '';
+            this.filters.startDate = '';
+            this.filters.endDate = '';
+            const pad = value => String(value).padStart(2, '0');
+            if (typeof year === 'number' && typeof month === 'number') {
+                const lastDay = new Date(year, month, 0).getDate();
+                this.filters.startDate = `${year}-${pad(month)}-01`;
+                this.filters.endDate = `${year}-${pad(month)}-${pad(lastDay)}`;
+            } else if (typeof year === 'number') {
+                this.filters.startDate = `${year}-01-01`;
+                this.filters.endDate = `${year}-12-31`;
+            }
+            this.applyTransactionFilters();
+
+            this.$nextTick(() => {
+                const section = document.querySelector('.transactions-section');
+                if (section) {
+                    section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+            });
+        },
+        applyBulkProjectAssign: async function() {
+            if (!this.selectedTransactionIds.length || !this.bulkProjectValue) return;
+
+            let projectId = null;
+            if (this.bulkProjectValue === '__new__') {
+                const name = (prompt('New project name:') || '').trim();
+                if (!name) return;
+                const created = await this.saveProject('/api/projects', 'POST', { name: name });
+                if (!created) return;
+                projectId = created.id;
+            } else if (this.bulkProjectValue !== '__none__') {
+                projectId = Number(this.bulkProjectValue);
+            }
+
+            this.bulkProjectApplying = true;
+            try {
+                const response = await fetch('/api/transactions/bulk-project', {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ transaction_ids: this.selectedTransactionIds, project_id: projectId })
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to update the project.');
+                }
+                (data.transactions || []).forEach(updated => {
+                    const txn = this.transactions.find(t => t.id === updated.id);
+                    if (txn) Object.assign(txn, updated);
+                });
+                await this.fetchProjects();
+                this.bulkProjectValue = '';
+                this.clearTransactionSelection();
+            } catch (error) {
+                console.error('Error applying bulk project:', error);
+                alert(error.message || 'Failed to update the project.');
+            } finally {
+                this.bulkProjectApplying = false;
+            }
+        },
         applyBulkCategorySuggestion: function(option) {
             this.bulkCategoryValue = option;
         },
@@ -1211,6 +1419,9 @@ const app = new Vue({
             const customCategoryValue = (this.filters.customCategoryId || '').trim();
             if (customCategoryValue) {
                 params.append('custom_category_id', customCategoryValue === '__uncategorized__' ? 'none' : customCategoryValue);
+            }
+            if (this.filters.projectId) {
+                params.append('project_id', this.filters.projectId === '__none__' ? 'none' : this.filters.projectId);
             }
             if (this.selectedAccountIds.length) {
                 params.append('account_ids', this.selectedAccountIds.join(','));
@@ -3151,6 +3362,9 @@ const app = new Vue({
                 if (customCategoryValue) {
                     params.append('custom_category_id', customCategoryValue === '__uncategorized__' ? 'none' : customCategoryValue);
                 }
+                if (this.filters.projectId) {
+                    params.append('project_id', this.filters.projectId === '__none__' ? 'none' : this.filters.projectId);
+                }
 
                 if (this.selectedAccountIds.length) {
                     params.append('account_ids', this.selectedAccountIds.join(','));
@@ -3390,6 +3604,7 @@ const app = new Vue({
                 startDate: '',
                 endDate: '',
                 customCategoryId: '',
+                projectId: '',
                 amountMin: '',
                 amountMax: ''
             };
@@ -3865,6 +4080,7 @@ const app = new Vue({
         this.initializeSidebarState();
         this.evaluateViewportState();
         await this.refreshData();
+        this.fetchProjects();
         if (this.activePane === 'dashboard') {
             await this.fetchDashboard();
         } else if (this.activePane === 'budgets') {
