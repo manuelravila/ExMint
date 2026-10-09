@@ -3,6 +3,27 @@
 
 changelog = [
     {
+        "version": "1.12.0",
+        "date": "2026-10-09",
+        "changes": [
+            "Projects: group any set of transactions into a named project (for example a trip or a renovation). "
+            "A transaction belongs to at most one project; deleting a project keeps its transactions and only "
+            "unassigns them",
+            "New Projects tab on the Dashboard: create, rename, recolor and delete projects, and see each project's "
+            "net total with year and month subtotals (years appear when a project spans more than one year, months "
+            "when it spans more than one month). Click any total to open exactly those transactions",
+            "Select transactions and use Assign project in the toolbar to add them to a project, start a new one, or "
+            "remove them from their project; rows show a project tag",
+            "The transactions list and its CSV/Excel export can be filtered by project (or No project); splitting a "
+            "transaction copies its project onto the split parts",
+            "A category can be linked to one project (Categories list, Project column): every transaction of that "
+            "category then counts in the project too, while a transaction assigned to a project by hand keeps its own. "
+            "Project cards list the categories they include",
+            "Project cards are laid out side by side (two or more per row, depending on the screen)",
+            "Regression test: re-applying category rules never reverses a manual category or a split"
+        ]
+    },
+    {
         "version": "1.11.0",
         "date": "2026-10-08",
         "changes": [

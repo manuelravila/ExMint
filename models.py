@@ -22,6 +22,9 @@ class CustomCategory(db.Model):
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
     budget_excluded = db.Column(db.Boolean, nullable=False, default=False)
+    # Optional: every transaction of this category counts in this project
+    # (a transaction assigned to a project by hand keeps its own project).
+    project_id = db.Column(db.Integer, db.ForeignKey('projects.id', ondelete='SET NULL'), nullable=True, index=True)
 
     user = db.relationship('User', backref=db.backref('custom_categories', lazy=True))
     transactions = db.relationship('Transaction', back_populates='custom_category', lazy=True)
@@ -30,6 +33,25 @@ class CustomCategory(db.Model):
 
     def __repr__(self):
         return f'<CustomCategory {self.name}>'
+
+
+class Project(db.Model):
+    """A user-named pocket of transactions (e.g. "Trip to Colombia").
+    A transaction belongs to at most one project (transactions.project_id)."""
+    __tablename__ = 'projects'
+    __table_args__ = (db.UniqueConstraint('user_id', 'name', name='uq_projects_user_name'),)
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    name = db.Column(db.String(120), nullable=False)
+    color = db.Column(db.String(7), nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    user = db.relationship('User', backref=db.backref('projects', lazy=True))
+    transactions = db.relationship('Transaction', back_populates='project', lazy=True)
+    categories = db.relationship('CustomCategory', backref=db.backref('project', lazy=True), lazy=True,
+                                 foreign_keys='CustomCategory.project_id')
 
 
 class CategoryRule(db.Model):
@@ -134,9 +156,11 @@ class Transaction(db.Model):
     is_new = db.Column(db.Boolean, nullable=False, default=True)
     seen_by_user = db.Column(db.Boolean, nullable=False, default=False)
     last_seen_by_user = db.Column(db.DateTime, nullable=True)
+    project_id = db.Column(db.Integer, db.ForeignKey('projects.id', ondelete='SET NULL'), nullable=True, index=True)
 
     credential = db.relationship('Credential', backref=db.backref('transactions', lazy=True))
     custom_category = db.relationship('CustomCategory', back_populates='transactions', lazy=True)
+    project = db.relationship('Project', back_populates='transactions', lazy=True)
     parent_transaction = db.relationship(
         'Transaction',
         remote_side=[id],
