@@ -41,7 +41,10 @@ git checkout main
 git pull origin main
 
 # 6. Build and restart PROD container
-docker-compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" -p "$PROJECT_NAME" up -d --build flask-app
+# Compose v2 ("docker compose"): the legacy docker-compose 1.29 crashes with
+# KeyError: 'ContainerConfig' when it recreates a container on current Docker
+# engines, and leaves PROD stopped (seen 2026-10-09).
+docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" -p "$PROJECT_NAME" up -d --build flask-app
 
 # 7. Wait for health check
 sleep 3
