@@ -1342,6 +1342,11 @@ def api_csv_import_analyze():
     Accepts:
       - JSON: {\"csv_content\": \"date,amount,...\\n2024-01-01,...\"}
       - multipart/form-data with a `file` field (same as UI)
+
+    The response includes a `date_candidates` list: every header that could be
+    the date column, in column order, computed without the exclusive
+    used-fields rule (so both a transaction date and a posting date are
+    reported). It is empty when no header looks like a date column.
     """
     if 'file' in request.files:
         return _csv_import_analyze_payload(g.api_user.id)
@@ -1352,7 +1357,10 @@ def api_csv_import_analyze():
         return jsonify(error='csv_content required'), 400
 
     # Manually replicate the analyze logic for JSON input
-    from core_views import _auto_detect_mapping, _compute_header_hash, _preview_rows
+    from core_views import (
+        _auto_detect_mapping, _compute_header_hash, _preview_rows,
+        _csv_content_without_preamble, _csv_date_candidates,
+    )
     from models import CsvImportTemplate
 
     try:
@@ -1360,6 +1368,7 @@ def api_csv_import_analyze():
     except UnicodeDecodeError:
         return jsonify(error='Cannot decode CSV'), 400
 
+    content = _csv_content_without_preamble(content)
     reader = _csv.DictReader(_StringIO(content))
     if not reader.fieldnames:
         return jsonify(error='CSV has no headers'), 400
@@ -1384,6 +1393,7 @@ def api_csv_import_analyze():
     return jsonify(
         headers=headers,
         auto_mapping={k: v for k, v in auto_mapping.items() if k is not None},
+        date_candidates=_csv_date_candidates(headers),
         has_template=template is not None,
         template_label=template.label if template else None,
         preview=_preview_rows(rows[:5]),
@@ -1404,6 +1414,12 @@ def api_csv_import_execute():
       - template_label: str (required if save_template=true)
       - create_missing_accounts: bool (optional, default false)
       - new_account_credential_id: int (optional institution for created accounts)
+      - amount_sign: str (optional, default 'as_is').  How to read the sign of
+        the amount column: 'as_is' keeps the parsed value, 'invert' negates it.
+        Use 'invert' for card exports that write spending positive and
+        payments/refunds negative so stored rows follow the ExMint convention
+        (money out negative); it is applied before dedup, so dedup keys and
+        stored rows agree.  Any other value is rejected with a 400.
     """
     data = request.get_json(silent=True) or {}
     csv_text = data.get('csv_content', '')
@@ -1423,6 +1439,14 @@ def api_csv_import_execute():
         except (TypeError, ValueError):
             return jsonify(error='new_account_credential_id must be an integer'), 400
 
+    from core_views import _apply_amount_sign
+
+    amount_sign = data.get('amount_sign', 'as_is')
+    try:
+        _apply_amount_sign(Decimal('0'), amount_sign)
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+
     if not csv_text:
         return jsonify(error='csv_content required'), 400
     if not mapping:
@@ -1432,7 +1456,8 @@ def api_csv_import_execute():
     from core_views import (
         _parse_date, _parse_amount,
         _compute_header_hash, _csv_collect_routing_facts,
-        _csv_get_or_create_account,
+        _csv_get_or_create_account, _csv_content_without_preamble,
+        _CsvDedupTracker,
     )
     from csv_import_routing import (
         resolve_creation_credential, creation_target_unknown_reason,
@@ -1443,6 +1468,7 @@ def api_csv_import_execute():
     except UnicodeDecodeError:
         return jsonify(error='Cannot decode CSV'), 400
 
+    content = _csv_content_without_preamble(content)
     reader = _csv.DictReader(_StringIO(content))
     if not reader.fieldnames:
         return jsonify(error='CSV has no headers'), 400
@@ -1518,6 +1544,11 @@ def api_csv_import_execute():
             if target_credential is None:
                 return jsonify(error='new_account_credential_id does not belong to you'), 400
 
+    # Count-aware dedup state for this run (see core_views._CsvDedupTracker).
+    dedup = _CsvDedupTracker()
+    k1_rows_cache = {}
+    k2_budget_cache = {}
+
     for row_idx, row in enumerate(rows):
         try:
             date_val = None
@@ -1576,6 +1607,10 @@ def api_csv_import_execute():
                 errors.append({'row': row_idx + 2, 'error': 'Missing required fields'})
                 continue
 
+            # Apply the bank's sign convention BEFORE dedup/insert so the dedup
+            # keys and the stored row both use the ExMint convention.
+            final_amount = _apply_amount_sign(final_amount, amount_sign)
+
             target_account_id = None
             row_credential_id = credential_id
             raw_acct = ''
@@ -1624,15 +1659,21 @@ def api_csv_import_execute():
                 errors.append({'row': row_idx + 2, 'error': 'target account is not linked to a bank connection; row skipped'})
                 continue
 
-            existing = Transaction.query.filter(
-                Transaction.account_id == target_account_id,
-                Transaction.date == date_val,
-                Transaction.amount == final_amount,
-                Transaction.name == name_val,
-                Transaction.is_removed.is_(False),
-            ).first()
+            # Count-aware dedup.  K1 (account, date, amount, name) is matched at
+            # most as many times as rows already exist, so a second genuinely
+            # separate identical charge is inserted rather than silently dropped.
+            k1_key = (target_account_id, date_val, final_amount, name_val)
+            if k1_key not in k1_rows_cache:
+                k1_rows_cache[k1_key] = Transaction.query.filter(
+                    Transaction.account_id == target_account_id,
+                    Transaction.date == date_val,
+                    Transaction.amount == final_amount,
+                    Transaction.name == name_val,
+                    Transaction.is_removed.is_(False),
+                ).order_by(Transaction.id).all()
+            existing = dedup.next_k1(k1_key, k1_rows_cache[k1_key])
 
-            if existing:
+            if existing is not None:
                 if existing.pending:
                     existing.amount = final_amount
                     existing.name = name_val
@@ -1646,19 +1687,22 @@ def api_csv_import_execute():
                     skipped += 1
                 continue
 
-            # Second dedup pass: check for Plaid-synced duplicate by
-            # (account_id, date, amount) only. Catches the Plaid+CSV
-            # overlap where descriptions differ.
-            api_existing_plaid = Transaction.query.filter(
-                Transaction.account_id == target_account_id,
-                Transaction.date == date_val,
-                Transaction.amount == final_amount,
-                Transaction.is_removed.is_(False),
-                Transaction.plaid_transaction_id.isnot(None),
-                ~Transaction.plaid_transaction_id.like('csv_%'),
-            ).first()
+            # Second dedup pass: the Plaid-overlap guard is count-aware too.
+            # Each pre-existing synced row (non-null, non-``csv_`` Plaid id)
+            # absorbs one CSV occurrence; extra occurrences are genuine and are
+            # inserted rather than counted as duplicates.
+            k2_key = (target_account_id, date_val, final_amount)
+            if k2_key not in k2_budget_cache:
+                k2_budget_cache[k2_key] = Transaction.query.filter(
+                    Transaction.account_id == target_account_id,
+                    Transaction.date == date_val,
+                    Transaction.amount == final_amount,
+                    Transaction.is_removed.is_(False),
+                    Transaction.plaid_transaction_id.isnot(None),
+                    ~Transaction.plaid_transaction_id.like('csv_%'),
+                ).count()
 
-            if api_existing_plaid:
+            if dedup.is_plaid_duplicate(k2_key, k2_budget_cache[k2_key]):
                 skipped += 1
                 continue
 

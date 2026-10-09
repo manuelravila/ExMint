@@ -3,6 +3,27 @@
 
 changelog = [
     {
+        "version": "1.11.0",
+        "date": "2026-10-08",
+        "changes": [
+            "CSV import now tolerates a metadata preamble before the real header row, and maps columns by scored "
+            "alias matching instead of the first alias that happens to overlap, so a field like transaction amount "
+            "resolves to amount rather than description",
+            "Quoted account and card numbers are normalized with their quote characters stripped; before this, a "
+            "quoted card number produced an account whose stored mask ended in a stray quote and no rows matched it",
+            "New amount_sign import option with values 'as_is' (default) and 'invert' for files that write spending "
+            "as positive while ExMint stores money out as negative; such files used to import with the sign inverted, "
+            "which also made the cross-source dedup unable to match already-synced rows since it compares amounts "
+            "for exact equality",
+            "The import modal now asks which sign convention the file uses",
+            "Dedup is now count-aware so a statement containing the same date, amount and description twice stores "
+            "both rows instead of dropping the second, while re-importing a byte-identical file still inserts "
+            "nothing, and the Plaid-overlap guard keeps a per-key budget for the run",
+            "Analyze now returns date_candidates and the modal warns when a file carries more than one date column, "
+            "since only the mapped column decides the ledger date and synced credit-card rows are dated by posting date"
+        ]
+    },
+    {
         "version": "1.10.5",
         "date": "2026-10-08",
         "changes": [

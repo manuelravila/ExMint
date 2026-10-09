@@ -18,12 +18,69 @@ This module deliberately has no Flask/SQLAlchemy imports so its matching
 semantics can be unit-tested without an application or database.
 """
 
+import csv
+
+
+def _default_normalise_header(name) -> str:
+    """Lowercase, strip and collapse internal whitespace (alias-table style)."""
+    return ' '.join(str(name).strip().lower().split())
+
+
+def find_header_line(content, known_aliases, normalise=None,
+                     max_scan_lines=25) -> int:
+    """Return the 1-based line number of the first plausible CSV header line.
+
+    Many bank exports prefix the real table with metadata lines (for example
+    ``Following data is valid as of ...`` followed by a blank line).  Treating
+    such a prefix as the header makes every data row degenerate into a single
+    unnamed column, so both the analyze and import paths must locate the real
+    header first.
+
+    Scans up to ``max_scan_lines`` lines of ``content`` and returns the line
+    number (1-based) of the first line that:
+
+      1. parses with :func:`csv.reader` into **at least two** non-empty
+         fields, and
+      2. contains at least one field whose normalized value is in
+         ``known_aliases``.
+
+    ``normalise`` defaults to :func:`_default_normalise_header`; pass the
+    importer's own normalizer to guarantee identical semantics.  ``known_aliases``
+    is an iterable of already-normalized alias strings, which keeps this helper
+    free of any Flask/DB/alias-table import.  When no line qualifies, ``1`` is
+    returned so callers keep the historical "first line is the header"
+    behaviour unchanged.
+    """
+    if not content:
+        return 1
+    if normalise is None:
+        normalise = _default_normalise_header
+    try:
+        known = set(known_aliases)
+    except TypeError:
+        return 1
+
+    for offset, line in enumerate(content.splitlines()[:max_scan_lines]):
+        if not line.strip():
+            continue
+        try:
+            fields = next(csv.reader([line]))
+        except (csv.Error, StopIteration):
+            continue
+        non_empty = [f for f in fields if f and f.strip()]
+        if len(non_empty) < 2:
+            continue
+        if any(normalise(f) in known for f in fields):
+            return offset + 1
+    return 1
+
 
 def normalize_account_key(value) -> str:
     """Normalize an account number/mask for lookup.
 
-    Strips surrounding whitespace, then removes spaces, dashes (``-``) and
-    asterisks (``*``). Returns ``''`` for ``None`` or an empty value.
+    Strips surrounding whitespace, then removes spaces, dashes (``-``),
+    asterisks (``*``) and single/double quote characters. Returns ``''`` for
+    ``None`` or an empty value.
     """
     if value is None:
         return ''
@@ -33,6 +90,8 @@ def normalize_account_key(value) -> str:
         .replace(' ', '')
         .replace('-', '')
         .replace('*', '')
+        .replace("'", '')
+        .replace('"', '')
     )
 
 
