@@ -1225,19 +1225,22 @@
                                                     <small class="text-muted ml-2">[[ project.transaction_count ]] transaction<span v-if="project.transaction_count !== 1">s</span></small>
                                                 </div>
                                                 <div class="project-actions">
-                                                    <button
-                                                        type="button"
-                                                        class="btn btn-link p-0 project-total-link"
-                                                        :disabled="!project.transaction_count"
-                                                        title="Show this project's transactions"
-                                                        @click="applyProjectFilter(project.id)"
-                                                    >
-                                                        [[ formatCurrency(project.total, null) ]]
-                                                    </button>
-                                                    <button type="button" class="btn btn-sm btn-link text-muted ml-2" title="Rename or recolor" @click="startEditProject(project)"><i class="fas fa-pen"></i></button>
+                                                    <button type="button" class="btn btn-sm btn-link text-muted" title="Rename or recolor" @click="startEditProject(project)"><i class="fas fa-pen"></i></button>
                                                     <button type="button" class="btn btn-sm btn-link text-danger" title="Delete project (transactions are kept)" @click="deleteProject(project)"><i class="fas fa-trash"></i></button>
                                                 </div>
                                             </template>
+                                        </div>
+                                        <div class="project-row project-grand-row">
+                                            <span class="project-row-label">Total</span>
+                                            <button
+                                                type="button"
+                                                class="btn btn-link p-0 project-total-link"
+                                                :disabled="!project.transaction_count"
+                                                title="Show this project's transactions"
+                                                @click="applyProjectFilter(project.id)"
+                                            >
+                                                [[ formatCurrency(project.total, null) ]]
+                                            </button>
                                         </div>
                                         <!-- More than one year: year rows, each opening its months -->
                                         <div v-if="project.by_year.length > 1" class="project-tree">

@@ -1686,12 +1686,14 @@ tr.budget-excluded-row .spending-category-link {
 .bulk-project-select { width: 170px; }
 .project-tag { font-weight: 500; font-size: 0.75rem; }
 .form-inline .project-color-input, .project-color-input { width: 2.75rem; min-width: 2.75rem; height: calc(1.5em + 0.5rem + 2px); padding: 0.1rem 0.15rem; flex: 0 0 auto; }
-.project-list { display: flex; flex-direction: column; gap: 0.75rem; }
-.project-block { border: 1px solid rgba(0, 0, 0, 0.08); border-radius: 0.4rem; padding: 0.6rem 0.8rem; }
-.project-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem; }
-.project-title { display: flex; align-items: center; min-width: 0; }
+.project-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: 0.75rem; align-items: start; }
+.project-block { border: 1px solid rgba(0, 0, 0, 0.08); border-radius: 0.4rem; padding: 0.6rem 0.8rem; min-width: 0; }
+.project-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.5rem; }
+.project-grand-row { font-size: 1.05rem; }
+.project-grand-row .project-row-label { font-weight: 600; }
+.project-title { display: flex; align-items: center; min-width: 0; flex-wrap: wrap; }
 .project-swatch { display: inline-block; width: 0.8rem; height: 0.8rem; border-radius: 50%; margin-right: 0.5rem; flex-shrink: 0; }
-.project-actions { display: flex; align-items: center; }
+.project-actions { display: flex; align-items: center; flex-shrink: 0; }
 .project-total-link { font-weight: 600; font-variant-numeric: tabular-nums; }
 .project-tree { margin-top: 0.4rem; border-top: 1px dashed rgba(0, 0, 0, 0.1); padding-top: 0.3rem; }
 .project-row { display: flex; justify-content: space-between; align-items: center; padding: 0.2rem 0; }
