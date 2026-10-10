@@ -1703,3 +1703,14 @@ tr.budget-excluded-row .spending-category-link {
 .project-month-row .project-total-link { font-weight: 500; }
 .project-categories { margin-top: 0.15rem; }
 .category-project-select { min-width: 9rem; }
+
+/* Money amounts never wrap: a narrow column used to break "-CA$35,000.00" after the
+   minus sign, so the sign sat on its own line above the number. */
+.tree-value,
+.project-total-link,
+.spending-month-total,
+.spending-income-subtotal,
+.spending-spending-subtotal,
+.spending-header-budget,
+.spending-header-remainder,
+.bulk-action-count { white-space: nowrap; }
