@@ -18,7 +18,8 @@ imports a Home Depot style file into a NEW institution through the UI route and
 the API v1 route: the sign guard stops the "owe" file (payments would be money
 out), ``invert`` imports it, the institution is CSV-only and the account is a
 credit card, the balance is right, a duplicate institution name is refused and
-a re-import into the created account inserts nothing. Everything it creates is
+a re-import into the created account inserts nothing, a second account can be
+added to that CSV-only institution (not to a Plaid one). Everything it creates is
 deleted in a ``finally`` block.
 
 No pytest is used (the venv does not have it); exits non-zero on any failure.
@@ -161,6 +162,7 @@ def part_b():
             check('signs follow ExMint (net owed -2101.02, payment positive)',
                   abs(total - (-2101.02)) < 1e-6 and pay is not None and float(pay.amount) == 235.0, '%r %r' % (total, pay and pay.amount))
             acct_id = acct.id
+            cred_id = cred.id
 
         r = post_ui(amount_sign='invert', **new_fields)
         check('same institution name again → 400', r.status_code == 400, '%s %s' % (r.status_code, r.get_data(as_text=True)[:200]))
@@ -169,6 +171,33 @@ def part_b():
         body = r.get_json() or {}
         check('re-import into the created account inserts nothing', r.status_code == 200 and body.get('inserted') == 0
               and body.get('skipped') == 7, '%s %s' % (r.status_code, str(body)[:200]))
+
+        second = HD_FILE.replace('/2026', '/2024').replace('/2025', '/2023')  # another card's statement
+        r = client.post('/api/transactions/import-csv/import', data={
+            'file': (BytesIO(second.encode('utf-8')), 'hd2.csv'), 'mapping': json.dumps(mapping),
+            'save_template': 'false', 'amount_sign': 'invert', 'new_account_institution_id': str(cred_id),
+            'new_account_name': 'Home Depot Card Paula', 'new_account_type': 'credit_card',
+            'new_account_mask': '7444'}, content_type='multipart/form-data')
+        body = r.get_json() or {}
+        check('second account in the same CSV-only institution → 200, 7 inserted',
+              r.status_code == 200 and body.get('inserted') == 7, '%s %s' % (r.status_code, str(body)[:300]))
+        with app.app_context():
+            accts = Account.query.filter_by(credential_id=cred_id).order_by(Account.id).all()
+            check('institution now has 2 accounts (8134, 7444)', [a.mask for a in accts] == ['8134', '7444'],
+                  repr([a.mask for a in accts]))
+            plaid_cred = Credential(user_id=user_id, item_id='item-plaid-%s' % tag, institution_name='%s Plaid' % tag,
+                                    access_token=None, soft_disconnected=False, requires_update=False)
+            db.session.add(plaid_cred)
+            db.session.commit()
+            plaid_cred_id = plaid_cred.id
+        r = client.post('/api/v1/transactions/import-csv/import', json={
+            'csv_content': HD_FILE, 'mapping': mapping, 'amount_sign': 'invert',
+            'new_account_institution_id': plaid_cred_id, 'new_account_type': 'credit_card'})
+        check('adding an account to a Plaid-connected institution → 400', r.status_code == 400, str(r.status_code))
+        r = client.post('/api/v1/transactions/import-csv/import', json={
+            'csv_content': HD_FILE, 'mapping': mapping, 'new_account_institution_id': 999999999,
+            'new_account_type': 'credit_card'})
+        check('unknown institution → 400', r.status_code == 400, str(r.status_code))
 
         r = client.post('/api/v1/transactions/import-csv/import', json={
             'csv_content': HD_FILE, 'mapping': mapping, 'amount_sign': 'invert',

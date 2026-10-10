@@ -2062,13 +2062,16 @@
                                             <option v-for="acct in bank.accounts" :key="acct.id" :value="acct.id" v-if="acct.is_enabled">
                                                 [[ acct.name ]] <span v-if="acct.mask">(****[[ acct.mask ]])</span>
                                             </option>
+                                            <option v-if="bank.soft_disconnected && !hasAccountNumberMapping" :value="'new-in-' + bank.id">
+                                                + New account in [[ bank.institution_name ]]…
+                                            </option>
                                         </optgroup>
                                     </template>
                                     <option v-if="!hasAccountNumberMapping" value="new">+ New institution (not connected to Plaid)…</option>
                                 </select>
-                                <div v-if="csvImport.accountId === 'new' && !hasAccountNumberMapping" class="mt-2">
+                                <div v-if="isNewCsvAccountTarget && !hasAccountNumberMapping" class="mt-2">
                                     <div class="form-row">
-                                        <div class="col-sm-6 mb-2">
+                                        <div class="col-sm-6 mb-2" v-if="csvImport.accountId === 'new'">
                                             <input type="text" class="form-control form-control-sm" maxlength="100"
                                                    v-model="csvImport.newInstitution.name" placeholder="Institution (e.g. Home Depot Credit)">
                                         </div>
@@ -2089,7 +2092,8 @@
                                                    v-model="csvImport.newInstitution.mask" placeholder="Last 4 digits (optional)">
                                         </div>
                                     </div>
-                                    <small class="text-muted">The institution is created as CSV only: import its statements here whenever you download them.</small>
+                                    <small class="text-muted" v-if="csvImport.accountId === 'new'">The institution is created as CSV only: import its statements here whenever you download them.</small>
+                                    <small class="text-muted" v-else>A new account is added to this institution and the file is imported into it.</small>
                                 </div>
                             </div>
                         </div>

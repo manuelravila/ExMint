@@ -6166,6 +6166,30 @@ def _csv_new_institution(user_id, institution_name, account_name, account_type, 
     return credential, account
 
 
+def _csv_new_account_in(user_id, credential_id, account_name, account_type, mask):
+    """Build (unsaved) one more Account under an existing CSV-only institution
+    (e.g. a second Home Depot card). Raises ``ValueError`` on bad input."""
+    try:
+        credential_id = int(credential_id)
+    except (TypeError, ValueError):
+        raise ValueError('Unknown institution.')
+    credential = Credential.query.filter_by(id=credential_id, user_id=user_id, status='Active').first()
+    if credential is None:
+        raise ValueError('Unknown institution.')
+    if not credential.soft_disconnected:
+        raise ValueError('Accounts can only be added by hand to a CSV-only institution.')
+    if account_type not in _CSV_NEW_ACCOUNT_TYPES:
+        raise ValueError('Account type must be one of: %s.' % ', '.join(sorted(_CSV_NEW_ACCOUNT_TYPES)))
+    mask = (mask or '').strip()
+    if mask and (not mask.isdigit() or len(mask) != 4):
+        raise ValueError('Last 4 digits must be exactly 4 digits.')
+    acct_type, subtype = _CSV_NEW_ACCOUNT_TYPES[account_type]
+    account_name = ' '.join((account_name or '').split())[:100] or (
+        '%s %s' % (credential.institution_name or 'Imported', subtype.title()))
+    return Account(status='Active', credential_id=credential.id, plaid_account_id='csv-acct-%s' % uuid4().hex,
+                   name=account_name, type=acct_type, subtype=subtype, mask=mask or None, is_enabled=True)
+
+
 def _csv_import_sign_check(rows, header_to_field, amount_sign, default_account,
                            account_number_header, account_by_mask):
     """Run ``_csv_sign_check`` over the rows an import would write.
@@ -6405,6 +6429,8 @@ def csv_import_execute():
         (credit_card | chequing | savings | line_of_credit), new_account_mask:
         instead of account_id, create a CSV-only institution and account (for a
         bank Plaid cannot connect) and import the file into it.
+      - new_account_institution_id (+ new_account_name/type/mask): instead,
+        add one more account to that existing CSV-only institution.
       - sign_confirmed: str ('true'/'false', default false).  Without it a file
         that looks reversed (see _csv_sign_check) is refused with 409 and a
         ``sign_check`` payload before anything is written.
@@ -6445,19 +6471,27 @@ def csv_import_execute():
 
     # A bank Plaid cannot connect: create a CSV-only institution + account for
     # this file (persisted only once the sign check below has passed).
-    new_credential = None
+    # new_account_institution_id instead adds one more account to an existing
+    # CSV-only institution.
+    new_credential = new_account = None
     new_institution_name = (request.form.get('new_institution_name') or '').strip()
-    if new_institution_name and not account_id and not has_account_number_routing:
+    new_account_institution_id = request.form.get('new_account_institution_id')
+    if not account_id and not has_account_number_routing and (new_institution_name or new_account_institution_id):
         try:
-            new_credential, new_account = _csv_new_institution(
-                current_user.id, new_institution_name, request.form.get('new_account_name'),
-                request.form.get('new_account_type'), request.form.get('new_account_mask'))
+            if new_account_institution_id:
+                new_account = _csv_new_account_in(
+                    current_user.id, new_account_institution_id, request.form.get('new_account_name'),
+                    request.form.get('new_account_type'), request.form.get('new_account_mask'))
+            else:
+                new_credential, new_account = _csv_new_institution(
+                    current_user.id, new_institution_name, request.form.get('new_account_name'),
+                    request.form.get('new_account_type'), request.form.get('new_account_mask'))
         except ValueError as exc:
             return jsonify(error=str(exc)), 400
 
     # Validate account (required if no account_number routing)
     default_account = None
-    if new_credential is not None:
+    if new_account is not None:
         default_account = new_account
     elif not has_account_number_routing:
         if not account_id:
@@ -6569,18 +6603,19 @@ def csv_import_execute():
                 sign_check=sign_check,
             ), 409
 
-    if new_credential is not None:
-        db.session.add(new_credential)
-        db.session.flush()
-        default_account.credential_id = new_credential.id
+    if new_account is not None:
+        if new_credential is not None:
+            db.session.add(new_credential)
+            db.session.flush()
+            default_account.credential_id = new_credential.id
         db.session.add(default_account)
         db.session.commit()
-        credential_id = new_credential.id
+        credential_id = default_account.credential_id
         account_id = default_account.id
         created_accounts.append({'account_id': default_account.id, 'name': default_account.name,
                                  'mask': default_account.mask,
-                                 'institution_name': new_credential.institution_name,
-                                 'new_institution': True})
+                                 'institution_name': default_account.credential.institution_name,
+                                 'new_institution': new_credential is not None})
 
     # Count-aware dedup state for this run.  The row caches hold the pre-existing
     # rows for a key, captured the first time that key is seen so rows inserted

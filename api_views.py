@@ -80,6 +80,7 @@ from core_views import (
     _bulk_project_response,
     _csv_import_sign_check,
     _csv_new_institution,
+    _csv_new_account_in,
 )
 
 api_v1 = Blueprint('api_v1', __name__, url_prefix='/api/v1')
@@ -1452,6 +1453,8 @@ def api_csv_import_execute():
         (credit_card | chequing | savings | line_of_credit), new_account_mask:
         instead of account_id, create a CSV-only institution and account (for a
         bank Plaid cannot connect) and import the file into it.
+      - new_account_institution_id (+ new_account_name/type/mask): instead,
+        add one more account to that existing CSV-only institution.
       - sign_confirmed: bool (optional, default false).  Before writing, the
         import compares the rows with the target accounts (opposite-sign
         matches with existing rows, card payments stored as money out, a card
@@ -1522,17 +1525,25 @@ def api_csv_import_execute():
 
     # A bank Plaid cannot connect: create a CSV-only institution + account
     # (persisted only once the sign check below has passed).
-    new_credential = None
-    if data.get('new_institution_name') and not account_id and not has_account_number_routing:
+    # new_account_institution_id instead adds one more account to an existing
+    # CSV-only institution.
+    new_credential = new_account = None
+    if not account_id and not has_account_number_routing and (
+            data.get('new_institution_name') or data.get('new_account_institution_id')):
         try:
-            new_credential, new_account = _csv_new_institution(
-                g.api_user.id, data.get('new_institution_name'), data.get('new_account_name'),
-                data.get('new_account_type'), data.get('new_account_mask'))
+            if data.get('new_account_institution_id'):
+                new_account = _csv_new_account_in(
+                    g.api_user.id, data.get('new_account_institution_id'), data.get('new_account_name'),
+                    data.get('new_account_type'), data.get('new_account_mask'))
+            else:
+                new_credential, new_account = _csv_new_institution(
+                    g.api_user.id, data.get('new_institution_name'), data.get('new_account_name'),
+                    data.get('new_account_type'), data.get('new_account_mask'))
         except ValueError as exc:
             return jsonify(error=str(exc)), 400
 
     default_account = None
-    if new_credential is not None:
+    if new_account is not None:
         default_account = new_account
     elif not has_account_number_routing:
         if not account_id:
@@ -1607,18 +1618,19 @@ def api_csv_import_execute():
                 sign_check=sign_check,
             ), 409
 
-    if new_credential is not None:
-        db.session.add(new_credential)
-        db.session.flush()
-        default_account.credential_id = new_credential.id
+    if new_account is not None:
+        if new_credential is not None:
+            db.session.add(new_credential)
+            db.session.flush()
+            default_account.credential_id = new_credential.id
         db.session.add(default_account)
         db.session.commit()
-        credential_id = new_credential.id
+        credential_id = default_account.credential_id
         account_id = default_account.id
         created_accounts.append({'account_id': default_account.id, 'name': default_account.name,
                                  'mask': default_account.mask,
-                                 'institution_name': new_credential.institution_name,
-                                 'new_institution': True})
+                                 'institution_name': default_account.credential.institution_name,
+                                 'new_institution': new_credential is not None})
 
     # Count-aware dedup state for this run (see core_views._CsvDedupTracker).
     dedup = _CsvDedupTracker()

@@ -497,6 +497,10 @@ const app = new Vue({
             if (this.csvImport.accountId === 'new' && !this.csvImport.newInstitution.name.trim()) return false;
             return mappedCount >= 2;
         },
+        isNewCsvAccountTarget: function() {
+            const target = this.csvImport.accountId;
+            return target === 'new' || (typeof target === 'string' && target.indexOf('new-in-') === 0);
+        },
         hasNewTransactions: function() {
             return this.transactions.some(txn => txn.is_new);
         },
@@ -4044,13 +4048,17 @@ const app = new Vue({
                 formData.append('file', this.csvImport.file);
                 // account_id is the fallback for rows whose account number does
                 // not match an account; send it whenever one is selected.
-                if (this.csvImport.accountId === 'new' && !this.hasAccountNumberMapping) {
+                if (this.isNewCsvAccountTarget && !this.hasAccountNumberMapping) {
                     const inst = this.csvImport.newInstitution;
-                    formData.append('new_institution_name', inst.name.trim());
+                    if (this.csvImport.accountId === 'new') {
+                        formData.append('new_institution_name', inst.name.trim());
+                    } else {
+                        formData.append('new_account_institution_id', this.csvImport.accountId.slice('new-in-'.length));
+                    }
                     formData.append('new_account_name', inst.accountName.trim());
                     formData.append('new_account_type', inst.type);
                     formData.append('new_account_mask', inst.mask.trim());
-                } else if (this.csvImport.accountId && this.csvImport.accountId !== 'new') {
+                } else if (this.csvImport.accountId && !this.isNewCsvAccountTarget) {
                     formData.append('account_id', this.csvImport.accountId);
                 } else if (!this.hasAccountNumberMapping) {
                     this.csvImport.error = 'Please select a destination account.';
