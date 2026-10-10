@@ -3,6 +3,15 @@
 
 changelog = [
     {
+        "version": "1.14.1",
+        "date": "2026-10-10",
+        "changes": [
+            "Money amounts no longer wrap: a large negative amount in a narrow column (for example "
+            "-CA$35,000.00) showed the minus sign on its own line above the number. Applies to the "
+            "transactions table, the selected subtotal, balances, spending totals and project cards"
+        ]
+    },
+    {
         "version": "1.14.0",
         "date": "2026-10-10",
         "changes": [

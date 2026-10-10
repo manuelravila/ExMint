@@ -585,7 +585,7 @@
                                         [[ transaction.custom_category ]]
                                     </span>
                                 </td>
-                                <td class="text-right font-weight-bold" :style="rowSelectionStyle(transaction.id)">[[ formatCurrency(transaction.amount, transaction.iso_currency_code) ]]</td>
+                                <td class="text-right text-nowrap font-weight-bold" :style="rowSelectionStyle(transaction.id)">[[ formatCurrency(transaction.amount, transaction.iso_currency_code) ]]</td>
                             </tr>
                             <tr v-if="!selectedAccountIds.length">
                                 <td colspan="7" class="text-center text-muted py-5">
