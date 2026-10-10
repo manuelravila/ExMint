@@ -79,6 +79,7 @@ from core_views import (
     _create_project_response,
     _bulk_project_response,
     _csv_import_sign_check,
+    _csv_new_institution,
 )
 
 api_v1 = Blueprint('api_v1', __name__, url_prefix='/api/v1')
@@ -1447,6 +1448,10 @@ def api_csv_import_execute():
         payments/refunds negative so stored rows follow the ExMint convention
         (money out negative); it is applied before dedup, so dedup keys and
         stored rows agree.  Any other value is rejected with a 400.
+      - new_institution_name, new_account_name, new_account_type
+        (credit_card | chequing | savings | line_of_credit), new_account_mask:
+        instead of account_id, create a CSV-only institution and account (for a
+        bank Plaid cannot connect) and import the file into it.
       - sign_confirmed: bool (optional, default false).  Before writing, the
         import compares the rows with the target accounts (opposite-sign
         matches with existing rows, card payments stored as money out, a card
@@ -1515,8 +1520,21 @@ def api_csv_import_execute():
 
     has_account_number_routing = any(f == 'account_number' for f in mapping.values())
 
+    # A bank Plaid cannot connect: create a CSV-only institution + account
+    # (persisted only once the sign check below has passed).
+    new_credential = None
+    if data.get('new_institution_name') and not account_id and not has_account_number_routing:
+        try:
+            new_credential, new_account = _csv_new_institution(
+                g.api_user.id, data.get('new_institution_name'), data.get('new_account_name'),
+                data.get('new_account_type'), data.get('new_account_mask'))
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+
     default_account = None
-    if not has_account_number_routing:
+    if new_credential is not None:
+        default_account = new_account
+    elif not has_account_number_routing:
         if not account_id:
             return jsonify(error='account_id required when account_number not mapped'), 400
         default_account = Account.query.join(Credential).filter(
@@ -1588,6 +1606,19 @@ def api_csv_import_execute():
                       'money in positive). Nothing was imported.',
                 sign_check=sign_check,
             ), 409
+
+    if new_credential is not None:
+        db.session.add(new_credential)
+        db.session.flush()
+        default_account.credential_id = new_credential.id
+        db.session.add(default_account)
+        db.session.commit()
+        credential_id = new_credential.id
+        account_id = default_account.id
+        created_accounts.append({'account_id': default_account.id, 'name': default_account.name,
+                                 'mask': default_account.mask,
+                                 'institution_name': new_credential.institution_name,
+                                 'new_institution': True})
 
     # Count-aware dedup state for this run (see core_views._CsvDedupTracker).
     dedup = _CsvDedupTracker()

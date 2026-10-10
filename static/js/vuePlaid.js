@@ -326,6 +326,7 @@ const app = new Vue({
             dateCandidates: [],
             amountSign: 'as_is',
             signConfirmed: false,
+            newInstitution: { name: '', accountName: '', type: 'credit_card', mask: '' },
             hasTemplate: false,
             templateLabel: '',
             preview: [],
@@ -493,6 +494,7 @@ const app = new Vue({
             });
             if (!hasDate || !hasAmount) return false;
             if (!this.hasAccountNumberMapping && !this.csvImport.accountId) return false;
+            if (this.csvImport.accountId === 'new' && !this.csvImport.newInstitution.name.trim()) return false;
             return mappedCount >= 2;
         },
         hasNewTransactions: function() {
@@ -3817,7 +3819,8 @@ const app = new Vue({
                     throw new Error('Server returned ' + resp.status);
                 }
                 const data = await resp.json();
-                this.maintenance.duplicateGroups = data.groups || [];
+                // Every group starts approved; the user can untick any before removing.
+                this.maintenance.duplicateGroups = (data.groups || []).map(g => Object.assign({ approved: true }, g));
                 this.maintenance.totalDuplicates = data.total_duplicates || 0;
             } catch (err) {
                 this.maintenance.scanError = 'Scan failed: ' + err.message;
@@ -3826,14 +3829,21 @@ const app = new Vue({
             }
         },
         runDeduplication: async function() {
-            if (this.maintenance.totalDuplicates === 0) return;
-            if (!confirm('This will permanently mark ' + this.maintenance.totalDuplicates + ' duplicate transaction(s) as removed. Make sure you have downloaded a backup first. Continue?')) {
+            const ids = (this.maintenance.duplicateGroups || [])
+                .filter(g => g.approved)
+                .reduce((all, g) => all.concat(g.remove.map(t => t.id)), []);
+            if (!ids.length) return;
+            if (!confirm('This will mark the ' + ids.length + ' selected duplicate transaction(s) as removed. Make sure you have downloaded a backup first. Continue?')) {
                 return;
             }
             this.maintenance.deduplicating = true;
             this.maintenance.scanError = null;
             try {
-                const resp = await fetch('/api/maintenance/deduplicate', { method: 'POST' });
+                const resp = await fetch('/api/maintenance/deduplicate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ids: ids }),
+                });
                 if (!resp.ok) {
                     const err = await resp.json().catch(() => ({}));
                     throw new Error(err.error || 'Server returned ' + resp.status);
@@ -3881,6 +3891,7 @@ const app = new Vue({
                 });
             }, 50);
             this.csvImport.accountId = null;
+            this.csvImport.newInstitution = { name: '', accountName: '', type: 'credit_card', mask: '' };
             this.csvImport.createMissingAccounts = false;
             this.csvImport.newAccountCredentialId = '';
             this.csvImport.headers = [];
@@ -4012,6 +4023,9 @@ const app = new Vue({
             if (!this.hasAccountNumberMapping && !this.csvImport.accountId) {
                 errors.push("Select a destination account or map an Account Number column.");
             }
+            if (this.csvImport.accountId === 'new' && !this.csvImport.newInstitution.name.trim()) {
+                errors.push("Enter the new institution's name.");
+            }
             
             if (errors.length > 0) {
                 this.csvImport.mappingErrors = newErrors;
@@ -4030,7 +4044,13 @@ const app = new Vue({
                 formData.append('file', this.csvImport.file);
                 // account_id is the fallback for rows whose account number does
                 // not match an account; send it whenever one is selected.
-                if (this.csvImport.accountId) {
+                if (this.csvImport.accountId === 'new' && !this.hasAccountNumberMapping) {
+                    const inst = this.csvImport.newInstitution;
+                    formData.append('new_institution_name', inst.name.trim());
+                    formData.append('new_account_name', inst.accountName.trim());
+                    formData.append('new_account_type', inst.type);
+                    formData.append('new_account_mask', inst.mask.trim());
+                } else if (this.csvImport.accountId && this.csvImport.accountId !== 'new') {
                     formData.append('account_id', this.csvImport.accountId);
                 } else if (!this.hasAccountNumberMapping) {
                     this.csvImport.error = 'Please select a destination account.';

@@ -1826,8 +1826,8 @@
                         <div class="card-header"><strong><i class="fas fa-clone mr-1"></i> Duplicate Transactions</strong></div>
                         <div class="card-body">
                             <p class="text-muted small mb-2">
-                                Scans for transactions with the same date, amount, description, and account that appear more than once.
-                                Use <strong>Scan</strong> first to preview what would be removed, then <strong>Remove Duplicates</strong> to clean up.
+                                Scans for transactions that were recorded twice: repeated syncs on one account, the same charge on two cards of one bank (also when the text or the day differs slightly, e.g. a supplementary card), and CSV imports of rows Plaid already synced. Identical rows from one CSV statement are kept: they are real.
+                                Use <strong>Scan</strong> first to preview what would be removed, untick any group you want to keep, then <strong>Remove Selected Duplicates</strong>.
                             </p>
                             <div class="d-flex align-items-center mb-3">
                                 <button class="btn btn-outline-primary btn-sm mr-2" @click="scanDuplicates" :disabled="maintenance.scanning || maintenance.deduplicating">
@@ -1836,7 +1836,7 @@
                                 </button>
                                 <button class="btn btn-danger btn-sm" @click="runDeduplication"
                                     :disabled="maintenance.scanning || maintenance.deduplicating || maintenance.duplicateGroups === null || maintenance.totalDuplicates === 0">
-                                    <span v-if="!maintenance.deduplicating"><i class="fas fa-trash-alt mr-1"></i> Remove Duplicates</span>
+                                    <span v-if="!maintenance.deduplicating"><i class="fas fa-trash-alt mr-1"></i> Remove Selected Duplicates</span>
                                     <span v-else><i class="fas fa-spinner fa-spin mr-1"></i> Removing...</span>
                                 </button>
                             </div>
@@ -1855,6 +1855,7 @@
                                     <div class="alert alert-warning py-2 small mb-2">
                                         Found <strong>[[ maintenance.totalDuplicates ]]</strong> duplicate transaction(s) across <strong>[[ maintenance.duplicateGroups.length ]]</strong> group(s).
                                         The entries listed under "Remove" will be marked as removed; those under "Keep" will be preserved.
+                                        Untick a group to leave it alone.
                                     </div>
                                     <div class="table-responsive" style="max-height:300px;overflow-y:auto;">
                                         <table class="table table-sm table-bordered small mb-0">
@@ -1870,7 +1871,13 @@
                                             </thead>
                                             <tbody>
                                                 <template v-for="(group, gi) in maintenance.duplicateGroups">
-                                                    <tr :key="'keep-' + gi" class="table-success">
+                                                    <tr :key="'why-' + gi" class="table-light">
+                                                        <td colspan="6">
+                                                            <label class="mb-0"><input type="checkbox" v-model="group.approved" class="mr-1">
+                                                                <span class="text-muted">[[ group.reason ]]</span></label>
+                                                        </td>
+                                                    </tr>
+                                                    <tr :key="'keep-' + gi" class="table-success" :class="{ 'text-muted': !group.approved }">
                                                         <td><span class="badge badge-success">Keep</span> <span v-if="group.keep.is_split" class="badge badge-info ml-1">Split</span></td>
                                                         <td>[[ group.keep.date ]]</td>
                                                         <td>[[ group.keep.name ]]</td>
@@ -1878,7 +1885,7 @@
                                                         <td>[[ group.keep.account_name ]] [[ group.keep.account_mask ? '(…' + group.keep.account_mask + ')' : '' ]]</td>
                                                         <td>[[ group.keep.pending ? 'Yes' : 'No' ]]</td>
                                                     </tr>
-                                                    <tr v-for="(dup, di) in group.remove" :key="'rm-' + gi + '-' + di" class="table-danger">
+                                                    <tr v-for="(dup, di) in group.remove" :key="'rm-' + gi + '-' + di" :class="group.approved ? 'table-danger' : 'text-muted'">
                                                         <td><span class="badge badge-danger">Remove</span> <span v-if="dup.is_split" class="badge badge-warning ml-1">Split+children</span></td>
                                                         <td>[[ dup.date ]]</td>
                                                         <td>[[ dup.name ]]</td>
@@ -2057,7 +2064,33 @@
                                             </option>
                                         </optgroup>
                                     </template>
+                                    <option v-if="!hasAccountNumberMapping" value="new">+ New institution (not connected to Plaid)…</option>
                                 </select>
+                                <div v-if="csvImport.accountId === 'new' && !hasAccountNumberMapping" class="mt-2">
+                                    <div class="form-row">
+                                        <div class="col-sm-6 mb-2">
+                                            <input type="text" class="form-control form-control-sm" maxlength="100"
+                                                   v-model="csvImport.newInstitution.name" placeholder="Institution (e.g. Home Depot Credit)">
+                                        </div>
+                                        <div class="col-sm-6 mb-2">
+                                            <input type="text" class="form-control form-control-sm" maxlength="100"
+                                                   v-model="csvImport.newInstitution.accountName" placeholder="Account name (optional)">
+                                        </div>
+                                        <div class="col-sm-6 mb-2">
+                                            <select class="form-control form-control-sm" v-model="csvImport.newInstitution.type">
+                                                <option value="credit_card">Credit card</option>
+                                                <option value="chequing">Chequing</option>
+                                                <option value="savings">Savings</option>
+                                                <option value="line_of_credit">Line of credit</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-sm-6 mb-2">
+                                            <input type="text" class="form-control form-control-sm" maxlength="4" inputmode="numeric"
+                                                   v-model="csvImport.newInstitution.mask" placeholder="Last 4 digits (optional)">
+                                        </div>
+                                    </div>
+                                    <small class="text-muted">The institution is created as CSV only: import its statements here whenever you download them.</small>
+                                </div>
                             </div>
                         </div>
 

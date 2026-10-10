@@ -19,6 +19,7 @@ semantics can be unit-tested without an application or database.
 """
 
 import csv
+import io
 
 
 def _default_normalise_header(name) -> str:
@@ -212,3 +213,94 @@ def creation_target_unknown_reason(raw_account_number) -> str:
         "accounts (rows in this file span multiple institutions); select the "
         "institution to create it under" % raw_account_number
     )
+
+
+# ---------------------------------------------------------------------------
+# Delimiter and header-less files
+# ---------------------------------------------------------------------------
+
+_DELIMITER_CANDIDATES = (',', '\t', ';', '|')
+
+
+def detect_delimiter(content, max_scan_lines=25) -> str:
+    """Return the field delimiter of ``content`` (``,`` ``\\t`` ``;`` or ``|``).
+
+    Each candidate is scored by how many of the first non-empty lines split
+    into two or more fields with it; the comma wins ties, so every file that
+    imported before keeps its behaviour. Card exports such as Home Depot's
+    (Citi) are tab-separated.
+    """
+    lines = [ln for ln in (content or '').splitlines() if ln.strip()][:max_scan_lines]
+    if not lines:
+        return ','
+    best, best_score = ',', -1
+    for delimiter in _DELIMITER_CANDIDATES:
+        score = 0
+        for line in lines:
+            try:
+                if len(next(csv.reader([line], delimiter=delimiter))) >= 2:
+                    score += 1
+            except (csv.Error, StopIteration):
+                continue
+        if score > best_score:
+            best, best_score = delimiter, score
+    return best
+
+
+def to_comma_separated(content, delimiter) -> str:
+    """Re-serialise ``content`` with commas so the rest of the importer, which
+    reads with the default ``csv`` dialect, sees ordinary CSV."""
+    if delimiter == ',':
+        return content
+    out = io.StringIO()
+    writer = csv.writer(out, lineterminator='\n')
+    for row in csv.reader(io.StringIO(content), delimiter=delimiter):
+        writer.writerow(row)
+    return out.getvalue()
+
+
+def first_row_is_data(content, is_date, is_amount) -> bool:
+    """True when the first non-empty row is a transaction, not a header: one
+    cell parses as a date (``is_date``) and another as an amount
+    (``is_amount``). A header row never does, even when it happens to contain
+    an alias such as ``credit`` (which is also a Home Depot row's type)."""
+    for row in csv.reader(io.StringIO(content or '')):
+        if not any(c.strip() for c in row):
+            continue
+        return (any(is_date(c) for c in row)
+                and any(is_amount(c) and not is_date(c) for c in row))
+    return False
+
+
+def synthesise_header(content, is_date, is_amount, sample_rows=20) -> str:
+    """Prepend a header to a file whose first row is already data.
+
+    Some exports (Home Depot's among them) have no header line. Columns are
+    named from the first ``sample_rows`` rows: mostly dates -> ``Date``; mostly
+    amounts -> ``Amount`` (later ones ``Amount 2``...); of the remaining text
+    columns the one with the longest values -> ``Description``, the next
+    ``Type`` and any others ``Column N``. Call it only when
+    :func:`first_row_is_data` is true.
+    """
+    rows = [r for r in csv.reader(io.StringIO(content or '')) if any(c.strip() for c in r)]
+    if not rows:
+        return content
+    sample = rows[:sample_rows]
+    width = max(len(r) for r in sample)
+    names = [None] * width
+    text_cols = []
+    amount_n = 0
+    for col in range(width):
+        cells = [r[col].strip() for r in sample if col < len(r) and r[col].strip()]
+        if cells and sum(1 for c in cells if is_date(c)) * 2 > len(cells):
+            names[col] = 'Date' if 'Date' not in names else 'Date %d' % (col + 1)
+        elif cells and sum(1 for c in cells if is_amount(c)) * 2 > len(cells):
+            amount_n += 1
+            names[col] = 'Amount' if amount_n == 1 else 'Amount %d' % amount_n
+        else:
+            text_cols.append((sum(len(c) for c in cells) / max(len(cells), 1), col))
+    for rank, (_, col) in enumerate(sorted(text_cols, reverse=True)):
+        names[col] = ('Description', 'Type')[rank] if rank < 2 else 'Column %d' % (col + 1)
+    header = io.StringIO()
+    csv.writer(header, lineterminator='\n').writerow(names)
+    return header.getvalue() + content
