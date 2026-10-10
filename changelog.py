@@ -3,6 +3,22 @@
 
 changelog = [
     {
+        "version": "1.15.0",
+        "date": "2026-10-10",
+        "changes": [
+            "CSV import reads files without a header row and files separated by tabs, semicolons or pipes "
+            "(for example Home Depot / Citi card exports): the columns are detected as Date, Amount, Description "
+            "and Type",
+            "CSV import can create a new institution for a bank Plaid cannot connect: choose \"New institution\" "
+            "as the destination and give its name, account type (credit card, chequing, savings, line of credit) "
+            "and last 4 digits. It is created as CSV only",
+            "Duplicate finder: also catches the same charge on two cards of one bank when the description or the "
+            "day differs slightly (a supplementary card mirrored on the primary card), and keeps the primary "
+            "card's row. Identical rows from one CSV statement are no longer flagged. Every group shows why it was "
+            "flagged, groups can be unticked, and only the approved rows are removed"
+        ]
+    },
+    {
         "version": "1.14.1",
         "date": "2026-10-10",
         "changes": [

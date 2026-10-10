@@ -44,6 +44,10 @@ from csv_import_routing import (
     resolve_creation_credential,
     creation_target_unknown_reason,
     find_header_line,
+    detect_delimiter,
+    to_comma_separated,
+    synthesise_header,
+    first_row_is_data,
 )
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from sqlalchemy.exc import OperationalError, IntegrityError
@@ -5187,10 +5191,18 @@ def _find_duplicate_transaction_groups(user_id):
        where Plaid reports the same real-world transaction under both a primary
        and supplementary card, each with a distinct plaid_transaction_id.
 
+    2b. **Cross-account, fuzzy** — the same charge on two accounts of one
+       connection with the same account type: same amount, dates at most one
+       day apart, descriptions alike. Catches a supplementary card mirrored on
+       the primary card when the feeds format the text or date differently.
+
     3. **Plaid+CSV overlap** — same (account_id, date, amount) appearing
        more than once where one has a real plaid_transaction_id and another
        has a csv_ prefix.  Catches CSV re-imports of transactions that were
        already synced via Plaid with a different description/name.
+
+    Same-account groups made only of CSV rows are NOT duplicates: the importer
+    is count-aware, so identical CSV rows are what the statement listed.
 
     Within each group the record to *keep* is chosen by this priority:
 
@@ -5199,7 +5211,10 @@ def _find_duplicate_transaction_groups(user_id):
       2. Posted (pending=False) beats pending.
       3. Overlap groups: keep the Plaid-synced transaction over the CSV import.
       4. Same-account tie-break: keep oldest id (lowest id).
-         Cross-account tie-break: keep lowest credential_id (older connection).
+         Cross-account tie-break: keep lowest credential_id (older connection),
+         then the account with more transactions (the primary card).
+
+    Every group carries a human-readable ``reason``.
 
     Split *children* are never surfaced as independent candidates; they are
     handled by cascade when their parent is removed (see maintenance_deduplicate).
@@ -5246,6 +5261,12 @@ def _find_duplicate_transaction_groups(user_id):
         key = ('acct', txn.account_id, str(txn.date), str(txn.amount), txn.name)
         groups.setdefault(key, []).append(txn)
         same_acct_ids.add(txn.id)
+    # Identical rows that ALL came from CSV imports are what the statements
+    # listed (the importer is count-aware: a re-import never adds a copy), e.g.
+    # two equal appointments on one day. They are real, not duplicates.
+    for key in [k for k, txns in groups.items() if all(_is_csv_row(t) for t in txns)]:
+        for txn in groups.pop(key):
+            same_acct_ids.discard(txn.id)
 
     # ── Phase 2: cross-account duplicates ────────────────────────────────
     # (date, amount, name) tuples that appear on 2+ *distinct* accounts.
@@ -5281,6 +5302,16 @@ def _find_duplicate_transaction_groups(user_id):
             continue  # already captured in a same-account group
         key = ('cross', str(txn.date), str(txn.amount), txn.name)
         groups.setdefault(key, []).append(txn)
+
+    # ── Phase 2b: the same charge on two cards of one bank, text or day off ─
+    # A supplementary card's charges also appear on the primary card, but the
+    # feeds often differ by a day or in formatting ("SOLID WASTE-BERMONDSEY"
+    # vs "SOLID WASTE BERMONDSEY"), which the exact phase 2 misses.
+    grouped_ids = {t.id for txns in groups.values() for t in txns}
+    for pair in _find_fuzzy_cross_account_pairs(user_id, grouped_ids):
+        keep, dup = pair
+        groups[('fuzzy', keep.id, dup.id)] = [keep, dup]
+        grouped_ids.update((keep.id, dup.id))
 
     # ── Phase 3: Plaid+CSV overlap duplicates ─────────────────────────────
     # Same (account_id, date, amount) appearing >1 time where one has a real
@@ -5328,14 +5359,24 @@ def _find_duplicate_transaction_groups(user_id):
                 overlap_groups[key]['plaid'] = txn
 
     for key, val in overlap_groups.items():
-        if val['plaid'] is not None and val['csvs']:
+        if val['plaid'] is not None and val['csvs'] and not any(
+                t.id in grouped_ids for t in [val['plaid']] + val['csvs']):
             groups[key] = [val['plaid']] + val['csvs']
 
     # ── Build result ──────────────────────────────────────────────────────
+    # Rows per account: on a cross-account tie (same connection) keep the row
+    # of the account with more history, i.e. the primary card.
+    history = dict(db.session.query(Transaction.account_id, func.count(Transaction.id))
+                   .filter(Transaction.user_id == user_id, Transaction.is_removed.is_(False))
+                   .group_by(Transaction.account_id).all())
     result = []
     for group_key, txns in groups.items():
         is_cross = group_key[0] == 'cross'
         is_overlap = group_key[0] == 'overlap'
+        if group_key[0] == 'fuzzy':
+            # Already ordered by _find_fuzzy_cross_account_pairs (primary first).
+            result.append({'keep': txns[0], 'remove': txns[1:], 'reason': _DUPLICATE_REASONS['fuzzy']})
+            continue
 
         txns.sort(key=lambda t: (
             0 if t.has_split_children else 1,
@@ -5345,13 +5386,102 @@ def _find_duplicate_transaction_groups(user_id):
             # Cross-account: keep oldest credential. Same-account: keep
             # oldest id. Overlap falls through to same-account tiebreaker
             # after the Plaid-before-CSV sort above.
-            t.credential_id if is_cross else (-t.id if t.has_split_children else t.id),
+            (t.credential_id, -history.get(t.account_id, 0)) if is_cross
+            else (-t.id if t.has_split_children else t.id),
         ))
         keep = txns[0]
         remove_candidates = txns[1:]
-        result.append({'keep': keep, 'remove': remove_candidates})
+        result.append({'keep': keep, 'remove': remove_candidates,
+                       'reason': _DUPLICATE_REASONS[group_key[0]]})
 
     return result
+
+
+_DUPLICATE_REASONS = {
+    'acct': 'Same account, date, amount and description',
+    'cross': 'Same date, amount and description on two accounts',
+    'fuzzy': 'Same charge on two cards of one bank (description or date differs slightly)',
+    'overlap': 'Same account, date and amount from both Plaid and a CSV import',
+}
+
+
+def _is_csv_row(txn):
+    return bool(txn.plaid_transaction_id and txn.plaid_transaction_id.startswith('csv_'))
+
+
+def _duplicate_name_key(name):
+    """First real word of a description, upper-cased (``SOLID``, ``CINEPLEX``)."""
+    for word in re.split(r'[^A-Za-z]+', name or ''):
+        if len(word) >= 3:
+            return word.upper()
+    return ''
+
+
+def _names_look_alike(a, b):
+    from difflib import SequenceMatcher
+    if _duplicate_name_key(a) and _duplicate_name_key(a) == _duplicate_name_key(b):
+        return True
+    return SequenceMatcher(None, (a or '').upper(), (b or '').upper()).ratio() >= 0.75
+
+
+def _find_fuzzy_cross_account_pairs(user_id, exclude_ids):
+    """Pairs ``(keep, duplicate)`` of one charge reported on two accounts of
+    the same institution with the same account type: same amount, dates at most
+    one day apart and descriptions alike (``_names_look_alike``). Opposite-sign
+    transfers never match (same amount required) and a chequing account is never
+    paired with a card (same type required). The row of the account with more
+    history is kept, so a supplementary card's mirror rows are the ones removed.
+    Each row is used at most once; rows in ``exclude_ids`` are skipped.
+    """
+    rows = (Transaction.query
+            .options(joinedload(Transaction.account))
+            .join(Account, Transaction.account_id == Account.id)
+            .filter(Transaction.user_id == user_id,
+                    Transaction.is_removed.is_(False),
+                    Transaction.is_split_child.is_(False),
+                    Transaction.pending.is_(False))
+            .order_by(Transaction.date.asc(), Transaction.id.asc())
+            .all())
+    return _pair_cross_account_rows(
+        [(t, t.credential_id, t.account.type if t.account else None) for t in rows], exclude_ids)
+
+
+def _pair_cross_account_rows(rows, exclude_ids):
+    """Pure core of ``_find_fuzzy_cross_account_pairs``.
+
+    ``rows`` is a date-ordered list of ``(txn, credential_id, account_type)``
+    where ``txn`` has ``id``, ``account_id``, ``date``, ``amount``, ``name`` and
+    ``has_split_children``. Returns ``[(keep, duplicate), ...]``.
+    """
+    history = {}
+    for t, _, _ in rows:
+        history[t.account_id] = history.get(t.account_id, 0) + 1
+    buckets = {}
+    for t, credential_id, account_type in rows:
+        if t.id in exclude_ids or account_type is None:
+            continue
+        buckets.setdefault((credential_id, account_type, t.amount), []).append(t)
+
+    pairs = []
+    used = set(exclude_ids)
+    for bucket in buckets.values():
+        if len({t.account_id for t in bucket}) < 2:
+            continue
+        for i, a in enumerate(bucket):
+            if a.id in used:
+                continue
+            for b in bucket[i + 1:]:
+                if b.id in used or b.account_id == a.account_id:
+                    continue
+                if abs((b.date - a.date).days) > 1 or not _names_look_alike(a.name, b.name):
+                    continue
+                keep, dup = (a, b) if (history[a.account_id], -a.account_id) >= (history[b.account_id], -b.account_id) else (b, a)
+                if not keep.has_split_children and dup.has_split_children:
+                    keep, dup = dup, keep  # never remove the user's split work
+                pairs.append((keep, dup))
+                used.update((a.id, b.id))
+                break
+    return pairs
 
 
 @core.route('/api/maintenance/duplicates', methods=['GET'])
@@ -5379,6 +5509,7 @@ def maintenance_find_duplicates():
         serialized.append({
             'keep': _serialize_txn(g['keep']),
             'remove': [_serialize_txn(t) for t in g['remove']],
+            'reason': g.get('reason'),
         })
 
     return jsonify({
@@ -5395,14 +5526,32 @@ def maintenance_deduplicate():
 
     Query params:
         dry_run=true  — analyse only, do not modify data (default: false)
+    JSON body (optional):
+        {"ids": [..]} — remove only these rows (the ones the user approved in
+        the preview). A listed id that is no longer a removal candidate is
+        ignored and reported in ``skipped_ids``. Without a body every
+        candidate is removed (the historical behaviour).
     """
     dry_run = request.args.get('dry_run', 'false').lower() in ('true', '1', 'yes')
+    payload = request.get_json(silent=True) or {}
+    approved = payload.get('ids')
+    if approved is not None:
+        if not isinstance(approved, list):
+            return jsonify({'error': 'ids must be a list.'}), 400
+        try:
+            approved = {int(i) for i in approved}
+        except (TypeError, ValueError):
+            return jsonify({'error': 'ids must be numbers.'}), 400
 
     groups = _find_duplicate_transaction_groups(current_user.id)
+    candidates = {t.id for g in groups for t in g['remove']}
+    skipped_ids = sorted(approved - candidates) if approved is not None else []
 
     removed_ids = []
     for g in groups:
         for txn in g['remove']:
+            if approved is not None and txn.id not in approved:
+                continue
             removed_ids.append(txn.id)
             if not dry_run:
                 txn.is_removed = True
@@ -5433,6 +5582,7 @@ def maintenance_deduplicate():
         'dry_run': dry_run,
         'removed_count': len(removed_ids),
         'removed_ids': removed_ids,
+        'skipped_ids': skipped_ids,
     })
 
 
@@ -5562,18 +5712,35 @@ _CSV_KNOWN_HEADERS = frozenset(
 
 
 def _csv_content_without_preamble(content):
-    """Drop any metadata preamble so the real header is the first line.
+    """Normalise an uploaded CSV so the real header is the first line.
 
-    Many bank exports prefix the table with informational lines.  Detection is
-    delegated to the pure ``find_header_line`` helper: the first line among the
-    first 25 that parses into at least two non-empty fields and carries a known
-    alias.  When line 1 already qualifies (or nothing qualifies) the original
-    text is returned unchanged, preserving the historical behaviour.
+    1. A tab-, semicolon- or pipe-separated file is re-serialised with commas
+       (``detect_delimiter``; the comma wins ties, so comma files are untouched).
+    2. Any metadata preamble is dropped. Detection is delegated to the pure
+       ``find_header_line`` helper: the first line among the first 25 that
+       parses into at least two non-empty fields and carries a known alias.
+    2a. A file with no header line at all (the first row is already a date and
+       an amount, e.g. Home Depot exports) gets a synthesised one instead
+       (``synthesise_header``: Date / Amount / Description / Type).
+    A leading byte-order mark is removed. A comma file whose first line is a
+    header comes back unchanged.
     """
+    content = (content or '').lstrip('\ufeff')  # a BOM left in pasted/API text
+    content = to_comma_separated(content, detect_delimiter(content))
+    if first_row_is_data(content, _csv_cell_is_date, _csv_cell_is_amount):
+        return synthesise_header(content, _csv_cell_is_date, _csv_cell_is_amount)
     line_no = find_header_line(content, _CSV_KNOWN_HEADERS, _normalise_header)
     if line_no <= 1:
         return content
     return ''.join(content.splitlines(keepends=True)[line_no - 1:])
+
+
+def _csv_cell_is_date(value):
+    return _parse_date(value) is not None
+
+
+def _csv_cell_is_amount(value):
+    return any(ch.isdigit() for ch in value) and _parse_amount(value) is not None
 
 
 def _compute_header_hash(headers):
@@ -5914,11 +6081,12 @@ def _csv_sign_check(samples, accounts_by_id):
         lo = min(d for d, _, _ in items) - timedelta(days=3)
         hi = max(d for d, _, _ in items) + timedelta(days=3)
         existing = {}
-        for d, a in db.session.query(Transaction.date, Transaction.amount).filter(
-                Transaction.account_id == account_id,
-                Transaction.is_removed.is_(False),
-                Transaction.date >= lo, Transaction.date <= hi).all():
-            existing.setdefault(Decimal(a).copy_abs(), []).append((d, Decimal(a)))
+        if isinstance(account_id, int):  # a new, not yet saved account has no rows
+            for d, a in db.session.query(Transaction.date, Transaction.amount).filter(
+                    Transaction.account_id == account_id,
+                    Transaction.is_removed.is_(False),
+                    Transaction.date >= lo, Transaction.date <= hi).all():
+                existing.setdefault(Decimal(a).copy_abs(), []).append((d, Decimal(a)))
 
         same = opposite = 0
         for day, amount, _ in items:
@@ -5953,6 +6121,51 @@ def _csv_sign_check(samples, accounts_by_id):
     return {'flipped_rows': flipped_total, 'checked_rows': checked_total, 'reasons': reasons}
 
 
+# CSV-only account types offered when an import creates a new institution:
+# key -> (Account.type, Account.subtype), the same pairs Plaid reports.
+_CSV_NEW_ACCOUNT_TYPES = {
+    'credit_card': ('credit', 'credit card'),
+    'chequing': ('depository', 'checking'),
+    'savings': ('depository', 'savings'),
+    'line_of_credit': ('loan', 'line of credit'),
+}
+
+
+def _csv_new_institution(user_id, institution_name, account_name, account_type, mask):
+    """Build (unsaved) the Credential + Account for a bank Plaid cannot reach.
+
+    The credential is CSV-only from the start (``soft_disconnected``, no access
+    token): it shows as "CSV Only" in the sidebar and its account can be
+    reconciled like any paused account. Raises ``ValueError`` on bad input.
+    """
+    institution_name = ' '.join((institution_name or '').split())
+    if len(institution_name) < 2 or len(institution_name) > 100:
+        raise ValueError('Institution name must be 2-100 characters.')
+    if account_type not in _CSV_NEW_ACCOUNT_TYPES:
+        raise ValueError('Account type must be one of: %s.' % ', '.join(sorted(_CSV_NEW_ACCOUNT_TYPES)))
+    mask = (mask or '').strip()
+    if mask and (not mask.isdigit() or len(mask) != 4):
+        raise ValueError('Last 4 digits must be exactly 4 digits.')
+    existing = Credential.query.filter(
+        Credential.user_id == user_id,
+        Credential.status == 'Active',
+        func.lower(Credential.institution_name) == institution_name.lower(),
+    ).first()
+    if existing:
+        raise ValueError('You already have an institution named "%s"; pick its account instead.'
+                         % existing.institution_name)
+    acct_type, subtype = _CSV_NEW_ACCOUNT_TYPES[account_type]
+    account_name = ' '.join((account_name or '').split())[:100] or (
+        '%s %s' % (institution_name, subtype.title()))
+    token = uuid4().hex
+    credential = Credential(user_id=user_id, item_id='csv-%s' % token, status='Active',
+                            institution_name=institution_name, access_token=None,
+                            requires_update=False, soft_disconnected=True)
+    account = Account(status='Active', plaid_account_id='csv-acct-%s' % token, name=account_name,
+                      type=acct_type, subtype=subtype, mask=mask or None, is_enabled=True)
+    return credential, account
+
+
 def _csv_import_sign_check(rows, header_to_field, amount_sign, default_account,
                            account_number_header, account_by_mask):
     """Run ``_csv_sign_check`` over the rows an import would write.
@@ -5963,11 +6176,15 @@ def _csv_import_sign_check(rows, header_to_field, amount_sign, default_account,
     suggested ``amount_sign`` to the result.
     """
     samples = []
+    # A new institution's account is not saved yet: key it as 'new'.
+    default_key = None
+    if default_account is not None:
+        default_key = default_account.id if default_account.id else 'new'
     for row in rows:
         parsed = _csv_parse_row(row, header_to_field)
         if parsed['amount'] is None:
             continue
-        account_id = default_account.id if default_account else None
+        account_id = default_key
         if account_number_header:
             raw = (row.get(account_number_header) or '').strip()
             if raw:
@@ -5977,8 +6194,11 @@ def _csv_import_sign_check(rows, header_to_field, amount_sign, default_account,
                             _apply_amount_sign(parsed['amount'], amount_sign), parsed['name']))
     if not samples:
         return None
-    accounts = Account.query.filter(Account.id.in_({s[0] for s in samples})).all()
-    result = _csv_sign_check(samples, {a.id: a for a in accounts})
+    saved_ids = {s[0] for s in samples if isinstance(s[0], int)}
+    accounts_by_id = {a.id: a for a in Account.query.filter(Account.id.in_(saved_ids)).all()} if saved_ids else {}
+    if default_key == 'new':
+        accounts_by_id['new'] = default_account
+    result = _csv_sign_check(samples, accounts_by_id)
     if result:
         result['amount_sign'] = amount_sign or 'as_is'
         result['suggested_amount_sign'] = 'as_is' if amount_sign == 'invert' else 'invert'
@@ -6181,6 +6401,10 @@ def csv_import_execute():
         spending as a positive number and payments/refunds as negative, so the
         stored row follows the ExMint convention (money out negative); it is
         applied before dedup, so the dedup keys and stored rows agree.
+      - new_institution_name, new_account_name, new_account_type
+        (credit_card | chequing | savings | line_of_credit), new_account_mask:
+        instead of account_id, create a CSV-only institution and account (for a
+        bank Plaid cannot connect) and import the file into it.
       - sign_confirmed: str ('true'/'false', default false).  Without it a file
         that looks reversed (see _csv_sign_check) is refused with 409 and a
         ``sign_check`` payload before anything is written.
@@ -6219,9 +6443,23 @@ def csv_import_execute():
     # Check if account_number is in the mapping
     has_account_number_routing = any(f == 'account_number' for f in mapping.values())
 
+    # A bank Plaid cannot connect: create a CSV-only institution + account for
+    # this file (persisted only once the sign check below has passed).
+    new_credential = None
+    new_institution_name = (request.form.get('new_institution_name') or '').strip()
+    if new_institution_name and not account_id and not has_account_number_routing:
+        try:
+            new_credential, new_account = _csv_new_institution(
+                current_user.id, new_institution_name, request.form.get('new_account_name'),
+                request.form.get('new_account_type'), request.form.get('new_account_mask'))
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+
     # Validate account (required if no account_number routing)
     default_account = None
-    if not has_account_number_routing:
+    if new_credential is not None:
+        default_account = new_account
+    elif not has_account_number_routing:
         if not account_id:
             return jsonify(error='account_id is required when account_number is not mapped'), 400
         default_account = Account.query.join(Credential).filter(
@@ -6330,6 +6568,19 @@ def csv_import_execute():
                       'money in positive). Nothing was imported.',
                 sign_check=sign_check,
             ), 409
+
+    if new_credential is not None:
+        db.session.add(new_credential)
+        db.session.flush()
+        default_account.credential_id = new_credential.id
+        db.session.add(default_account)
+        db.session.commit()
+        credential_id = new_credential.id
+        account_id = default_account.id
+        created_accounts.append({'account_id': default_account.id, 'name': default_account.name,
+                                 'mask': default_account.mask,
+                                 'institution_name': new_credential.institution_name,
+                                 'new_institution': True})
 
     # Count-aware dedup state for this run.  The row caches hold the pre-existing
     # rows for a key, captured the first time that key is seen so rows inserted
