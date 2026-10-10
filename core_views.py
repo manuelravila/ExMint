@@ -25,7 +25,7 @@ from sqlalchemy.orm import joinedload, aliased
 import plaid
 import json
 import re
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from collections import defaultdict
 import calendar
 from io import StringIO, BytesIO
@@ -3980,20 +3980,17 @@ def _serialize_one_project(project):
     return _serialize_project(project, stats.get(project.id))
 
 
-@core.route('/api/projects', methods=['GET'])
-@login_required
-def list_projects():
-    projects = Project.query.filter_by(user_id=current_user.id).order_by(
+# The list / create / bulk-assign bodies are shared by the UI routes (session
+# user) and the machine API v1 routes (API-key user), so both behave the same.
+def _list_projects_response(user_id):
+    projects = Project.query.filter_by(user_id=user_id).order_by(
         func.lower(Project.name).asc(), Project.id.asc()
     ).all()
-    stats = _collect_project_totals(current_user.id, [p.id for p in projects])
+    stats = _collect_project_totals(user_id, [p.id for p in projects])
     return jsonify({'projects': [_serialize_project(p, stats.get(p.id)) for p in projects]})
 
 
-@core.route('/api/projects', methods=['POST'])
-@login_required
-def create_project():
-    payload = request.get_json() or {}
+def _create_project_response(user_id, payload):
     try:
         name = _validate_project_name(payload.get('name'))
     except ValueError as exc:
@@ -4004,10 +4001,10 @@ def create_project():
             color = _normalize_color(payload.get('color'))
         except ValueError as exc:
             return jsonify({'error': str(exc)}), 400
-    if _find_project_by_name(current_user.id, name):
+    if _find_project_by_name(user_id, name):
         return jsonify({'error': 'A project with this name already exists.'}), 409
 
-    project = Project(user_id=current_user.id, name=name, color=color)
+    project = Project(user_id=user_id, name=name, color=color)
     db.session.add(project)
     try:
         db.session.commit()
@@ -4015,6 +4012,18 @@ def create_project():
         db.session.rollback()
         return jsonify({'error': 'A project with this name already exists.'}), 409
     return jsonify({'project': _serialize_one_project(project)}), 201
+
+
+@core.route('/api/projects', methods=['GET'])
+@login_required
+def list_projects():
+    return _list_projects_response(current_user.id)
+
+
+@core.route('/api/projects', methods=['POST'])
+@login_required
+def create_project():
+    return _create_project_response(current_user.id, request.get_json() or {})
 
 
 @core.route('/api/projects/<int:project_id>', methods=['PUT'])
@@ -4090,11 +4099,8 @@ def set_custom_category_project(category_id):
     return jsonify({'category': _serialize_custom_category(category)})
 
 
-@core.route('/api/transactions/bulk-project', methods=['PATCH'])
-@login_required
-def bulk_update_transaction_project():
+def _bulk_project_response(user_id, payload):
     """Assign the given transactions to a project, or clear it (project_id null)."""
-    payload = request.get_json() or {}
     transaction_ids = payload.get('transaction_ids', [])
     project_id = payload.get('project_id')
 
@@ -4109,7 +4115,7 @@ def bulk_update_transaction_project():
             project_id = int(project_id)
         except (TypeError, ValueError):
             return jsonify({'error': 'project_id must be a number or null.'}), 400
-        project = Project.query.filter_by(id=project_id, user_id=current_user.id).first()
+        project = Project.query.filter_by(id=project_id, user_id=user_id).first()
         if not project:
             return jsonify({'error': 'Project not found.'}), 404
 
@@ -4119,7 +4125,7 @@ def bulk_update_transaction_project():
         joinedload(Transaction.custom_category)
     ).filter(
         Transaction.id.in_(transaction_ids),
-        Transaction.user_id == current_user.id
+        Transaction.user_id == user_id
     ).all()
     if len(transactions) != len(set(transaction_ids)):
         return jsonify({'error': 'One or more transactions not found.'}), 404
@@ -4130,6 +4136,12 @@ def bulk_update_transaction_project():
 
     override_map = _load_overrides([t.id for t in transactions])
     return jsonify({'transactions': [_serialize_transaction(t, override_map) for t in transactions]})
+
+
+@core.route('/api/transactions/bulk-project', methods=['PATCH'])
+@login_required
+def bulk_update_transaction_project():
+    return _bulk_project_response(current_user.id, request.get_json() or {})
 
 
 @core.route('/api/categories', methods=['GET'])
@@ -5817,6 +5829,162 @@ def _preview_rows(rows, max_rows=3):
     return result
 
 
+def _csv_parse_row(row, header_to_field):
+    """Read one CSV row through the user's column mapping (pure).
+
+    Returns a dict with ``date``, ``name``, ``amount`` (Decimal, or ``None``
+    when no amount column holds a value), ``currency``, ``merchant``,
+    ``category`` and ``account_type``. The amount is in the file's own sign
+    convention; the caller applies ``amount_sign``. CAD/USD columns take
+    priority over debit/credit, which take priority over a signed amount.
+    """
+    values = {'date': None, 'description': None, 'debit': None, 'credit': None,
+              'amount': None, 'amount_cad': None, 'amount_usd': None,
+              'merchant': None, 'category': None, 'account_type': None}
+    for header, field in header_to_field.items():
+        raw = row.get(header, '').strip()
+        if not raw or field not in values:
+            continue
+        if field == 'date':
+            values['date'] = _parse_date(raw)
+        elif field in ('debit', 'credit', 'amount', 'amount_cad', 'amount_usd'):
+            values[field] = _parse_amount(raw)
+        else:
+            values[field] = raw
+
+    currency = None
+    debit_val, credit_val = values['debit'], values['credit']
+    if values['amount_cad'] is not None:
+        amount = values['amount_cad']
+        currency = 'CAD'
+    elif values['amount_usd'] is not None:
+        amount = values['amount_usd']
+        currency = 'USD'
+    elif debit_val is not None and credit_val is not None:
+        # Both present: debit is negative, credit is positive
+        amount = -(abs(debit_val)) if debit_val != 0 else credit_val
+    elif debit_val is not None:
+        amount = -(abs(debit_val))
+    elif credit_val is not None:
+        amount = abs(credit_val)
+    else:
+        amount = values['amount']
+    return {'date': values['date'], 'name': values['description'], 'amount': amount,
+            'currency': currency, 'merchant': values['merchant'], 'category': values['category'],
+            'account_type': values['account_type']}
+
+
+# Descriptions that mean money INTO a credit card (a payment or a refund). On a
+# card they must be positive; a chequing "BILL PMT" is money out, so this list
+# is only used for credit-type accounts.
+_CARD_CREDIT_WORDS = re.compile(
+    r'PAYMENT|THANK YOU|PAIEMENT|MERCI|REFUND|REMBOURSEMENT|RETURN|CREDIT VOUCHER', re.IGNORECASE)
+
+
+def _csv_sign_check(samples, accounts_by_id):
+    """Decide whether a CSV's amounts look sign-flipped (pure apart from reads).
+
+    ``samples`` is a list of ``(account_id, date, amount, name)`` with
+    ``amount_sign`` already applied (ExMint convention: money out negative).
+    ``accounts_by_id`` maps account id -> Account. Three signals:
+
+    * overlap: rows that match an existing row of the same account within
+      3 days with the same absolute amount but the OPPOSITE sign (a flipped
+      re-import of transactions Plaid or an earlier import already holds);
+    * card payments: on credit accounts, payment/refund descriptions that are
+      negative;
+    * card majority: on a credit account with 10+ rows, most rows positive
+      (a card statement is mostly purchases, i.e. negative).
+
+    Returns ``None`` when nothing looks wrong, else
+    ``{'flipped_rows': n, 'checked_rows': m, 'reasons': [...]}``.
+    """
+    reasons = []
+    by_account = {}
+    for account_id, day, amount, name in samples:
+        if amount is None or day is None or amount == 0:
+            continue
+        by_account.setdefault(account_id, []).append((day, amount, name or ''))
+
+    flipped_total = 0
+    checked_total = 0
+    for account_id, items in by_account.items():
+        account = accounts_by_id.get(account_id)
+        label = account.name if account else 'account %s' % account_id
+        lo = min(d for d, _, _ in items) - timedelta(days=3)
+        hi = max(d for d, _, _ in items) + timedelta(days=3)
+        existing = {}
+        for d, a in db.session.query(Transaction.date, Transaction.amount).filter(
+                Transaction.account_id == account_id,
+                Transaction.is_removed.is_(False),
+                Transaction.date >= lo, Transaction.date <= hi).all():
+            existing.setdefault(Decimal(a).copy_abs(), []).append((d, Decimal(a)))
+
+        same = opposite = 0
+        for day, amount, _ in items:
+            near = [a for d, a in existing.get(Decimal(amount).copy_abs(), []) if abs((d - day).days) <= 3]
+            if any(a == amount for a in near):
+                same += 1
+            elif any(a == -amount for a in near):
+                opposite += 1
+        if opposite >= 3 and opposite > 2 * same:
+            reasons.append('%s: %d rows match existing transactions with the opposite sign '
+                           '(%d match with the same sign).' % (label, opposite, same))
+            flipped_total += opposite
+            checked_total += opposite + same
+
+        if account is not None and (account.type or '').lower() == 'credit':
+            credits = [a for _, a, n in items if _CARD_CREDIT_WORDS.search(n)]
+            negative_credits = sum(1 for a in credits if a < 0)
+            if len(credits) >= 2 and negative_credits >= 0.75 * len(credits):
+                reasons.append('%s: %d of %d payments/refunds would be stored as money out.'
+                               % (label, negative_credits, len(credits)))
+                flipped_total += negative_credits
+                checked_total += len(credits)
+            positive = sum(1 for _, a, _ in items if a > 0)
+            if len(items) >= 10 and positive > 0.7 * len(items):
+                reasons.append('%s is a credit card, but %d of %d rows would be stored as money in.'
+                               % (label, positive, len(items)))
+                flipped_total += positive
+                checked_total += len(items)
+
+    if not reasons:
+        return None
+    return {'flipped_rows': flipped_total, 'checked_rows': checked_total, 'reasons': reasons}
+
+
+def _csv_import_sign_check(rows, header_to_field, amount_sign, default_account,
+                           account_number_header, account_by_mask):
+    """Run ``_csv_sign_check`` over the rows an import would write.
+
+    Rows are routed like the main loop (account-number column, else the
+    fallback account); rows for accounts that would be created are skipped
+    because there is nothing to compare them with. Adds the submitted and the
+    suggested ``amount_sign`` to the result.
+    """
+    samples = []
+    for row in rows:
+        parsed = _csv_parse_row(row, header_to_field)
+        if parsed['amount'] is None:
+            continue
+        account_id = default_account.id if default_account else None
+        if account_number_header:
+            raw = (row.get(account_number_header) or '').strip()
+            if raw:
+                account_id = resolve_row_account(raw, account_by_mask)
+        if account_id:
+            samples.append((account_id, parsed['date'],
+                            _apply_amount_sign(parsed['amount'], amount_sign), parsed['name']))
+    if not samples:
+        return None
+    accounts = Account.query.filter(Account.id.in_({s[0] for s in samples})).all()
+    result = _csv_sign_check(samples, {a.id: a for a in accounts})
+    if result:
+        result['amount_sign'] = amount_sign or 'as_is'
+        result['suggested_amount_sign'] = 'as_is' if amount_sign == 'invert' else 'invert'
+    return result
+
+
 def _csv_collect_routing_facts(rows, account_number_header, mask_index,
                                account_credential_map, fallback_credential_id=None):
     """Pre-pass over parsed CSV rows (pure, before any insert).
@@ -6013,6 +6181,9 @@ def csv_import_execute():
         spending as a positive number and payments/refunds as negative, so the
         stored row follows the ExMint convention (money out negative); it is
         applied before dedup, so the dedup keys and stored rows agree.
+      - sign_confirmed: str ('true'/'false', default false).  Without it a file
+        that looks reversed (see _csv_sign_check) is refused with 409 and a
+        ``sign_check`` payload before anything is written.
       - file: the CSV file
 
     Returns:
@@ -6147,6 +6318,19 @@ def csv_import_execute():
             if target_credential is None:
                 return jsonify(error='new_account_credential_id does not belong to you'), 400
 
+    # Sign guard (before any write): when the chosen amount_sign would store the
+    # file reversed, stop and let the user confirm. The frontend resubmits with
+    # sign_confirmed=true (and usually the suggested amount_sign).
+    if request.form.get('sign_confirmed', 'false').lower() != 'true':
+        sign_check = _csv_import_sign_check(rows, header_to_field, amount_sign, default_account,
+                                            account_number_header, account_by_mask)
+        if sign_check:
+            return jsonify(
+                error='The amounts in this file look reversed for ExMint (money out must be negative, '
+                      'money in positive). Nothing was imported.',
+                sign_check=sign_check,
+            ), 409
+
     # Count-aware dedup state for this run.  The row caches hold the pre-existing
     # rows for a key, captured the first time that key is seen so rows inserted
     # earlier in this same run do not masquerade as churn.
@@ -6156,64 +6340,17 @@ def csv_import_execute():
 
     for row_idx, row in enumerate(rows):
         try:
-            # Extract values from CSV using the mapping
-            date_val = None
-            name_val = None
-            debit_val = None
-            credit_val = None
-            amount_val = None
-            amount_cad_val = None
-            amount_usd_val = None
-            merchant_val = None
-            category_val = None
-            account_type_val = None
-            currency_code = None
-
-            for header, field in header_to_field.items():
-                raw = row.get(header, '').strip()
-                if not raw:
-                    continue
-
-                if field == 'date':
-                    date_val = _parse_date(raw)
-                elif field == 'description':
-                    name_val = raw
-                elif field == 'debit':
-                    debit_val = _parse_amount(raw)
-                elif field == 'credit':
-                    credit_val = _parse_amount(raw)
-                elif field == 'amount':
-                    amount_val = _parse_amount(raw)
-                elif field == 'amount_cad':
-                    amount_cad_val = _parse_amount(raw)
-                elif field == 'amount_usd':
-                    amount_usd_val = _parse_amount(raw)
-                elif field == 'merchant':
-                    merchant_val = raw
-                elif field == 'category':
-                    category_val = raw
-                elif field == 'account_type':
-                    account_type_val = raw
-
-            # Determine amount: CAD/USD columns take priority over debit/credit
-            if amount_cad_val is not None:
-                amount = amount_cad_val
-                currency_code = 'CAD'
-            elif amount_usd_val is not None:
-                amount = amount_usd_val
-                currency_code = 'USD'
-            elif debit_val is not None and credit_val is not None:
-                # Both present: debit is negative, credit is positive
-                amount = -(abs(debit_val)) if debit_val != 0 else credit_val
-            elif debit_val is not None:
-                amount = -(abs(debit_val))
-            elif credit_val is not None:
-                amount = abs(credit_val)
-            elif amount_val is not None:
-                amount = amount_val
-            else:
+            parsed = _csv_parse_row(row, header_to_field)
+            if parsed['amount'] is None:
                 errors.append(f'Row {row_idx + 2}: no amount column mapped')
                 continue
+            date_val = parsed['date']
+            name_val = parsed['name']
+            amount = parsed['amount']
+            currency_code = parsed['currency']
+            merchant_val = parsed['merchant']
+            category_val = parsed['category']
+            account_type_val = parsed['account_type']
 
             # Apply the bank's sign convention BEFORE dedup/insert so the dedup
             # keys and the stored row both use the ExMint convention.

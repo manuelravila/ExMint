@@ -325,6 +325,7 @@ const app = new Vue({
             userMapping: {},
             dateCandidates: [],
             amountSign: 'as_is',
+            signConfirmed: false,
             hasTemplate: false,
             templateLabel: '',
             preview: [],
@@ -3888,6 +3889,7 @@ const app = new Vue({
             this.csvImport.userMapping = {};
             this.csvImport.dateCandidates = [];
             this.csvImport.amountSign = 'as_is';
+            this.csvImport.signConfirmed = false;
             this.csvImport.hasTemplate = false;
             this.csvImport.templateLabel = '';
             this.csvImport.preview = [];
@@ -4038,6 +4040,10 @@ const app = new Vue({
                 formData.append('save_template', this.csvImport.saveTemplate ? 'true' : 'false');
                 formData.append('create_missing_accounts', this.csvImport.createMissingAccounts ? 'true' : 'false');
                 formData.append('amount_sign', this.csvImport.amountSign || 'as_is');
+                if (this.csvImport.signConfirmed) {
+                    formData.append('sign_confirmed', 'true');
+                    this.csvImport.signConfirmed = false;  // one confirmed attempt only
+                }
                 if (this.csvImport.createMissingAccounts && this.csvImport.newAccountCredentialId) {
                     formData.append('new_account_credential_id', this.csvImport.newAccountCredentialId);
                 }
@@ -4054,6 +4060,26 @@ const app = new Vue({
                     data = await resp.json();
                 } catch (parseErr) {
                     data = null;
+                }
+
+                if (resp.status === 409 && data && data.sign_check) {
+                    // The server found the file reversed and wrote nothing: offer the
+                    // suggested sign, or importing as chosen, then resubmit once.
+                    const check = data.sign_check;
+                    const labels = { as_is: 'Use the file\'s signs as they are', invert: 'Invert the signs' };
+                    const details = (check.reasons || []).map(r => '• ' + r).join('\n');
+                    const switchIt = window.confirm(
+                        'The amounts look reversed. ExMint stores money out as negative and money in as positive.\n\n'
+                        + details + '\n\nOK: import with "' + labels[check.suggested_amount_sign] + '".\n'
+                        + 'Cancel: keep "' + labels[check.amount_sign] + '" (you will be asked to confirm).');
+                    if (switchIt) {
+                        this.csvImport.amountSign = check.suggested_amount_sign;
+                    } else if (!window.confirm('Import with "' + labels[check.amount_sign] + '" anyway?')) {
+                        this.csvImport.error = 'Import cancelled: the amount signs need checking. Nothing was saved.';
+                        return;
+                    }
+                    this.csvImport.signConfirmed = true;
+                    return await this.executeCsvImport();
                 }
 
                 if (!resp.ok) {

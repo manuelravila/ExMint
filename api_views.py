@@ -75,6 +75,10 @@ from core_views import (
     DEFAULT_MANUAL_COLOR,
     _collect_spending_summary,
     _csv_import_analyze_payload,
+    _list_projects_response,
+    _create_project_response,
+    _bulk_project_response,
+    _csv_import_sign_check,
 )
 
 api_v1 = Blueprint('api_v1', __name__, url_prefix='/api/v1')
@@ -695,6 +699,29 @@ def bulk_set_transaction_category():
 # ---------------------------------------------------------------------------
 #  Custom categories (CRUD)
 # ---------------------------------------------------------------------------
+
+@api_v1.route('/projects', methods=['GET'])
+@require_api_auth
+def list_projects_v1():
+    """All projects with their net totals (same shape as the UI's /api/projects)."""
+    return _list_projects_response(g.api_user.id)
+
+
+@api_v1.route('/projects', methods=['POST'])
+@require_api_auth
+def create_project_v1():
+    """Create a project. Body: {"name": "Europe 2024", "color": "#2C6B4F" (optional)}.
+    409 when the name (case-insensitive) already exists."""
+    return _create_project_response(g.api_user.id, request.get_json() or {})
+
+
+@api_v1.route('/transactions/bulk-project', methods=['PATCH'])
+@require_api_auth
+def bulk_project_v1():
+    """Assign up to 500 transactions to a project, or clear it.
+    Body: {"transaction_ids": [1, 2], "project_id": 7 | null}."""
+    return _bulk_project_response(g.api_user.id, request.get_json() or {})
+
 
 @api_v1.route('/categories', methods=['GET'])
 @require_api_auth
@@ -1420,6 +1447,12 @@ def api_csv_import_execute():
         payments/refunds negative so stored rows follow the ExMint convention
         (money out negative); it is applied before dedup, so dedup keys and
         stored rows agree.  Any other value is rejected with a 400.
+      - sign_confirmed: bool (optional, default false).  Before writing, the
+        import compares the rows with the target accounts (opposite-sign
+        matches with existing rows, card payments stored as money out, a card
+        file that is mostly money in). When the file looks reversed it returns
+        409 with ``sign_check`` (reasons, suggested_amount_sign) and imports
+        nothing; resend with sign_confirmed=true to import anyway.
     """
     data = request.get_json(silent=True) or {}
     csv_text = data.get('csv_content', '')
@@ -1543,6 +1576,18 @@ def api_csv_import_execute():
             ).first()
             if target_credential is None:
                 return jsonify(error='new_account_credential_id does not belong to you'), 400
+
+    # Sign guard (before any write), same rule as the UI import: a file that
+    # would be stored reversed is refused unless the caller sets sign_confirmed.
+    if not data.get('sign_confirmed', False):
+        sign_check = _csv_import_sign_check(rows, header_to_field, amount_sign, default_account,
+                                            account_number_header, account_by_mask)
+        if sign_check:
+            return jsonify(
+                error='The amounts in this file look reversed for ExMint (money out must be negative, '
+                      'money in positive). Nothing was imported.',
+                sign_check=sign_check,
+            ), 409
 
     # Count-aware dedup state for this run (see core_views._CsvDedupTracker).
     dedup = _CsvDedupTracker()
