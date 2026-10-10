@@ -2999,6 +2999,12 @@ def get_transactions():
         query = _build_transactions_query(current_user.id, filter_options)
 
         total_count = query.count()
+        # Net sum of every row matching the filters (all pages), signed like the table.
+        # Summed over a subquery of ids so the override outer join can never double a row.
+        matching_ids = query.with_entities(Transaction.id).order_by(None).subquery()
+        total_amount = db.session.query(
+            func.coalesce(func.sum(Transaction.amount), Decimal('0.00'))
+        ).filter(Transaction.id.in_(db.session.query(matching_ids.c.id))).scalar()
 
         sort_mapping = {
             'date': Transaction.date,
@@ -3044,6 +3050,7 @@ def get_transactions():
             page=page,
             page_size=page_size,
             total_count=total_count,
+            total_amount=float(total_amount or 0),
             has_more=has_more,
             sort_key=sort_key,
             sort_desc=sort_desc,

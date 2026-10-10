@@ -187,6 +187,7 @@ const app = new Vue({
         transactionsPage: 1,
         transactionsPageSize: 200,
         transactionsTotal: 0,
+        transactionsTotalAmount: 0,
         hasMoreTransactions: false,
         searchDebounce: null,
         transactionsRequestToken: 0,
@@ -419,6 +420,16 @@ const app = new Vue({
         areAllDisplayedTransactionsSelected: function() {
             if (!this.displayedTransactions.length) return false;
             return this.displayedTransactions.every(t => this.selectedTransactionIds.indexOf(t.id) !== -1);
+        },
+        selectedTransactionsSubtotal: function() {
+            // The selection is cleared on every fetch, so selected rows are always on this page.
+            const selected = this.selectedTransactionIdSet;
+            return this.transactions.reduce((sum, t) => selected.has(t.id) ? sum + (Number(t.amount) || 0) : sum, 0);
+        },
+        transactionsListCurrency: function() {
+            // Totals use the rows' currency when the page has only one; mixed pages fall back to the default.
+            const codes = new Set(this.transactions.map(t => t.iso_currency_code).filter(Boolean));
+            return codes.size === 1 ? Array.from(codes)[0] : null;
         },
         selectedTransactionIdSet: function() {
             return new Set(this.selectedTransactionIds);
@@ -3352,6 +3363,7 @@ const app = new Vue({
             if (!this.selectedAccountIds.length) {
                 this.transactions = [];
                 this.transactionsTotal = 0;
+                this.transactionsTotalAmount = 0;
                 this.hasMoreTransactions = false;
                 if (!skipLoadingState && requestToken === this.transactionsRequestToken) {
                     this.loading = false;
@@ -3407,6 +3419,7 @@ const app = new Vue({
                 }
                 this.transactions = data.transactions || [];
                 this.transactionsTotal = data.total_count || 0;
+                this.transactionsTotalAmount = Number(data.total_amount) || 0;
                 this.hasMoreTransactions = Boolean(data.has_more);
                 if (this.transactionMenu.visible) {
                     const menuTransaction = this.transactionMenu.transaction;

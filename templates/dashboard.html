@@ -27,6 +27,7 @@
                 <template v-if="selectedTransactionIds.length">
                     <span class="bulk-action-count mr-3">
                         [[ selectedTransactionIds.length ]] selected
+                        · [[ formatCurrency(selectedTransactionsSubtotal, transactionsListCurrency) ]]
                     </span>
                     <div class="bulk-category-input-wrapper position-relative mr-2">
                         <input
@@ -324,6 +325,7 @@
                 <small class="text-muted">
                     <span v-if="transactionsTotal && selectedAccountIds.length">
                         Showing [[ showingRange.start ]]–[[ showingRange.end ]] of [[ transactionsTotal ]] transactions across [[ selectedAccountIds.length ]] account(s).
+                        Net total: <strong :class="{ 'text-danger': transactionsTotalAmount < 0 }">[[ formatCurrency(transactionsTotalAmount, transactionsListCurrency) ]]</strong>
                     </span>
                     <span v-else-if="!selectedAccountIds.length">
                         Select at least one account to display transactions.

@@ -3,6 +3,16 @@
 
 changelog = [
     {
+        "version": "1.13.0",
+        "date": "2026-10-10",
+        "changes": [
+            "Transactions list shows the net total of every transaction matching the current filters "
+            "(all pages, not just the one on screen), next to the transaction count",
+            "When transactions are selected, the toolbar shows the subtotal of the selected rows next to the "
+            "selected count"
+        ]
+    },
+    {
         "version": "1.12.0",
         "date": "2026-10-09",
         "changes": [
