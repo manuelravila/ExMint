@@ -3,6 +3,19 @@
 
 changelog = [
     {
+        "version": "1.14.0",
+        "date": "2026-10-10",
+        "changes": [
+            "CSV import checks the amount signs before saving anything. If the file would be stored reversed "
+            "(rows matching existing transactions with the opposite sign, card payments or refunds saved as money "
+            "out, or a card statement that is mostly money in), the import stops and offers to switch the sign "
+            "setting, or to import as chosen after a second confirmation. The machine API import does the same "
+            "and accepts sign_confirmed",
+            "Machine API: list and create projects (GET/POST /api/v1/projects) and assign transactions to a "
+            "project (PATCH /api/v1/transactions/bulk-project), with the same rules as the dashboard"
+        ]
+    },
+    {
         "version": "1.13.0",
         "date": "2026-10-10",
         "changes": [
