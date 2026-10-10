@@ -3980,20 +3980,17 @@ def _serialize_one_project(project):
     return _serialize_project(project, stats.get(project.id))
 
 
-@core.route('/api/projects', methods=['GET'])
-@login_required
-def list_projects():
-    projects = Project.query.filter_by(user_id=current_user.id).order_by(
+# The list / create / bulk-assign bodies are shared by the UI routes (session
+# user) and the machine API v1 routes (API-key user), so both behave the same.
+def _list_projects_response(user_id):
+    projects = Project.query.filter_by(user_id=user_id).order_by(
         func.lower(Project.name).asc(), Project.id.asc()
     ).all()
-    stats = _collect_project_totals(current_user.id, [p.id for p in projects])
+    stats = _collect_project_totals(user_id, [p.id for p in projects])
     return jsonify({'projects': [_serialize_project(p, stats.get(p.id)) for p in projects]})
 
 
-@core.route('/api/projects', methods=['POST'])
-@login_required
-def create_project():
-    payload = request.get_json() or {}
+def _create_project_response(user_id, payload):
     try:
         name = _validate_project_name(payload.get('name'))
     except ValueError as exc:
@@ -4004,10 +4001,10 @@ def create_project():
             color = _normalize_color(payload.get('color'))
         except ValueError as exc:
             return jsonify({'error': str(exc)}), 400
-    if _find_project_by_name(current_user.id, name):
+    if _find_project_by_name(user_id, name):
         return jsonify({'error': 'A project with this name already exists.'}), 409
 
-    project = Project(user_id=current_user.id, name=name, color=color)
+    project = Project(user_id=user_id, name=name, color=color)
     db.session.add(project)
     try:
         db.session.commit()
@@ -4015,6 +4012,18 @@ def create_project():
         db.session.rollback()
         return jsonify({'error': 'A project with this name already exists.'}), 409
     return jsonify({'project': _serialize_one_project(project)}), 201
+
+
+@core.route('/api/projects', methods=['GET'])
+@login_required
+def list_projects():
+    return _list_projects_response(current_user.id)
+
+
+@core.route('/api/projects', methods=['POST'])
+@login_required
+def create_project():
+    return _create_project_response(current_user.id, request.get_json() or {})
 
 
 @core.route('/api/projects/<int:project_id>', methods=['PUT'])
@@ -4090,11 +4099,8 @@ def set_custom_category_project(category_id):
     return jsonify({'category': _serialize_custom_category(category)})
 
 
-@core.route('/api/transactions/bulk-project', methods=['PATCH'])
-@login_required
-def bulk_update_transaction_project():
+def _bulk_project_response(user_id, payload):
     """Assign the given transactions to a project, or clear it (project_id null)."""
-    payload = request.get_json() or {}
     transaction_ids = payload.get('transaction_ids', [])
     project_id = payload.get('project_id')
 
@@ -4109,7 +4115,7 @@ def bulk_update_transaction_project():
             project_id = int(project_id)
         except (TypeError, ValueError):
             return jsonify({'error': 'project_id must be a number or null.'}), 400
-        project = Project.query.filter_by(id=project_id, user_id=current_user.id).first()
+        project = Project.query.filter_by(id=project_id, user_id=user_id).first()
         if not project:
             return jsonify({'error': 'Project not found.'}), 404
 
@@ -4119,7 +4125,7 @@ def bulk_update_transaction_project():
         joinedload(Transaction.custom_category)
     ).filter(
         Transaction.id.in_(transaction_ids),
-        Transaction.user_id == current_user.id
+        Transaction.user_id == user_id
     ).all()
     if len(transactions) != len(set(transaction_ids)):
         return jsonify({'error': 'One or more transactions not found.'}), 404
@@ -4130,6 +4136,12 @@ def bulk_update_transaction_project():
 
     override_map = _load_overrides([t.id for t in transactions])
     return jsonify({'transactions': [_serialize_transaction(t, override_map) for t in transactions]})
+
+
+@core.route('/api/transactions/bulk-project', methods=['PATCH'])
+@login_required
+def bulk_update_transaction_project():
+    return _bulk_project_response(current_user.id, request.get_json() or {})
 
 
 @core.route('/api/categories', methods=['GET'])

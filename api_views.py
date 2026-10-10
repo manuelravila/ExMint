@@ -75,6 +75,9 @@ from core_views import (
     DEFAULT_MANUAL_COLOR,
     _collect_spending_summary,
     _csv_import_analyze_payload,
+    _list_projects_response,
+    _create_project_response,
+    _bulk_project_response,
 )
 
 api_v1 = Blueprint('api_v1', __name__, url_prefix='/api/v1')
@@ -695,6 +698,29 @@ def bulk_set_transaction_category():
 # ---------------------------------------------------------------------------
 #  Custom categories (CRUD)
 # ---------------------------------------------------------------------------
+
+@api_v1.route('/projects', methods=['GET'])
+@require_api_auth
+def list_projects_v1():
+    """All projects with their net totals (same shape as the UI's /api/projects)."""
+    return _list_projects_response(g.api_user.id)
+
+
+@api_v1.route('/projects', methods=['POST'])
+@require_api_auth
+def create_project_v1():
+    """Create a project. Body: {"name": "Europe 2024", "color": "#2C6B4F" (optional)}.
+    409 when the name (case-insensitive) already exists."""
+    return _create_project_response(g.api_user.id, request.get_json() or {})
+
+
+@api_v1.route('/transactions/bulk-project', methods=['PATCH'])
+@require_api_auth
+def bulk_project_v1():
+    """Assign up to 500 transactions to a project, or clear it.
+    Body: {"transaction_ids": [1, 2], "project_id": 7 | null}."""
+    return _bulk_project_response(g.api_user.id, request.get_json() or {})
+
 
 @api_v1.route('/categories', methods=['GET'])
 @require_api_auth
