@@ -3,6 +3,14 @@
 
 changelog = [
     {
+        "version": "1.15.1",
+        "date": "2026-10-10",
+        "changes": [
+            "CSV import: \"+ New account in <institution>\" adds another account (for example a second card) to an "
+            "institution you created for CSV imports, and imports the file into it"
+        ]
+    },
+    {
         "version": "1.15.0",
         "date": "2026-10-10",
         "changes": [
