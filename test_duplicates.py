@@ -13,7 +13,8 @@ parent never removed).
 
 Part B is an opt-in live check against the DEV database (hard-aborts unless the
 configured database URI contains ``_dev_db``). With its own throw-away user,
-one connection with a primary card (more history) and a supplementary card:
+a primary card (more history) and a supplementary card that comes through a
+second connection to the same bank (the cardholder's own login):
 
 - mirror rows a day apart / differently formatted are found and the primary
   card's row is kept;
@@ -82,6 +83,9 @@ def part_a():
     check('3 days apart not paired', not any(5 in p for p in pairs))
     check('card vs chequing not paired', not any(7 in p for p in pairs))
     check('different bank not paired', not any(10 in p for p in pairs))
+    two_logins = [(txn(20, 5, d(2026, 4, 1), '-40.00', 'FRESHCO SCARBOROUGH'), 'scotiabank', 'credit'),
+                  (txn(21, 6, d(2026, 4, 2), '-40.00', 'Freshco SCARBOROUGH 020'), 'scotiabank', 'credit')]
+    check('same bank through two logins is paired', len(_pair_cross_account_rows(two_logins, set())) == 1)
     check('split parent is kept, not removed', (12, 11) in pairs, repr(pairs))
     check('exactly those pairs', len(pairs) == 3, repr(pairs))
     check('excluded ids are skipped', not _pair_cross_account_rows(rows, {1, 2, 3, 4, 11, 12}))
@@ -114,9 +118,15 @@ def part_b():
                           access_token=None, soft_disconnected=True, requires_update=False)
         db.session.add(cred)
         db.session.flush()
+        # The supplementary card comes through the cardholder's own login: a
+        # second connection to the same bank.
+        cred2 = Credential(user_id=user.id, item_id='item2-%s' % tag, institution_name=tag,
+                           access_token=None, soft_disconnected=True, requires_update=False)
+        db.session.add(cred2)
+        db.session.flush()
         primary = Account(status='Active', credential_id=cred.id, plaid_account_id='p-%s' % tag, name='Gold',
                           type='credit', subtype='credit card', mask='0283', is_enabled=True)
-        supp = Account(status='Active', credential_id=cred.id, plaid_account_id='s-%s' % tag, name='Gold',
+        supp = Account(status='Active', credential_id=cred2.id, plaid_account_id='s-%s' % tag, name='Gold',
                        type='credit', subtype='credit card', mask='2532', is_enabled=True)
         db.session.add_all([primary, supp])
         db.session.flush()
@@ -124,7 +134,7 @@ def part_b():
 
         def add(key, acct, day, amount, name, source='plaid'):
             pid = ('csv_' if source == 'csv' else 'plaid-') + uuid4().hex
-            t = Transaction(plaid_transaction_id=pid, user_id=user.id, credential_id=cred.id, account_id=acct.id,
+            t = Transaction(plaid_transaction_id=pid, user_id=user.id, credential_id=acct.credential_id, account_id=acct.id,
                             name=name, amount=Decimal(amount), date=datetime.date.fromisoformat(day),
                             iso_currency_code='CAD', pending=False)
             db.session.add(t)
@@ -142,7 +152,7 @@ def part_b():
         add('q1', primary, '2026-03-03', '-15.00', 'DOUBLE SYNC')
         add('q2', primary, '2026-03-03', '-15.00', 'DOUBLE SYNC')
         db.session.commit()
-        user_id, cred_id = user.id, cred.id
+        user_id, cred_id, cred2_id = user.id, cred.id, cred2.id
 
     client = app.test_client()
     with client.session_transaction() as sess:
@@ -176,8 +186,8 @@ def part_b():
     finally:
         with app.app_context():
             Transaction.query.filter_by(user_id=user_id).delete(synchronize_session=False)
-            Account.query.filter_by(credential_id=cred_id).delete(synchronize_session=False)
-            Credential.query.filter_by(id=cred_id).delete(synchronize_session=False)
+            Account.query.filter(Account.credential_id.in_([cred_id, cred2_id])).delete(synchronize_session=False)
+            Credential.query.filter(Credential.id.in_([cred_id, cred2_id])).delete(synchronize_session=False)
             User.query.filter_by(id=user_id).delete(synchronize_session=False)
             db.session.commit()
             left = Transaction.query.filter_by(user_id=user_id).count() + User.query.filter_by(id=user_id).count()

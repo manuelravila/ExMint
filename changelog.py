@@ -3,6 +3,14 @@
 
 changelog = [
     {
+        "version": "1.17.1",
+        "date": "2026-10-10",
+        "changes": [
+            "Duplicate finder: a supplementary card linked through the cardholder's own bank login (a second "
+            "connection to the same bank) is now recognised as the same charge as on the primary card"
+        ]
+    },
+    {
         "version": "1.17.0",
         "date": "2026-10-10",
         "changes": [

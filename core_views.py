@@ -5258,7 +5258,8 @@ def _find_duplicate_transaction_groups(user_id):
        and supplementary card, each with a distinct plaid_transaction_id.
 
     2b. **Cross-account, fuzzy** — the same charge on two accounts of one
-       connection with the same account type: same amount, dates at most one
+       bank (any of its connections, e.g. the cardholder's own login) with the
+       same account type: same amount, dates at most one
        day apart, descriptions alike. Catches a supplementary card mirrored on
        the primary card when the feeds format the text or date differently.
 
@@ -5466,7 +5467,7 @@ def _find_duplicate_transaction_groups(user_id):
 _DUPLICATE_REASONS = {
     'acct': 'Same account, date, amount and description',
     'cross': 'Same date, amount and description on two accounts',
-    'fuzzy': 'Same charge on two cards of one bank (description or date differs slightly)',
+    'fuzzy': 'Same charge on two cards of one bank (description or date differs slightly)',  # any connection
     'overlap': 'Same account, date and amount from both Plaid and a CSV import',
 }
 
@@ -5492,7 +5493,7 @@ def _names_look_alike(a, b):
 
 def _find_fuzzy_cross_account_pairs(user_id, exclude_ids):
     """Pairs ``(keep, duplicate)`` of one charge reported on two accounts of
-    the same institution with the same account type: same amount, dates at most
+    the same bank (any of its connections) with the same account type: same amount, dates at most
     one day apart and descriptions alike (``_names_look_alike``). Opposite-sign
     transfers never match (same amount required) and a chequing account is never
     paired with a card (same type required). The row of the account with more
@@ -5500,7 +5501,7 @@ def _find_fuzzy_cross_account_pairs(user_id, exclude_ids):
     Each row is used at most once; rows in ``exclude_ids`` are skipped.
     """
     rows = (Transaction.query
-            .options(joinedload(Transaction.account))
+            .options(joinedload(Transaction.account), joinedload(Transaction.credential))
             .join(Account, Transaction.account_id == Account.id)
             .filter(Transaction.user_id == user_id,
                     Transaction.is_removed.is_(False),
@@ -5508,14 +5509,19 @@ def _find_fuzzy_cross_account_pairs(user_id, exclude_ids):
                     Transaction.pending.is_(False))
             .order_by(Transaction.date.asc(), Transaction.id.asc())
             .all())
+    # Grouped by BANK, not by connection: a supplementary card is often linked
+    # through the cardholder's own login (another Credential of the same bank).
+    def bank(t):
+        name = (t.credential.institution_name if t.credential else '') or ''
+        return ' '.join(name.lower().split()) or 'credential-%s' % t.credential_id
     return _pair_cross_account_rows(
-        [(t, t.credential_id, t.account.type if t.account else None) for t in rows], exclude_ids)
+        [(t, bank(t), t.account.type if t.account else None) for t in rows], exclude_ids)
 
 
 def _pair_cross_account_rows(rows, exclude_ids):
     """Pure core of ``_find_fuzzy_cross_account_pairs``.
 
-    ``rows`` is a date-ordered list of ``(txn, credential_id, account_type)``
+    ``rows`` is a date-ordered list of ``(txn, bank_key, account_type)``
     where ``txn`` has ``id``, ``account_id``, ``date``, ``amount``, ``name`` and
     ``has_split_children``. Returns ``[(keep, duplicate), ...]``.
     """
