@@ -1811,3 +1811,13 @@ tr.budget-excluded-row .spending-category-link {
     .transactions-filter-bar .export-actions .btn-group { width: auto; margin-bottom: 0 !important; }
     .transactions-filter-bar .export-actions .clear-filters-btn { width: auto; white-space: nowrap; margin-left: 0.5rem; }
 }
+
+/* Own transaction description: the pencil shows on hover (always, faintly, on
+   touch screens); the bank's original sits underneath in small grey text. */
+.description-edit-btn { color: #a0aec0; opacity: 0; font-size: 0.75rem; transition: opacity 0.15s ease; }
+.transaction-description-cell:hover .description-edit-btn,
+.description-edit-btn:focus { opacity: 1; }
+@media (hover: none) { .description-edit-btn { opacity: 0.6; } }
+.original-description { font-size: 0.75rem; line-height: 1.2; margin-top: 0.1rem; }
+.original-description .btn-link { color: #a0aec0; font-size: 0.7rem; }
+.description-edit-input { min-width: 12rem; }

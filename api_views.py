@@ -81,6 +81,7 @@ from core_views import (
     _csv_import_sign_check,
     _csv_new_institution,
     _csv_new_account_in,
+    _set_custom_description,
 )
 
 api_v1 = Blueprint('api_v1', __name__, url_prefix='/api/v1')
@@ -552,6 +553,14 @@ def set_transaction_category(transaction_id):
         })
 
     return _with_schema_retry(handler)
+
+
+@api_v1.route('/transactions/<int:transaction_id>/description', methods=['PATCH'])
+@require_api_auth
+def set_transaction_description_v1(transaction_id):
+    """Set your own description: {"description": "..."}; null restores the bank's text.
+    The bank's description is kept (``original_name``) and rules keep matching it."""
+    return _set_custom_description(g.api_user.id, transaction_id, request.get_json() or {})
 
 
 @api_v1.route('/transactions/bulk-category', methods=['PATCH'])

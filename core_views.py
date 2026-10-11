@@ -415,6 +415,7 @@ def _build_transactions_query(user_id, filters):
         token = f"%{search_term}%"
         query = query.filter(or_(
             Transaction.name.ilike(token),
+            func.coalesce(Transaction.custom_name, '').ilike(token),
             Transaction.merchant_name.ilike(token),
             Transaction.category.ilike(token),
             func.coalesce(Transaction.payment_channel, '').ilike(token),
@@ -575,7 +576,11 @@ def _serialize_transaction(txn, override_map):
         'id': txn.id,
         'plaid_transaction_id': txn.plaid_transaction_id,
         'date': txn.date.isoformat() if txn.date else None,
-        'name': txn.name,
+        # ``name`` is what the user sees: their own description when they set one.
+        # The bank's text stays available as ``original_name``.
+        'name': txn.custom_name or txn.name,
+        'original_name': txn.name,
+        'custom_name': txn.custom_name,
         'amount': float(txn.amount) if txn.amount is not None else 0.0,
         'iso_currency_code': txn.iso_currency_code,
         'category': category_list,
@@ -2426,6 +2431,9 @@ def _persist_transactions_from_payload(user, credential, data, from_webhook=Fals
     }
 
     processed_plaid_ids = set()
+    # (posted transaction, pending plaid id): Plaid replaces a pending row with a
+    # new posted one; the user's edits are copied over once the posted row exists.
+    settled_from_pending = []
 
     transaction_ids = {
         payload.get('transaction_id')
@@ -2507,6 +2515,8 @@ def _persist_transactions_from_payload(user, credential, data, from_webhook=Fals
                     seen_by_user=False
                 )
                 db.session.add(transaction)
+                if payload.get('pending_transaction_id'):
+                    settled_from_pending.append((transaction, payload['pending_transaction_id']))
             else:
                 transaction.credential_id = credential.id
                 transaction.account_id = account.id
@@ -2570,7 +2580,32 @@ def _persist_transactions_from_payload(user, credential, data, from_webhook=Fals
             if action in counts:
                 counts[action] += 1
 
+    if settled_from_pending:
+        db.session.flush()
+        for posted, pending_plaid_id in settled_from_pending:
+            pending = Transaction.query.filter_by(plaid_transaction_id=pending_plaid_id,
+                                                  user_id=user.id).first()
+            if pending is not None and pending.id != posted.id:
+                _carry_over_user_edits(pending, posted)
+
     return counts
+
+
+def _carry_over_user_edits(pending, posted):
+    """Copy what the user set on a pending transaction to the posted row Plaid
+    replaced it with (``pending_transaction_id``): own description, manual
+    category and project. Anything already set on the posted row wins. Rule
+    categories need no copy (the rules run again on the posted row)."""
+    if pending.custom_name and not posted.custom_name:
+        posted.custom_name = pending.custom_name
+    if pending.project_id and not posted.project_id:
+        posted.project_id = pending.project_id
+    source = TransactionCategoryOverride.query.filter_by(transaction_id=pending.id).first()
+    if source is not None and source.custom_category_id is not None and \
+            TransactionCategoryOverride.query.filter_by(transaction_id=posted.id).first() is None:
+        db.session.add(TransactionCategoryOverride(transaction_id=posted.id,
+                                                   custom_category_id=source.custom_category_id))
+        posted.custom_category_id = None
 
 
 def _sync_credential_transactions(user, credential, from_webhook=False):
@@ -3012,7 +3047,7 @@ def get_transactions():
 
         sort_mapping = {
             'date': Transaction.date,
-            'name': Transaction.name,
+            'name': func.coalesce(Transaction.custom_name, Transaction.name),
             'amount': Transaction.amount
         }
         sort_column = sort_mapping.get(sort_key, Transaction.date)
@@ -3090,7 +3125,7 @@ def export_transactions():
 
         sort_mapping = {
             'date': Transaction.date,
-            'name': Transaction.name,
+            'name': func.coalesce(Transaction.custom_name, Transaction.name),
             'amount': Transaction.amount
         }
         sort_column = sort_mapping.get(filters['sort_key'], Transaction.date)
@@ -3537,6 +3572,33 @@ def update_transaction_category(transaction_id):
         return jsonify({'transaction': _serialize_transaction(txn, override_map)})
 
     return _with_schema_retry(handler)
+
+
+def _set_custom_description(user_id, transaction_id, payload):
+    """Set or clear (null / blank / same as the bank's) a transaction's own
+    description. The bank's ``name`` is never changed, so category rules and
+    duplicate checks keep working on it."""
+    txn = Transaction.query.filter_by(id=transaction_id, user_id=user_id).first()
+    if not txn:
+        return jsonify({'error': 'Transaction not found.'}), 404
+    if 'description' not in payload:
+        return jsonify({'error': 'description is required (use null to restore the original).'}), 400
+    raw = payload.get('description')
+    if raw is not None and not isinstance(raw, str):
+        return jsonify({'error': 'description must be text or null.'}), 400
+    text = ' '.join((raw or '').split())
+    if len(text) > 255:
+        return jsonify({'error': 'Description is too long (255 characters max).'}), 400
+    txn.custom_name = text if text and text != txn.name else None
+    db.session.commit()
+    return jsonify({'transaction': _serialize_transaction(txn, _load_overrides([txn.id]))})
+
+
+@core.route('/api/transactions/<int:transaction_id>/description', methods=['PATCH'])
+@login_required
+def set_transaction_description(transaction_id):
+    """Body: {"description": "Birthday present for Ana"} — or null to restore the bank's text."""
+    return _set_custom_description(current_user.id, transaction_id, request.get_json() or {})
 
 
 @core.route('/api/transactions/bulk-category', methods=['PATCH'])
@@ -5031,6 +5093,7 @@ def _export_transactions_to_csv(transactions):
     headers = [
         'Date',
         'Description',
+        'Bank Description',
         'Merchant',
         'Amount',
         'Currency',
@@ -5056,6 +5119,7 @@ def _export_transactions_to_csv(transactions):
         writer.writerow([
             txn.get('date') or '',
             txn.get('name') or '',
+            txn.get('original_name') or '',
             txn.get('merchant_name') or '',
             str(amount_decimal),
             txn.get('iso_currency_code') or '',
@@ -5079,6 +5143,7 @@ def _export_transactions_to_excel(transactions):
     headers = [
         'Date',
         'Description',
+        'Bank Description',
         'Merchant',
         'Amount',
         'Currency',
@@ -5102,6 +5167,7 @@ def _export_transactions_to_excel(transactions):
         worksheet.append([
             _coerce_transaction_date(txn.get('date')),
             txn.get('name') or '',
+            txn.get('original_name') or '',
             txn.get('merchant_name') or '',
             float(amount_decimal),
             txn.get('iso_currency_code') or '',
