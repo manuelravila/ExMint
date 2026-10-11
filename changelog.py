@@ -3,6 +3,14 @@
 
 changelog = [
     {
+        "version": "1.16.1",
+        "date": "2026-10-10",
+        "changes": [
+            "Transaction filters use as few rows as the screen allows: one row on a wide screen (dates, category, "
+            "project, amounts and the export/clear buttons side by side), wrapping only when they do not fit"
+        ]
+    },
+    {
         "version": "1.16.0",
         "date": "2026-10-10",
         "changes": [
