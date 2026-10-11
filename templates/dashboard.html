@@ -104,20 +104,20 @@
                     </div>
                 </div>
                 <button class="btn btn-primary btn-sm mr-2" @click="syncTransactions" :disabled="syncing">
-                    <span v-if="!syncing"><i class="fas fa-sync-alt"></i> Sync</span>
-                    <span v-else><i class="fas fa-sync fa-spin"></i> Syncing...</span>
+                    <span v-if="!syncing" title="Sync"><i class="fas fa-sync-alt"></i><span class="btn-label"> Sync</span></span>
+                    <span v-else><i class="fas fa-sync fa-spin"></i><span class="btn-label"> Syncing...</span></span>
                 </button>
                 <button id="link-button" class="btn btn-outline-secondary mr-2" @click="openPlaidLink">
-                    <i class="fas fa-university"></i> Connect
+                    <i class="fas fa-university"></i><span class="btn-label"> Connect</span>
                 </button>
                 <button class="btn btn-outline-secondary mr-2" @click="openCsvImport">
-                    <i class="fas fa-file-upload"></i> Upload
+                    <i class="fas fa-file-upload"></i><span class="btn-label"> Upload</span>
                 </button>
                 </template>
 
                 <div class="dropdown d-inline-block">
                     <button class="btn btn-outline-secondary dropdown-toggle" type="button" id="profileMenu" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-                        <i class="fas fa-user"></i> My Account
+                        <i class="fas fa-user"></i><span class="btn-label"> My Account</span>
                     </button>
                     <div class="dropdown-menu" aria-labelledby="profileMenu">
                         <a class="dropdown-item" href="#" data-toggle="modal" data-target="#profileModal">Edit Profile</a>
@@ -358,7 +358,13 @@
                 </div>
             </div>
             <div class="card shadow-sm transactions-card">
-                <div class="card-body transactions-filter-bar border-bottom">
+                <button type="button" class="btn btn-light btn-sm mobile-filters-toggle text-left"
+                        v-if="isPhoneView" @click="showMobileFilters = !showMobileFilters">
+                    <i class="fas fa-filter mr-1"></i> Filters
+                    <span v-if="hasActiveTransactionFilters" class="badge badge-primary ml-1">on</span>
+                    <i class="fas float-right mt-1" :class="showMobileFilters ? 'fa-chevron-up' : 'fa-chevron-down'"></i>
+                </button>
+                <div class="card-body transactions-filter-bar border-bottom" v-show="!isPhoneView || showMobileFilters">
                     <div class="form-row align-items-end">
                         <div class="form-group col-sm-6 col-lg-2 mb-2">
                             <label class="small text-muted text-uppercase font-weight-bold d-block mb-1" for="transactionsFilterStart">Start date</label>

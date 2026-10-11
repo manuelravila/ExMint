@@ -1714,3 +1714,84 @@ tr.budget-excluded-row .spending-category-link {
 .spending-header-budget,
 .spending-header-remainder,
 .bulk-action-count { white-space: nowrap; }
+
+/* ── Phones (< 576px) ─────────────────────────────────────────────────────
+   Desktop and tablet layouts are untouched; everything below only applies
+   to narrow screens. */
+.mobile-filters-toggle { display: none; }
+
+@media (max-width: 575.98px) {
+    /* Header: one compact row of icon buttons, search on its own row. */
+    header .navbar { padding: 0.4rem 0.75rem; flex-wrap: wrap; }
+    header .navbar-brand img { height: 26px !important; }
+    .header-action-bar { gap: 0.4rem; width: 100%; justify-content: flex-start; }
+    .header-action-bar > .dropdown { margin-left: auto; }
+    .header-action-bar .header-search { min-width: 0; width: 100%; margin: 0 0 0.25rem 0 !important; }
+    .header-action-bar .btn { padding: 0.35rem 0.6rem; margin-right: 0 !important; }
+    .header-action-bar .btn-label { display: none; }
+    .header-action-bar .bulk-action-count { width: 100%; margin: 0 !important; }
+
+    .pane-content { padding: 0.75rem; }
+    .card-body { padding: 0.75rem; }
+
+    /* Tabs: one row of compact pills that scrolls sideways if it must. */
+    .dashboard-tabs, .categories-tabs, .tab-switch {
+        display: flex;
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        max-width: 100%;
+        -webkit-overflow-scrolling: touch;
+    }
+    .dashboard-tab-btn, .categories-tab-btn, .tab-switch-btn {
+        white-space: nowrap;
+        padding: 0.4rem 0.65rem;
+        font-size: 0.9rem;
+        flex: 0 0 auto;
+    }
+
+    /* Transactions: filters fold behind a button; each row becomes a card:
+         [x] date ............... amount
+             description
+             account          category        */
+    .mobile-filters-toggle { display: block; width: 100%; border-radius: 0; border-bottom: 1px solid #e2e8f0; }
+    .transactions-table > table thead { display: none; }
+    .transactions-table > table,
+    .transactions-table > table tbody { display: block; }
+    .transactions-table > table tbody tr {
+        display: grid;
+        grid-template-columns: 2rem 1fr auto;
+        grid-template-areas:
+            "sel date amount"
+            "sel desc desc"
+            "sel acct cat";
+        column-gap: 0.4rem;
+        row-gap: 0.15rem;
+        padding: 0.55rem 0.6rem;
+        border-bottom: 1px solid #e2e8f0;
+    }
+    .transactions-table > table tbody tr > td {
+        border: none;
+        padding: 0;
+        background: transparent !important;
+    }
+    .transactions-table > table tbody tr > td[colspan] { grid-column: 1 / -1; }
+    .transactions-table > table tbody tr > td:nth-child(1) { grid-area: sel; align-self: center; }
+    .transactions-table > table tbody tr > td:nth-child(2) { grid-area: date; font-size: 0.8rem; color: #718096; }
+    .transactions-table > table tbody tr > td:nth-child(3) { grid-area: desc; font-weight: 600; word-break: break-word; }
+    .transactions-table > table tbody tr > td:nth-child(4) { display: none; }
+    .transactions-table > table tbody tr > td:nth-child(5) { grid-area: acct; font-size: 0.8rem; color: #718096; min-width: 0; }
+    .transactions-table > table tbody tr > td:nth-child(6) { grid-area: cat; justify-self: end; text-align: right; }
+    .transactions-table > table tbody tr > td:nth-child(7) { grid-area: amount; }
+    .transactions-table > table tbody tr > td:nth-child(5) > div {
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .transactions-table > table tbody tr > td:nth-child(5) > small { display: none; }
+    .dashboard-tab-btn > i, .categories-tab-btn > i, .tab-switch-btn > i { display: none; }
+
+    /* Categories: tabs on one row, the action button below them. */
+    .categories-header, .categories-controls { flex-wrap: wrap; gap: 0.5rem; }
+    .categories-controls .categories-tabs { margin-right: 0 !important; }
+
+    /* Wide report tables scroll inside their card instead of being clipped. */
+    .spending-card .table-responsive, .categories-table { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+}

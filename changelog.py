@@ -3,6 +3,16 @@
 
 changelog = [
     {
+        "version": "1.16.0",
+        "date": "2026-10-10",
+        "changes": [
+            "Phone layout: the header is one row of icon buttons under the search box; tabs are a single row of "
+            "compact pills; transactions are shown as cards (date and amount, description, account and "
+            "category) instead of a clipped table; the transaction filters fold behind a Filters button; wide "
+            "report tables scroll sideways inside their card. Tablet and desktop layouts are unchanged"
+        ]
+    },
+    {
         "version": "1.15.1",
         "date": "2026-10-10",
         "changes": [

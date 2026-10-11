@@ -297,6 +297,8 @@ const app = new Vue({
         reconcilingAccountId: null,
         reconcileValue: 0,
         isMobileView: false,
+        isPhoneView: false,
+        showMobileFilters: false,
         mobileCardCollapsed: {
             balances: false,
             spending: false
@@ -760,6 +762,8 @@ const app = new Vue({
                 }
             }
             this.isMobileView = isMobile;
+            // Phones (Bootstrap "sm" and below) get card rows and folded filters.
+            this.isPhoneView = window.innerWidth < 576;
             if (!isMobile) {
                 this.mobileSidebarVisible = false;
                 this.mobileCardCollapsed.balances = false;
