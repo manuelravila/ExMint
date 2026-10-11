@@ -3,6 +3,18 @@
 
 changelog = [
     {
+        "version": "1.18.0",
+        "date": "2026-10-10",
+        "changes": [
+            "A transaction can now be in several projects (for example \"83 Haslam Renovations\" and \"Benjamin "
+            "improvements\" at the same time). The toolbar's Project menu adds the selected transactions to a "
+            "project or removes them from one; the transactions list shows a tag for every project",
+            "A category can be linked to several projects: on the Categories page, add projects with \"+ project\" "
+            "and remove one with its ×. Every transaction of the category counts in each linked project",
+            "Existing project assignments and category links are kept as they were"
+        ]
+    },
+    {
         "version": "1.17.1",
         "date": "2026-10-10",
         "changes": [

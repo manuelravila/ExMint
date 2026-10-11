@@ -22,8 +22,8 @@ class CustomCategory(db.Model):
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
     budget_excluded = db.Column(db.Boolean, nullable=False, default=False)
-    # Optional: every transaction of this category counts in this project
-    # (a transaction assigned to a project by hand keeps its own project).
+    # Legacy (<= 1.17): single linked project. Superseded by the category_projects
+    # table (linked_projects); kept only so an older release can still run.
     project_id = db.Column(db.Integer, db.ForeignKey('projects.id', ondelete='SET NULL'), nullable=True, index=True)
 
     user = db.relationship('User', backref=db.backref('custom_categories', lazy=True))
@@ -35,9 +35,24 @@ class CustomCategory(db.Model):
         return f'<CustomCategory {self.name}>'
 
 
+# A transaction can be in several projects, and a category can be linked to
+# several projects (every transaction of the category then counts in each).
+transaction_projects = db.Table(
+    'transaction_projects',
+    db.Column('transaction_id', db.Integer, db.ForeignKey('transactions.id', ondelete='CASCADE'), primary_key=True),
+    db.Column('project_id', db.Integer, db.ForeignKey('projects.id', ondelete='CASCADE'), primary_key=True, index=True),
+)
+category_projects = db.Table(
+    'category_projects',
+    db.Column('category_id', db.Integer, db.ForeignKey('custom_categories.id', ondelete='CASCADE'), primary_key=True),
+    db.Column('project_id', db.Integer, db.ForeignKey('projects.id', ondelete='CASCADE'), primary_key=True, index=True),
+)
+
+
 class Project(db.Model):
     """A user-named pocket of transactions (e.g. "Trip to Colombia").
-    A transaction belongs to at most one project (transactions.project_id)."""
+    Membership: transactions added by hand (transaction_projects) plus every
+    transaction of a linked category (category_projects)."""
     __tablename__ = 'projects'
     __table_args__ = (db.UniqueConstraint('user_id', 'name', name='uq_projects_user_name'),)
 
@@ -51,7 +66,9 @@ class Project(db.Model):
     user = db.relationship('User', backref=db.backref('projects', lazy=True))
     transactions = db.relationship('Transaction', back_populates='project', lazy=True)
     categories = db.relationship('CustomCategory', backref=db.backref('project', lazy=True), lazy=True,
-                                 foreign_keys='CustomCategory.project_id')
+                                 foreign_keys='CustomCategory.project_id')  # legacy single link
+    linked_categories = db.relationship('CustomCategory', secondary=category_projects, lazy='selectin',
+                                        backref=db.backref('linked_projects', lazy='selectin'))
 
 
 class CategoryRule(db.Model):
@@ -158,11 +175,14 @@ class Transaction(db.Model):
     is_new = db.Column(db.Boolean, nullable=False, default=True)
     seen_by_user = db.Column(db.Boolean, nullable=False, default=False)
     last_seen_by_user = db.Column(db.DateTime, nullable=True)
+    # Legacy (<= 1.17): superseded by transaction_projects (``projects``).
     project_id = db.Column(db.Integer, db.ForeignKey('projects.id', ondelete='SET NULL'), nullable=True, index=True)
 
     credential = db.relationship('Credential', backref=db.backref('transactions', lazy=True))
     custom_category = db.relationship('CustomCategory', back_populates='transactions', lazy=True)
-    project = db.relationship('Project', back_populates='transactions', lazy=True)
+    project = db.relationship('Project', back_populates='transactions', lazy=True)  # legacy single project
+    projects = db.relationship('Project', secondary=transaction_projects, lazy='selectin',
+                               backref=db.backref('member_transactions', lazy='dynamic'))
     parent_transaction = db.relationship(
         'Transaction',
         remote_side=[id],

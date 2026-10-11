@@ -1380,16 +1380,18 @@ const app = new Vue({
                 alert(error.message || 'Failed to delete the project.');
             }
         },
-        setCategoryProject: async function(category, value) {
-            const projectId = value ? Number(value) : null;
-            const previous = category.project_id;
-            category.project_id = projectId;
+        projectById: function(id) {
+            return this.projects.find(p => p.id === id) || null;
+        },
+        setCategoryProjects: async function(category, projectIds) {
+            const previous = category.project_ids.slice();
+            category.project_ids = projectIds;
             category.saving = true;
             try {
                 const response = await fetch(`/api/custom-categories/${category.id}/project`, {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ project_id: projectId })
+                    body: JSON.stringify({ project_ids: projectIds })
                 });
                 const data = await response.json();
                 if (!response.ok) {
@@ -1400,7 +1402,7 @@ const app = new Vue({
                     this.fetchTransactions({ skipLoadingState: true });
                 }
             } catch (error) {
-                category.project_id = previous;
+                category.project_ids = previous;
                 alert(error.message || 'Failed to link the category.');
             } finally {
                 category.saving = false;
@@ -1410,11 +1412,10 @@ const app = new Vue({
             const byId = {};
             this.projects.forEach(project => { byId[project.id] = project; });
             this.transactions.forEach(txn => {
-                if (!txn.project_id) return;
-                const project = byId[txn.project_id];
-                txn.project_name = project ? project.name : null;
-                txn.project_color = project ? project.color : null;
-                if (!project) txn.project_id = null;
+                if (!Array.isArray(txn.projects)) return;
+                txn.projects = txn.projects
+                    .filter(p => byId[p.id])
+                    .map(p => Object.assign({}, p, { name: byId[p.id].name, color: byId[p.id].color }));
             });
         },
         projectTagStyle: function(color) {
@@ -1475,6 +1476,7 @@ const app = new Vue({
             if (!this.selectedTransactionIds.length || !this.bulkProjectValue) return;
 
             let projectId = null;
+            let action = 'add';
             if (this.bulkProjectValue === '__new__') {
                 const name = (prompt('New project name:') || '').trim();
                 if (!name) return;
@@ -1482,7 +1484,9 @@ const app = new Vue({
                 if (!created) return;
                 projectId = created.id;
             } else if (this.bulkProjectValue !== '__none__') {
-                projectId = Number(this.bulkProjectValue);
+                const parts = this.bulkProjectValue.split(':');
+                action = parts[0];
+                projectId = Number(parts[1]);
             }
 
             this.bulkProjectApplying = true;
@@ -1490,7 +1494,7 @@ const app = new Vue({
                 const response = await fetch('/api/transactions/bulk-project', {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ transaction_ids: this.selectedTransactionIds, project_id: projectId })
+                    body: JSON.stringify({ transaction_ids: this.selectedTransactionIds, project_id: projectId, action: action })
                 });
                 const data = await response.json();
                 if (!response.ok) {
@@ -2663,7 +2667,7 @@ const app = new Vue({
                 transaction_count: Number.isFinite(raw.transaction_count) ? raw.transaction_count : 0,
                 override_count: Number.isFinite(raw.override_count) ? raw.override_count : 0,
                 budget_excluded: raw.budget_excluded || false,
-                project_id: raw.project_id || null,
+                project_ids: Array.isArray(raw.project_ids) ? raw.project_ids.slice() : (raw.project_id ? [raw.project_id] : []),
                 isDirty: false,
                 isNew: !categoryId,
                 saving: false,
