@@ -3,6 +3,19 @@
 
 changelog = [
     {
+        "version": "1.17.0",
+        "date": "2026-10-10",
+        "changes": [
+            "Give any transaction your own description (double-click it, use the pencil, or right-click / "
+            "long-press and choose Edit description). The bank's description is kept and shown underneath; the "
+            "undo button restores it. Search finds either text, exports have both, and category rules keep "
+            "matching the bank's text",
+            "When a pending transaction settles, your description, manual category and project now move to the "
+            "settled transaction. Before, Plaid's settled copy replaced the pending one and a category set by hand "
+            "was lost (rule categories only looked kept because the rules ran again)"
+        ]
+    },
+    {
         "version": "1.16.1",
         "date": "2026-10-10",
         "changes": [

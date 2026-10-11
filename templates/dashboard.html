@@ -547,7 +547,28 @@
                                     >
                                 </td>
                                 <td :style="rowSelectionStyle(transaction.id)">[[ formatDate(transaction.date) ]]<span v-if="transaction.pending" class="badge badge-warning ml-2">Pending</span></td>
-                                <td :style="rowSelectionStyle(transaction.id)"><span v-if="transaction.is_new" class="badge badge-success mr-2">New</span>[[ transaction.name ]]<span v-if="transaction.project_id" class="badge project-tag ml-2" :style="projectTagStyle(transaction.project_color)" :title="transaction.project_source === 'category' ? `Project: ${transaction.project_name} (through its category)` : `Project: ${transaction.project_name}`"><i class="fas fa-folder mr-1"></i>[[ transaction.project_name ]]</span></td>
+                                <td :style="rowSelectionStyle(transaction.id)" class="transaction-description-cell" @dblclick.stop="startDescriptionEdit(transaction)">
+                                    <div v-if="editingDescriptionId === transaction.id" @click.stop>
+                                        <input
+                                            type="text"
+                                            class="form-control form-control-sm description-edit-input"
+                                            maxlength="255"
+                                            v-model="editingDescriptionValue"
+                                            :placeholder="transaction.original_name"
+                                            @keydown.enter.prevent="saveDescriptionEdit(transaction)"
+                                            @keydown.escape.prevent="cancelDescriptionEdit()"
+                                            @blur="saveDescriptionEdit(transaction)"
+                                        >
+                                        <small class="text-muted">Bank: [[ transaction.original_name ]] · Enter to save, Esc to cancel</small>
+                                    </div>
+                                    <template v-else>
+                                    <span v-if="transaction.is_new" class="badge badge-success mr-2">New</span>[[ transaction.name ]]<button type="button" class="btn btn-link btn-sm p-0 ml-1 description-edit-btn" title="Edit description" @click.stop="startDescriptionEdit(transaction)"><i class="fas fa-pen"></i></button><span v-if="transaction.project_id" class="badge project-tag ml-2" :style="projectTagStyle(transaction.project_color)" :title="transaction.project_source === 'category' ? `Project: ${transaction.project_name} (through its category)` : `Project: ${transaction.project_name}`"><i class="fas fa-folder mr-1"></i>[[ transaction.project_name ]]</span>
+                                    <div v-if="transaction.custom_name" class="small text-muted original-description" :title="'Description from the bank: ' + transaction.original_name">
+                                        Bank: [[ transaction.original_name ]]
+                                        <button type="button" class="btn btn-link btn-sm p-0 ml-1 align-baseline" title="Restore the bank's description" @click.stop="restoreDescription(transaction)"><i class="fas fa-undo"></i></button>
+                                    </div>
+                                    </template>
+                                </td>
                                 <td :style="rowSelectionStyle(transaction.id)">[[ transaction.merchant_name || '—' ]]</td>
                                 <td :style="rowSelectionStyle(transaction.id)">
                                     <div>[[ transaction.account_name ]] <span class="text-muted" v-if="transaction.account_mask">••[[ transaction.account_mask ]]</span></div>
@@ -639,6 +660,14 @@
                     >
                         <i class="fas fa-edit mr-2"></i>
                         Edit category
+                    </button>
+                    <button
+                        type="button"
+                        class="transaction-context-menu-item"
+                        @click="handleTransactionMenuEditDescription"
+                    >
+                        <i class="fas fa-pen mr-2"></i>
+                        Edit description
                     </button>
                 </div>
                 <div v-if="splitModal.visible">

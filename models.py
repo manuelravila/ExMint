@@ -138,6 +138,8 @@ class Transaction(db.Model):
     credential_id = db.Column(db.Integer, db.ForeignKey('credential.id'), nullable=False)
     account_id = db.Column(db.Integer, db.ForeignKey('account.id'), nullable=False)
     name = db.Column(db.String(255), nullable=False)
+    # What the user calls it (shown instead of ``name``); the bank's text stays in ``name``.
+    custom_name = db.Column(db.String(255), nullable=True)
     amount = db.Column(db.Numeric(14, 2), nullable=False)
     iso_currency_code = db.Column(db.String(10))
     category = db.Column(db.Text)

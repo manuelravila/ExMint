@@ -210,6 +210,9 @@ const app = new Vue({
             '#8338EC', '#FF006E', '#FFBF69', '#8AC926'
         ],
         editingTransactionCategoryId: null,
+        editingDescriptionId: null,
+        editingDescriptionValue: '',
+        savingDescription: false,
         editingTransactionCategoryValue: '',
         transactionCategoryBlurTimeout: null,
         selectedTransactionIds: [],
@@ -991,6 +994,73 @@ const app = new Vue({
             category._budgetDraft = null;
         },
 
+        startDescriptionEdit: function(transaction) {
+            if (!transaction || transaction.is_split_child) {
+                return;
+            }
+            this.editingDescriptionId = transaction.id;
+            this.editingDescriptionValue = transaction.custom_name || transaction.original_name || transaction.name || '';
+            this.$nextTick(() => {
+                const input = this.$el.querySelector('.description-edit-input');
+                if (input) {
+                    input.focus();
+                    input.select();
+                }
+            });
+        },
+        cancelDescriptionEdit: function() {
+            this.editingDescriptionId = null;
+            this.editingDescriptionValue = '';
+        },
+        applyTransactionUpdate: function(updated) {
+            if (!updated) {
+                return;
+            }
+            const idx = this.transactions.findIndex(t => t.id === updated.id);
+            if (idx !== -1) {
+                this.$set(this.transactions, idx, Object.assign({}, this.transactions[idx], updated));
+            }
+        },
+        saveDescriptionEdit: async function(transaction, valueOverride) {
+            if (this.editingDescriptionId !== transaction.id && valueOverride === undefined) {
+                return;
+            }
+            if (this.savingDescription) {
+                return;
+            }
+            const value = valueOverride !== undefined ? valueOverride : (this.editingDescriptionValue || '').trim();
+            const current = transaction.custom_name || '';
+            this.cancelDescriptionEdit();
+            const unchanged = value === null ? !current : (value === current || (!current && value === transaction.original_name));
+            if (unchanged) {
+                return;
+            }
+            this.savingDescription = true;
+            try {
+                const response = await fetch(`/api/transactions/${transaction.id}/description`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ description: value === '' ? null : value })
+                });
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok) {
+                    throw new Error(data.error || 'Could not save the description.');
+                }
+                this.applyTransactionUpdate(data.transaction);
+            } catch (error) {
+                window.alert(error.message);
+            } finally {
+                this.savingDescription = false;
+            }
+        },
+        restoreDescription: function(transaction) {
+            return this.saveDescriptionEdit(transaction, null);
+        },
+        handleTransactionMenuEditDescription: function() {
+            const transaction = this.transactionMenu.transaction;
+            this.closeTransactionMenu();
+            this.startDescriptionEdit(transaction);
+        },
         startTransactionCategoryEdit: function(transaction) {
             if (!transaction || transaction.savingCategory) {
                 return;
