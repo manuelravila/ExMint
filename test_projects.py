@@ -222,7 +222,7 @@ def part_b():
                     state['cat_ids'].append(c.id)
             children = Transaction.query.filter_by(parent_transaction_id=t4).all()
             before = {c.id: c.custom_category_id for c in children}
-            check('split children inherit the project', children and all(c.project_id == project['id'] for c in children))
+            check('split children inherit the project', children and all([p.id for p in c.projects] == [project['id']] for c in children))
             summary = apply_rules_to_transactions(state['user_id'], transaction_ids=ids + list(before))
             db.session.commit()
             check('the rule matched something (it is live)', summary['matched_transactions'] >= 1, repr(summary))
@@ -263,14 +263,52 @@ def part_b():
         check('linked row is not under "No project"', t5 not in {t['id'] for t in r.get_json()['transactions']})
         r = client.patch('/api/transactions/bulk-project', json={'transaction_ids': [t5], 'project_id': project['id']})
         listed = {p['id']: p for p in client.get('/api/projects').get_json()['projects']}
-        check('assigning by hand wins over the category link',
-              listed[pocket['id']]['transaction_count'] == 0 and r.get_json()['transactions'][0]['project_source'] == 'manual')
+        row = r.get_json()['transactions'][0]
+        check('a row can be in a hand-added project AND its category project',
+              listed[pocket['id']]['transaction_count'] == 1 and listed[project['id']]['transaction_count'] == 6
+              and [(p['id'], p['source']) for p in row['projects']] == [(project['id'], 'manual'), (pocket['id'], 'category')],
+              repr(row.get('projects')))
+        # --- several projects by hand: add / remove / set ---
+        r = client.post('/api/projects', json={'name': '%s Second' % tag})
+        second = r.get_json()['project']
+        state['project_ids'].append(second['id'])
+        r = client.patch('/api/transactions/bulk-project', json={'transaction_ids': [t1, t2], 'project_id': second['id']})
+        row = next(t for t in r.get_json()['transactions'] if t['id'] == t1)
+        check('add keeps the other project', sorted(p['id'] for p in row['projects']) == sorted([project['id'], second['id']]),
+              repr(row['projects']))
+        listed = {p['id']: p for p in client.get('/api/projects').get_json()['projects']}
+        check('both projects count the row', listed[second['id']]['transaction_count'] == 2 and listed[project['id']]['transaction_count'] == 6,
+              '%r %r' % (listed[second['id']]['transaction_count'], listed[project['id']]['transaction_count']))
+        got = {t['id'] for t in client.get('/api/transactions?project_id=%d&page_size=500' % second['id']).get_json()['transactions']}
+        check('filter by the second project', got == {t1, t2}, repr(got))
+        r = client.patch('/api/transactions/bulk-project', json={'transaction_ids': [t2], 'project_id': second['id'], 'action': 'remove'})
+        check('remove takes it out of that project only', [p['id'] for p in r.get_json()['transactions'][0]['projects']] == [project['id']])
+        r = client.patch('/api/transactions/bulk-project', json={'transaction_ids': [t1], 'project_id': second['id'], 'action': 'set'})
+        check('set makes it the only hand project', [p['id'] for p in r.get_json()['transactions'][0]['projects']] == [second['id']])
+        r = client.patch('/api/transactions/bulk-project', json={'transaction_ids': [t1], 'project_id': second['id'], 'action': 'bogus'})
+        check('unknown action → 400', r.status_code == 400)
+        client.patch('/api/transactions/bulk-project', json={'transaction_ids': [t1], 'project_id': project['id'], 'action': 'set'})
+        # --- a category linked to several projects ---
+        r = client.patch('/api/custom-categories/%d/project' % cat_b_id, json={'project_ids': [pocket['id'], second['id']]})
+        cat = r.get_json()['category']
+        check('category linked to two projects', r.status_code == 200 and sorted(cat['project_ids']) == sorted([pocket['id'], second['id']]),
+              r.get_data(as_text=True)[:200])
+        listed = {p['id']: p for p in client.get('/api/projects').get_json()['projects']}
+        # second: t1 was moved out ("set") and t2 removed, so only t5 via its category
+        check('its row counts in both linked projects', listed[pocket['id']]['transaction_count'] == 1
+              and listed[second['id']]['transaction_count'] == 1, repr((listed[pocket['id']]['transaction_count'], listed[second['id']]['transaction_count'])))
+        r = client.patch('/api/custom-categories/%d/project' % cat_b_id, json={'project_ids': 'x'})
+        check('project_ids must be a list → 400', r.status_code == 400)
+        client.patch('/api/custom-categories/%d/project' % cat_b_id, json={'project_ids': [pocket['id']]})
+        r = client.delete('/api/projects/%d' % second['id'])
+        check('deleting a project with members → 200', r.status_code == 200, r.get_data(as_text=True)[:200])
+        state['project_ids'].remove(second['id'])
         client.patch('/api/transactions/bulk-project', json={'transaction_ids': [t5], 'project_id': None})
         r = client.delete('/api/projects/%d' % pocket['id'])
         check('deleting the project unlinks the category', r.get_json().get('categories_unlinked') == 1, repr(r.get_json()))
         state['project_ids'].remove(pocket['id'])
         with app.app_context():
-            check('category survives, unlinked', CustomCategory.query.get(cat_b_id).project_id is None)
+            check('category survives, unlinked', CustomCategory.query.get(cat_b_id).linked_projects == [])
 
         # --- rename + delete ---
         r = client.put('/api/projects/%d' % project['id'], json={'name': '%s Renamed' % tag})
@@ -280,7 +318,7 @@ def part_b():
         check('delete → 200 and unassigns rows', r.status_code == 200 and body.get('unassigned', 0) >= 4, repr(body))
         with app.app_context():
             alive = Transaction.query.filter(Transaction.id.in_([t1, t2, t3])).all()
-            check('transactions survive the project delete', len(alive) == 3 and all(t.project_id is None for t in alive))
+            check('transactions survive the project delete', len(alive) == 3 and all(not t.projects for t in alive))
             check('project row gone', db.session.get(Project, project['id']) is None)
         state['project_ids'].remove(project['id'])
     finally:

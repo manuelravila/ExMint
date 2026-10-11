@@ -63,12 +63,19 @@
                         v-model="bulkProjectValue"
                         aria-label="Assign selected transactions to a project"
                     >
-                        <option value="">Assign project…</option>
-                        <option v-for="project in projects" :key="`bulk-project-${project.id}`" :value="String(project.id)">
-                            [[ project.name ]]
-                        </option>
-                        <option value="__new__">New project…</option>
-                        <option value="__none__">Remove from project</option>
+                        <option value="">Project…</option>
+                        <optgroup label="Add to">
+                            <option v-for="project in projects" :key="`bulk-project-${project.id}`" :value="'add:' + project.id">
+                                [[ project.name ]]
+                            </option>
+                            <option value="__new__">New project…</option>
+                        </optgroup>
+                        <optgroup label="Remove from" v-if="projects.length">
+                            <option v-for="project in projects" :key="`bulk-unproject-${project.id}`" :value="'remove:' + project.id">
+                                [[ project.name ]]
+                            </option>
+                            <option value="__none__">All projects (added by hand)</option>
+                        </optgroup>
                     </select>
                     <button
                         class="btn btn-sm btn-primary mr-2"
@@ -562,7 +569,7 @@
                                         <small class="text-muted">Bank: [[ transaction.original_name ]] · Enter to save, Esc to cancel</small>
                                     </div>
                                     <template v-else>
-                                    <span v-if="transaction.is_new" class="badge badge-success mr-2">New</span>[[ transaction.name ]]<button type="button" class="btn btn-link btn-sm p-0 ml-1 description-edit-btn" title="Edit description" @click.stop="startDescriptionEdit(transaction)"><i class="fas fa-pen"></i></button><span v-if="transaction.project_id" class="badge project-tag ml-2" :style="projectTagStyle(transaction.project_color)" :title="transaction.project_source === 'category' ? `Project: ${transaction.project_name} (through its category)` : `Project: ${transaction.project_name}`"><i class="fas fa-folder mr-1"></i>[[ transaction.project_name ]]</span>
+                                    <span v-if="transaction.is_new" class="badge badge-success mr-2">New</span>[[ transaction.name ]]<button type="button" class="btn btn-link btn-sm p-0 ml-1 description-edit-btn" title="Edit description" @click.stop="startDescriptionEdit(transaction)"><i class="fas fa-pen"></i></button><span v-for="p in (transaction.projects || [])" :key="`txn-${transaction.id}-p${p.id}`" class="badge project-tag ml-2" :style="projectTagStyle(p.color)" :title="p.source === 'category' ? `Project: ${p.name} (through its category)` : `Project: ${p.name}`"><i class="fas fa-folder mr-1"></i>[[ p.name ]]</span>
                                     <div v-if="transaction.custom_name" class="small text-muted original-description" :title="'Description from the bank: ' + transaction.original_name">
                                         Bank: [[ transaction.original_name ]]
                                         <button type="button" class="btn btn-link btn-sm p-0 ml-1 align-baseline" title="Restore the bank's description" @click.stop="restoreDescription(transaction)"><i class="fas fa-undo"></i></button>
@@ -1508,19 +1515,31 @@
                                         <td class="text-right">[[ category.transaction_count ]]</td>
                                         <td class="text-right">[[ category.override_count ]]</td>
                                         <td>
-                                            <select
-                                                v-if="category.id"
-                                                class="form-control form-control-sm category-project-select"
-                                                :value="category.project_id ? String(category.project_id) : ''"
-                                                :disabled="category.saving"
-                                                :aria-label="`Project for ${category.name}`"
-                                                @change="setCategoryProject(category, $event.target.value)"
-                                            >
-                                                <option value="">—</option>
-                                                <option v-for="project in projects" :key="`cat-project-${category.id}-${project.id}`" :value="String(project.id)">
-                                                    [[ project.name ]]
-                                                </option>
-                                            </select>
+                                            <div v-if="category.id" class="category-projects">
+                                                <span
+                                                    v-for="pid in category.project_ids"
+                                                    :key="`cat-${category.id}-proj-${pid}`"
+                                                    class="badge project-tag mr-1 mb-1"
+                                                    :style="projectTagStyle(projectById(pid) && projectById(pid).color)"
+                                                >
+                                                    [[ projectById(pid) ? projectById(pid).name : '…' ]]
+                                                    <button type="button" class="btn btn-link btn-sm p-0 ml-1 align-baseline" :disabled="category.saving"
+                                                            :title="`Unlink ${category.name} from this project`" @click="setCategoryProjects(category, category.project_ids.filter(x => x !== pid))">×</button>
+                                                </span>
+                                                <select
+                                                    v-if="projects.some(p => category.project_ids.indexOf(p.id) === -1)"
+                                                    class="form-control form-control-sm category-project-select"
+                                                    value=""
+                                                    :disabled="category.saving"
+                                                    :aria-label="`Link ${category.name} to a project`"
+                                                    @change="setCategoryProjects(category, category.project_ids.concat([Number($event.target.value)])); $event.target.value = ''"
+                                                >
+                                                    <option value="">+ project</option>
+                                                    <option v-for="project in projects.filter(p => category.project_ids.indexOf(p.id) === -1)" :key="`cat-project-${category.id}-${project.id}`" :value="String(project.id)">
+                                                        [[ project.name ]]
+                                                    </option>
+                                                </select>
+                                            </div>
                                         </td>
                                         <td class="text-right">
                                             <div class="btn-group btn-group-sm" role="group">

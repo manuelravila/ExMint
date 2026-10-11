@@ -13,6 +13,8 @@ from models import (
     MonthlyBudget,
     CsvImportTemplate,
     Project,
+    transaction_projects,
+    category_projects,
     get_app_setting,
     set_app_setting,
 )
@@ -462,7 +464,7 @@ def _build_transactions_query(user_id, filters):
     if project_param in ('none', '__none__', 'null'):
         linked = list(_category_project_map(user_id))
         effective = func.coalesce(override_alias.custom_category_id, Transaction.custom_category_id)
-        query = query.filter(Transaction.project_id.is_(None))
+        query = query.filter(~Transaction.id.in_(db.session.query(transaction_projects.c.transaction_id)))
         if linked:
             query = query.filter(or_(effective.is_(None), effective.notin_(linked)))
     elif project_param.isdigit():
@@ -609,21 +611,31 @@ def _serialize_transaction(txn, override_map):
 
 
 def _serialize_transaction_project(txn, override):
-    """The transaction's project: its own (assigned by hand), else the
-    project linked to its category (manual category first, then rule)."""
-    project, source = None, None
-    if txn.project_id and txn.project:
-        project, source = txn.project, 'manual'
-    else:
-        category = override.custom_category if override and override.custom_category else txn.custom_category
-        if category is not None and getattr(category, 'project_id', None) and category.project:
-            project, source = category.project, 'category'
+    """The transaction's projects: the ones it was added to by hand, then the
+    ones linked to its category (manual category first, then rule).
+    ``project_*`` repeat the first of them for older clients."""
+    entries, seen = [], set()
+    for project in sorted(txn.projects or [], key=lambda p: (p.name or '').lower()):
+        entries.append({'id': project.id, 'name': project.name, 'color': project.color, 'source': 'manual'})
+        seen.add(project.id)
+    category = override.custom_category if override and override.custom_category else txn.custom_category
+    if category is not None:
+        for project in sorted(getattr(category, 'linked_projects', None) or [], key=lambda p: (p.name or '').lower()):
+            if project.id not in seen:
+                entries.append({'id': project.id, 'name': project.name, 'color': project.color, 'source': 'category'})
+                seen.add(project.id)
+    first = entries[0] if entries else None
     return {
-        'project_id': project.id if project else None,
-        'project_name': project.name if project else None,
-        'project_color': project.color if project else None,
-        'project_source': source
+        'projects': entries,
+        'project_id': first['id'] if first else None,
+        'project_name': first['name'] if first else None,
+        'project_color': first['color'] if first else None,
+        'project_source': first['source'] if first else None
     }
+
+def _sorted_projects(category):
+    return sorted(getattr(category, 'linked_projects', None) or [], key=lambda p: (p.name or '').lower())
+
 
 _COLOR_RE = re.compile(r'^#([0-9a-fA-F]{6})$')
 
@@ -925,8 +937,11 @@ def _serialize_custom_category(category, extras=None):
         'created_at': category.created_at.isoformat() if category.created_at else None,
         'updated_at': category.updated_at.isoformat() if category.updated_at else None,
         'budget_excluded': getattr(category, 'budget_excluded', False),
-        'project_id': getattr(category, 'project_id', None),
-        'project_name': category.project.name if getattr(category, 'project_id', None) and category.project else None,
+        'project_ids': [p.id for p in _sorted_projects(category)],
+        'projects': [{'id': p.id, 'name': p.name, 'color': p.color} for p in _sorted_projects(category)],
+        # first linked project, for older clients
+        'project_id': next((p.id for p in _sorted_projects(category)), None),
+        'project_name': next((p.name for p in _sorted_projects(category)), None),
     }
     if extras:
         data.update(extras)
@@ -2034,8 +2049,8 @@ def _create_split_children(parent_txn, split_specs):
             parent_transaction_id=parent_txn.id,
             is_split_child=True,
             has_split_children=False,
-            project_id=parent_txn.project_id
         )
+        child.projects = list(parent_txn.projects or [])
 
         normalized_label = cleaned_label.lower()
         matching_category = label_map.get(normalized_label)
@@ -2598,8 +2613,9 @@ def _carry_over_user_edits(pending, posted):
     categories need no copy (the rules run again on the posted row)."""
     if pending.custom_name and not posted.custom_name:
         posted.custom_name = pending.custom_name
-    if pending.project_id and not posted.project_id:
-        posted.project_id = pending.project_id
+    for project in pending.projects or []:
+        if project not in posted.projects:
+            posted.projects.append(project)
     source = TransactionCategoryOverride.query.filter_by(transaction_id=pending.id).first()
     if source is not None and source.custom_category_id is not None and \
             TransactionCategoryOverride.query.filter_by(transaction_id=posted.id).first() is None:
@@ -3913,31 +3929,36 @@ def delete_custom_category(category_id):
 
 
 # ---------------------------------------------------------------------------
-# Projects: user-named pockets of transactions (one project per transaction)
+# Projects: user-named pockets of transactions. A transaction can be in several
+# projects (added by hand) and a category can be linked to several projects.
 # ---------------------------------------------------------------------------
 PROJECT_NAME_MAX = 120
 
 
 def _category_project_map(user_id):
-    """category id -> project id, for the user's categories linked to a project."""
-    return {
-        category_id: project_id
-        for category_id, project_id in CustomCategory.query.with_entities(
-            CustomCategory.id, CustomCategory.project_id
-        ).filter(CustomCategory.user_id == user_id, CustomCategory.project_id.isnot(None)).all()
-    }
+    """category id -> set of project ids, for the user's linked categories."""
+    out = {}
+    rows = db.session.query(category_projects.c.category_id, category_projects.c.project_id).join(
+        CustomCategory, CustomCategory.id == category_projects.c.category_id
+    ).filter(CustomCategory.user_id == user_id).all()
+    for category_id, project_id in rows:
+        out.setdefault(category_id, set()).add(project_id)
+    return out
 
 
 def _project_membership(user_id, project_ids, override_alias):
-    """SQL condition: the transaction belongs to one of ``project_ids``.
-    A project assigned by hand wins; otherwise the project linked to the
-    transaction's category (its manual category, else its rule category).
-    ``override_alias`` must be outer-joined on the transaction."""
-    linked = [cid for cid, pid in _category_project_map(user_id).items() if pid in project_ids]
-    condition = Transaction.project_id.in_(project_ids)
+    """SQL condition: the transaction belongs to at least one of
+    ``project_ids`` — added to it by hand, or through a category linked to it
+    (its manual category, else its rule category). ``override_alias`` must be
+    outer-joined on the transaction."""
+    wanted = set(project_ids)
+    condition = Transaction.id.in_(
+        db.session.query(transaction_projects.c.transaction_id).filter(
+            transaction_projects.c.project_id.in_(list(wanted))))
+    linked = [cid for cid, pids in _category_project_map(user_id).items() if pids & wanted]
     if linked:
         effective = func.coalesce(override_alias.custom_category_id, Transaction.custom_category_id)
-        condition = or_(condition, and_(Transaction.project_id.is_(None), effective.in_(linked)))
+        condition = or_(condition, effective.in_(linked))
     return condition
 
 
@@ -3966,16 +3987,27 @@ def _collect_project_totals(user_id, project_ids):
     stats = {pid: {'count': 0, 'total': Decimal('0'), 'years': {}} for pid in project_ids}
     if not project_ids:
         return stats
-    category_projects = _category_project_map(user_id)
+    category_map = _category_project_map(user_id)
     query, effective = _project_transactions_query(user_id, project_ids)
     rows = query.with_entities(
-        Transaction.project_id, effective, Transaction.date, Transaction.amount
+        Transaction.id, effective, Transaction.date, Transaction.amount
     ).all()
-    for own_project_id, category_id, txn_date, amount in rows:
-        project_id = own_project_id or category_projects.get(category_id)
-        entry = stats.get(project_id)
-        if entry is None or txn_date is None:
+    own = {}
+    txn_ids = [r[0] for r in rows]
+    for start in range(0, len(txn_ids), 1000):
+        for txn_id, project_id in db.session.query(
+                transaction_projects.c.transaction_id, transaction_projects.c.project_id).filter(
+                transaction_projects.c.transaction_id.in_(txn_ids[start:start + 1000])).all():
+            own.setdefault(txn_id, set()).add(project_id)
+    entries = []
+    for txn_id, category_id, txn_date, amount in rows:
+        if txn_date is None:
             continue
+        for project_id in own.get(txn_id, set()) | category_map.get(category_id, set()):
+            if project_id in stats:
+                entries.append((project_id, txn_date, amount))
+    for project_id, txn_date, amount in entries:
+        entry = stats[project_id]
         value = Decimal(amount or 0)
         entry['count'] += 1
         entry['total'] += value
@@ -4012,7 +4044,7 @@ def _serialize_project(project, stats=None):
         'color': project.color,
         'categories': [
             {'id': c.id, 'name': c.name, 'color': c.color}
-            for c in sorted(getattr(project, 'categories', None) or [], key=lambda c: (c.name or '').lower())
+            for c in sorted(getattr(project, 'linked_categories', None) or [], key=lambda c: (c.name or '').lower())
         ],
         'transaction_count': stats['count'],
         'total': float(stats['total']),
@@ -4130,14 +4162,17 @@ def delete_project(project_id):
     project = Project.query.filter_by(id=project_id, user_id=current_user.id).first()
     if not project:
         return jsonify({'error': 'Project not found.'}), 404
-    unassigned = Transaction.query.filter(
-        Transaction.user_id == current_user.id,
-        Transaction.project_id == project.id
-    ).update({Transaction.project_id: None}, synchronize_session=False)
-    unlinked = CustomCategory.query.filter(
-        CustomCategory.user_id == current_user.id,
-        CustomCategory.project_id == project.id
-    ).update({CustomCategory.project_id: None}, synchronize_session=False)
+    unassigned = db.session.execute(transaction_projects.delete().where(
+        transaction_projects.c.project_id == project.id)).rowcount
+    unlinked = db.session.execute(category_projects.delete().where(
+        category_projects.c.project_id == project.id)).rowcount
+    db.session.expire_all()  # the association rows are gone; reload, don't delete them twice
+    project = db.session.get(Project, project_id)
+    # legacy single-project columns
+    Transaction.query.filter(Transaction.user_id == current_user.id, Transaction.project_id == project.id
+                             ).update({Transaction.project_id: None}, synchronize_session=False)
+    CustomCategory.query.filter(CustomCategory.user_id == current_user.id, CustomCategory.project_id == project.id
+                                ).update({CustomCategory.project_id: None}, synchronize_session=False)
     db.session.delete(project)
     db.session.commit()
     return jsonify({'deleted': project_id, 'unassigned': int(unassigned or 0),
@@ -4147,28 +4182,42 @@ def delete_project(project_id):
 @core.route('/api/custom-categories/<int:category_id>/project', methods=['PATCH'])
 @login_required
 def set_custom_category_project(category_id):
-    """Link a category to a project ({project_id: id}) or unlink it (null).
-    A category belongs to at most one project."""
+    """Link a category to projects: {"project_ids": [1, 2]} sets the full list
+    ([] unlinks all). The older {"project_id": id | null} sets one or none.
+    Every transaction of the category then counts in each linked project."""
     category = CustomCategory.query.filter_by(id=category_id, user_id=current_user.id).first()
     if not category:
         return jsonify({'error': 'Custom category not found.'}), 404
-    project_id = (request.get_json() or {}).get('project_id')
-    if project_id is not None:
-        try:
-            project_id = int(project_id)
-        except (TypeError, ValueError):
-            return jsonify({'error': 'project_id must be a number or null.'}), 400
-        if not Project.query.filter_by(id=project_id, user_id=current_user.id).first():
-            return jsonify({'error': 'Project not found.'}), 404
-    category.project_id = project_id
+    payload = request.get_json() or {}
+    if 'project_ids' in payload:
+        raw_ids = payload.get('project_ids')
+        if not isinstance(raw_ids, list):
+            return jsonify({'error': 'project_ids must be a list.'}), 400
+    else:
+        raw_ids = [] if payload.get('project_id') is None else [payload.get('project_id')]
+    try:
+        wanted = {int(pid) for pid in raw_ids}
+    except (TypeError, ValueError):
+        return jsonify({'error': 'project ids must be numbers.'}), 400
+    projects = Project.query.filter(Project.user_id == current_user.id, Project.id.in_(wanted)).all() if wanted else []
+    if len(projects) != len(wanted):
+        return jsonify({'error': 'Project not found.'}), 404
+    category.linked_projects = projects
+    category.project_id = None  # legacy column no longer used
     db.session.commit()
     return jsonify({'category': _serialize_custom_category(category)})
 
 
 def _bulk_project_response(user_id, payload):
-    """Assign the given transactions to a project, or clear it (project_id null)."""
+    """Add the given transactions to a project (``action`` "add", the default),
+    take them out of it ("remove"), or make it their only project ("set").
+    ``project_id`` null takes them out of every project they were added to by
+    hand (category-linked projects follow the category)."""
     transaction_ids = payload.get('transaction_ids', [])
     project_id = payload.get('project_id')
+    action = (payload.get('action') or 'add').lower()
+    if action not in ('add', 'remove', 'set'):
+        return jsonify({'error': 'action must be add, remove or set.'}), 400
 
     if not transaction_ids or not isinstance(transaction_ids, list):
         return jsonify({'error': 'transaction_ids must be a non-empty list.'}), 400
@@ -4197,7 +4246,16 @@ def _bulk_project_response(user_id, payload):
         return jsonify({'error': 'One or more transactions not found.'}), 404
 
     for txn in transactions:
-        txn.project_id = project.id if project else None
+        if project is None:
+            txn.projects = []
+        elif action == 'set':
+            txn.projects = [project]
+        elif action == 'remove':
+            if project in txn.projects:
+                txn.projects.remove(project)
+        elif project not in txn.projects:
+            txn.projects.append(project)
+        txn.project_id = None  # legacy column no longer used
     db.session.commit()
 
     override_map = _load_overrides([t.id for t in transactions])

@@ -729,8 +729,9 @@ def create_project_v1():
 @api_v1.route('/transactions/bulk-project', methods=['PATCH'])
 @require_api_auth
 def bulk_project_v1():
-    """Assign up to 500 transactions to a project, or clear it.
-    Body: {"transaction_ids": [1, 2], "project_id": 7 | null}."""
+    """Add up to 500 transactions to a project, take them out, or clear them.
+    Body: {"transaction_ids": [1, 2], "project_id": 7 | null, "action": "add" | "remove" | "set"}.
+    A transaction can be in several projects; "add" (default) keeps the others."""
     return _bulk_project_response(g.api_user.id, request.get_json() or {})
 
 

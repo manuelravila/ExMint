@@ -93,7 +93,7 @@ def main():
         add('pending', 'UBER *PENDING', '-18.40', plaid_id=pending_plaid, pending=True, day='2026-03-05')
         pend = db.session.get(Transaction, ids['pending'])
         pend.custom_name = 'Ride to the airport'
-        pend.project_id = project.id
+        pend.projects = [project]
         db.session.add(TransactionCategoryOverride(transaction_id=pend.id, custom_category_id=cat.id))
         pending_plaid2 = 'pending-%s' % uuid4().hex
         add('pending2', 'CAFE *PENDING', '-4.00', plaid_id=pending_plaid2, pending=True, day='2026-03-06')
@@ -190,7 +190,7 @@ def main():
             check('pending row is removed', pend.is_removed)
             check('description carried to the posted row', posted.custom_name == 'Ride to the airport', repr(posted.custom_name))
             check('manual category carried', ov is not None and ov.custom_category_id == state['cat_id'])
-            check('project carried', posted.project_id == state['project_id'])
+            check('project carried', [p.id for p in posted.projects] == [state['project_id']])
             check('posted amount uses the ExMint sign', posted.amount == Decimal('-18.40'), repr(posted.amount))
             kept = Transaction.query.filter_by(plaid_transaction_id=posted_plaid2).one()
             check("posted row's own description is not overwritten", kept.custom_name == 'Kept on the posted row', repr(kept.custom_name))
