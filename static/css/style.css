@@ -1795,3 +1795,19 @@ tr.budget-excluded-row .spending-category-link {
     /* Wide report tables scroll inside their card instead of being clipped. */
     .spending-card .table-responsive, .categories-table { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 }
+
+/* Transaction filters flow on as few rows as the width allows: one row when
+   everything fits, wrapping only when it must (dates and amounts stay narrow,
+   the two dropdowns take the rest, export/clear buttons at the end). Phones
+   fold the filters away instead. */
+@media (min-width: 576px) {
+    .transactions-filter-bar .form-row { flex-wrap: wrap; }
+    .transactions-filter-bar .form-row > .form-group { max-width: none; width: auto; }
+    .transactions-filter-bar .form-row > .filter-date { flex: 1 0 140px; }
+    .transactions-filter-bar .form-row > .filter-select { flex: 3 0 165px; }
+    .transactions-filter-bar .form-row > .filter-amount { flex: 1 0 100px; }
+    .transactions-filter-bar .form-row > .form-group > label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .transactions-filter-bar .form-row > .export-actions { flex: 0 0 auto; width: auto; margin-left: auto; }
+    .transactions-filter-bar .export-actions .btn-group { width: auto; margin-bottom: 0 !important; }
+    .transactions-filter-bar .export-actions .clear-filters-btn { width: auto; white-space: nowrap; margin-left: 0.5rem; }
+}

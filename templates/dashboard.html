@@ -366,7 +366,7 @@
                 </button>
                 <div class="card-body transactions-filter-bar border-bottom" v-show="!isPhoneView || showMobileFilters">
                     <div class="form-row align-items-end">
-                        <div class="form-group col-sm-6 col-lg-2 mb-2">
+                        <div class="form-group col-sm-6 col-lg-2 mb-2 filter-date">
                             <label class="small text-muted text-uppercase font-weight-bold d-block mb-1" for="transactionsFilterStart">Start date</label>
                             <input
                                 type="date"
@@ -376,7 +376,7 @@
                                 @change="applyTransactionFilters"
                             >
                         </div>
-                        <div class="form-group col-sm-6 col-lg-2 mb-2">
+                        <div class="form-group col-sm-6 col-lg-2 mb-2 filter-date">
                             <label class="small text-muted text-uppercase font-weight-bold d-block mb-1" for="transactionsFilterEnd">End date</label>
                             <input
                                 type="date"
@@ -386,7 +386,7 @@
                                 @change="applyTransactionFilters"
                             >
                         </div>
-                        <div class="form-group col-sm-6 col-lg-3 mb-2">
+                        <div class="form-group col-sm-6 col-lg-3 mb-2 filter-select">
                             <label class="small text-muted text-uppercase font-weight-bold d-block mb-1" for="transactionsFilterCategory">Custom category</label>
                             <select
                                 id="transactionsFilterCategory"
@@ -405,7 +405,7 @@
                                 </option>
                             </select>
                         </div>
-                        <div class="form-group col-sm-6 col-lg-3 mb-2">
+                        <div class="form-group col-sm-6 col-lg-3 mb-2 filter-select">
                             <label class="small text-muted text-uppercase font-weight-bold d-block mb-1" for="transactionsFilterProject">Project</label>
                             <select
                                 id="transactionsFilterProject"
@@ -420,7 +420,7 @@
                                 </option>
                             </select>
                         </div>
-                        <div class="form-group col-sm-6 col-lg-2 mb-2">
+                        <div class="form-group col-sm-6 col-lg-2 mb-2 filter-amount">
                             <label class="small text-muted text-uppercase font-weight-bold d-block mb-1" for="transactionsFilterMin">Min amount</label>
                             <input
                                 type="number"
@@ -435,7 +435,7 @@
                                 @keyup.enter.prevent="applyTransactionFilters"
                             >
                         </div>
-                        <div class="form-group col-sm-6 col-lg-2 mb-2">
+                        <div class="form-group col-sm-6 col-lg-2 mb-2 filter-amount">
                             <label class="small text-muted text-uppercase font-weight-bold d-block mb-1" for="transactionsFilterMax">Max amount</label>
                             <input
                                 type="number"
