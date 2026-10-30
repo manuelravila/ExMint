@@ -4191,6 +4191,9 @@ const app = new Vue({
                     formData.append('mark_closed', 'true');
                 }
                 formData.append('amount_sign', this.csvImport.amountSign || 'as_is');
+                // Remember what this attempt confirmed: a file can trip both guards
+                // (sign first, then overlap), and the retry for one must keep the other.
+                const sentSignConfirmed = this.csvImport.signConfirmed;
                 if (this.csvImport.signConfirmed) {
                     formData.append('sign_confirmed', 'true');
                     this.csvImport.signConfirmed = false;  // one confirmed attempt only
@@ -4254,12 +4257,13 @@ const app = new Vue({
                         + ' (same account, same amount, dates within ' + check.tolerance_days + ' days):\n\n'
                         + lines + more + '\n\n'
                         + 'OK: import them anyway.\n'
-                        + 'Cancel: import the rest without these rows.')) {
+                        + 'Cancel: import nothing.')) {
                         this.csvImport.error = 'Import stopped: ' + check.count
                             + ' row(s) overlap existing transactions. Nothing was saved — re-import '
                             + 'and choose OK on this message if they really are separate transactions.';
                         return;
                     }
+                    this.csvImport.signConfirmed = sentSignConfirmed;
                     this.csvImport.duplicateConfirmed = true;
                     return await this.executeCsvImport();
                 }
