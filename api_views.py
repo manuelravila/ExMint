@@ -26,7 +26,9 @@ import secrets
 from uuid import uuid4
 import plaid
 from version import __version__ as VERSION
-from csv_import_routing import build_mask_index, resolve_row_account, unroutable_reason
+from csv_import_routing import (
+    build_mask_index, resolve_row_account, unroutable_reason, guard_category_mapping,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -79,6 +81,9 @@ from core_views import (
     _create_project_response,
     _bulk_project_response,
     _csv_import_sign_check,
+    _csv_duplicate_candidates,
+    _csv_duplicate_check_payload,
+    _CSV_DUPLICATE_WINDOW_DAYS,
     _csv_new_institution,
     _csv_new_account_in,
     _set_custom_description,
@@ -1557,7 +1562,8 @@ def api_csv_import_analyze():
     if not rows:
         return jsonify(error='CSV has no data rows'), 400
 
-    auto_mapping = _auto_detect_mapping(headers)
+    mapping_notes = []
+    auto_mapping = _auto_detect_mapping(headers, mapping_notes)
 
     header_hash = _compute_header_hash(headers)
     template = CsvImportTemplate.query.filter_by(
@@ -1569,10 +1575,14 @@ def api_csv_import_analyze():
         saved = json.loads(template.mappings)
         auto_mapping.update({h: saved.get(h) for h in headers if h in saved})
 
+    auto_mapping, extra_notes = guard_category_mapping(auto_mapping)
+    mapping_notes.extend(extra_notes)
+
     return jsonify(
         headers=headers,
         auto_mapping={k: v for k, v in auto_mapping.items() if k is not None},
         date_candidates=_csv_date_candidates(headers),
+        mapping_notes=mapping_notes,
         has_template=template is not None,
         template_label=template.label if template else None,
         preview=_preview_rows(rows[:5]),
@@ -1611,6 +1621,13 @@ def api_csv_import_execute():
         file that is mostly money in). When the file looks reversed it returns
         409 with ``sign_check`` (reasons, suggested_amount_sign) and imports
         nothing; resend with sign_confirmed=true to import anyway.
+      - duplicate_confirmed: bool (optional, default false).  Before writing, a
+        row that matches a row the target account already holds on the same
+        amount with its date within 3 days of the stored one (posted vs
+        transaction date) is reported: 409 with ``duplicate_check``
+        (tolerance_days, count, candidates) and nothing imported. Exact
+        re-imports are not listed — the normal dedup skips them silently.
+        Resend with duplicate_confirmed=true to import the overlapping rows.
       - mark_closed: bool (optional, default false).  Close every account this
         import creates: a cancelled card keeps its whole history but stops
         counting in the balances.
@@ -1681,9 +1698,11 @@ def api_csv_import_execute():
     if not rows:
         return jsonify(error='CSV has no data rows'), 400
 
-    header_to_field = mapping
+    # Same rule as the UI import: an account-describing column never feeds the
+    # category field, and the corrected mapping is what gets saved as a template.
+    header_to_field, mapping_notes = guard_category_mapping(mapping)
 
-    has_account_number_routing = any(f == 'account_number' for f in mapping.values())
+    has_account_number_routing = any(f == 'account_number' for f in header_to_field.values())
 
     # A bank Plaid cannot connect: create a CSV-only institution + account
     # (persisted only once the sign check below has passed).
@@ -1782,6 +1801,21 @@ def api_csv_import_execute():
                 error='The amounts in this file look reversed for ExMint (money out must be negative, '
                       'money in positive). Nothing was imported.',
                 sign_check=sign_check,
+            ), 409
+
+    # Duplicate guard (before any write), same rule as the UI import: rows that
+    # match rows the account already holds on amount and date are reported and
+    # nothing is written, unless the caller sets duplicate_confirmed.
+    if not data.get('duplicate_confirmed', False):
+        duplicates = _csv_duplicate_candidates(rows, header_to_field, amount_sign,
+                                               default_account, account_number_header,
+                                               account_by_mask)
+        if duplicates:
+            return jsonify(
+                error='Some rows in this file look like transactions you already have '
+                      '(same account, same amount, dates within %d days of each other). '
+                      'Nothing was imported.' % _CSV_DUPLICATE_WINDOW_DAYS,
+                duplicate_check=_csv_duplicate_check_payload(duplicates),
             ), 409
 
     if new_account is not None:

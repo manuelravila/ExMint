@@ -333,6 +333,7 @@ const app = new Vue({
             dateCandidates: [],
             amountSign: 'as_is',
             signConfirmed: false,
+            duplicateConfirmed: false,
             newInstitution: { name: '', accountName: '', type: 'credit_card', mask: '' },
             hasTemplate: false,
             templateLabel: '',
@@ -3995,6 +3996,7 @@ const app = new Vue({
             this.csvImport.dateCandidates = [];
             this.csvImport.amountSign = 'as_is';
             this.csvImport.signConfirmed = false;
+            this.csvImport.duplicateConfirmed = false;
             this.csvImport.hasTemplate = false;
             this.csvImport.templateLabel = '';
             this.csvImport.preview = [];
@@ -4193,6 +4195,10 @@ const app = new Vue({
                     formData.append('sign_confirmed', 'true');
                     this.csvImport.signConfirmed = false;  // one confirmed attempt only
                 }
+                if (this.csvImport.duplicateConfirmed) {
+                    formData.append('duplicate_confirmed', 'true');
+                    this.csvImport.duplicateConfirmed = false;  // one confirmed attempt only
+                }
                 if (this.csvImport.createMissingAccounts && this.csvImport.newAccountCredentialId) {
                     formData.append('new_account_credential_id', this.csvImport.newAccountCredentialId);
                 }
@@ -4228,6 +4234,33 @@ const app = new Vue({
                         return;
                     }
                     this.csvImport.signConfirmed = true;
+                    return await this.executeCsvImport();
+                }
+
+                if (resp.status === 409 && data && data.duplicate_check) {
+                    // The server found rows that look already stored and wrote
+                    // nothing: show each overlap, then import anyway on request
+                    // only.  Skipping them is the safe answer, so it is the default.
+                    const check = data.duplicate_check;
+                    const lines = (check.candidates || []).slice(0, 8).map(function(c) {
+                        return '• Row ' + c.row + ': ' + c.name + ' ' + c.amount + ' on ' + c.date
+                            + ' — you already have #' + c.matched.transaction_id + ' ('
+                            + c.matched.amount + ' on ' + c.matched.date + ', '
+                            + c.matched.gap_days + ' day(s) apart)';
+                    }).join('\n');
+                    const more = check.count > 8 ? '\n…and ' + (check.count - 8) + ' more.' : '';
+                    if (!window.confirm(
+                        'These ' + check.count + ' row(s) look like transactions you already have'
+                        + ' (same account, same amount, dates within ' + check.tolerance_days + ' days):\n\n'
+                        + lines + more + '\n\n'
+                        + 'OK: import them anyway.\n'
+                        + 'Cancel: import the rest without these rows.')) {
+                        this.csvImport.error = 'Import stopped: ' + check.count
+                            + ' row(s) overlap existing transactions. Nothing was saved — re-import '
+                            + 'and choose OK on this message if they really are separate transactions.';
+                        return;
+                    }
+                    this.csvImport.duplicateConfirmed = true;
                     return await this.executeCsvImport();
                 }
 

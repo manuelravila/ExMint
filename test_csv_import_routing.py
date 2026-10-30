@@ -274,7 +274,7 @@ def part_b():
 
     try:
         from app import app
-        from models import User, Account, Credential, Transaction, db
+        from models import User, Account, Credential, Transaction, AccountBalanceSnapshot, db
     except Exception as exc:  # pragma: no cover - environment dependent
         print('Part B: ABORT — could not import the Flask app: %r' % (exc,))
         return False
@@ -348,6 +348,11 @@ def part_b():
                 Transaction.query.filter_by(account_id=acct.id).delete(
                     synchronize_session=False
                 )
+                # The balance snapshots load through Account.balance_snapshots, and
+                # the ORM nulls account_id (NOT NULL) on them before the DB-level
+                # CASCADE can run, so they have to go first.
+                AccountBalanceSnapshot.query.filter_by(
+                    account_id=acct.id).delete(synchronize_session=False)
                 db.session.delete(acct)
             db.session.commit()
             return len(txns), len(accts)

@@ -50,6 +50,8 @@ from csv_import_routing import (
     to_comma_separated,
     synthesise_header,
     first_row_is_data,
+    guard_category_mapping,
+    match_duplicate_window,
 )
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from sqlalchemy.exc import OperationalError, IntegrityError
@@ -6177,10 +6179,14 @@ def _header_match_score(header, alias):
     return 0
 
 
-def _auto_detect_mapping(headers):
+def _auto_detect_mapping(headers, notes=None):
     """
     Given a list of CSV column headers (strings), attempt to auto-detect
     the best field mapping. Returns a dict: header -> field_name (or None).
+
+    ``notes``, when a list is passed, collects the sentences describing every
+    account-describing column the guard refused to map to ``category``, so an
+    analyze response can tell the user what it changed.
     """
     normalised = [_normalise_header(h) for h in headers]
     mapping = {}
@@ -6223,6 +6229,14 @@ def _auto_detect_mapping(headers):
         else:
             mapping[headers[idx]] = None  # unmapped
 
+    # An account-describing column must never land on ``category``. Pass 1 claims
+    # the exact alias, so a file with both "Account Type Description" and
+    # "Account Type" used to leave the second one to pass 2, where the bare
+    # ``type`` alias scored a head-noun match and stored account labels
+    # ("Chequing", "Royal Credit Line") as transaction categories.
+    mapping, guard_notes = guard_category_mapping(mapping)
+    if notes is not None:
+        notes.extend(guard_notes)
     return mapping
 
 
@@ -6546,6 +6560,47 @@ def _csv_account_type_from_text(text):
     return None, None
 
 
+def _csv_known_category_labels(user_id):
+    """``{lowered: stored spelling}`` of the user's own categories.
+
+    This is the list the category UI offers, so it is also the only set of names
+    a CSV category column is allowed to select. Built once per import.
+    """
+    labels = {}
+    for (name,) in db.session.query(CustomCategory.name).filter(
+            CustomCategory.user_id == user_id,
+            CustomCategory.name.isnot(None)).all():
+        cleaned = (name or '').strip()
+        if cleaned:
+            labels.setdefault(cleaned.lower(), cleaned)
+    return labels
+
+
+def _csv_resolve_category_text(raw_text, known_labels):
+    """Decide what one CSV category cell is allowed to become.
+
+    Returns ``(label_or_None, reason)``; ``reason`` is non-empty only when the
+    value was refused, and is written for the user to read.
+
+      * empty -> ``(None, '')`` — nothing to report;
+      * text that reads like a bank account type (``Chequing``, ``Royal Credit
+        Line``) is never a category for the purchase -> refused;
+      * text naming one of the user's own categories -> that category, spelled
+        as the user spells it;
+      * anything else -> refused: an import must not invent a category, and a
+        row without one is Uncategorized.
+    """
+    text = (raw_text or '').strip()
+    if not text:
+        return None, ''
+    if _csv_account_type_from_text(text)[0] is not None:
+        return None, ("'%s' is an account type, not a category" % text)
+    known = (known_labels or {}).get(text.lower())
+    if known:
+        return known, ''
+    return None, ("'%s' is not one of your categories" % text)
+
+
 def _csv_new_institution(user_id, institution_name, account_name, account_type, mask):
     """Build (unsaved) the Credential + Account for a bank Plaid cannot reach.
 
@@ -6642,6 +6697,136 @@ def _csv_import_sign_check(rows, header_to_field, amount_sign, default_account,
         result['amount_sign'] = amount_sign or 'as_is'
         result['suggested_amount_sign'] = 'as_is' if amount_sign == 'invert' else 'invert'
     return result
+
+
+# A bank CSV shows the transaction date while a synced row usually carries the
+# posted date, so the same purchase can sit a few days apart (BMO -153.68 on
+# 2026-10-09 against #6578 on 2026-10-07). Inside this window a row is treated
+# as the same purchase, not as a new one.
+_CSV_DUPLICATE_WINDOW_DAYS = 3
+
+
+def _take_exact_stored_row(free, day, amount, name):
+    """Remove and return the stored row the exact dedup would match, else None.
+
+    Mirrors the two exact passes of the import loop in the same order: first the
+    identical row (same account/date/amount/name), then a Plaid-synced row at the
+    same account/date/amount. Consuming it here is what keeps a plain re-import a
+    silent no-op instead of a question.
+    """
+    for index, txn in enumerate(free):
+        if txn.date == day and Decimal(txn.amount) == amount and (txn.name or '') == name:
+            return free.pop(index)
+    for index, txn in enumerate(free):
+        plaid_id = txn.plaid_transaction_id
+        if (txn.date == day and Decimal(txn.amount) == amount
+                and plaid_id and not plaid_id.startswith('csv_')):
+            return free.pop(index)
+    return None
+
+
+def _csv_duplicate_candidates(rows, header_to_field, amount_sign, default_account,
+                              account_number_header, account_by_mask,
+                              tolerance_days=_CSV_DUPLICATE_WINDOW_DAYS):
+    """Pre-import pass: file rows that look like rows the account already holds.
+
+    Rows are routed exactly as the import loop routes them, so each one is judged
+    against the account it would actually be written to. The rows the exact dedup
+    already handles are consumed first and never reported; what is left is matched
+    on same account, same amount and a date within ``tolerance_days`` in either
+    direction. Each stored row accounts for at most one candidate, so a file that
+    genuinely repeats a charge still gets the extra occurrence inserted.
+
+    Returns candidate dicts ordered by file position — empty when nothing looks
+    like a duplicate. Nothing is written by this pass.
+    """
+    default_key = None
+    if default_account is not None:
+        default_key = default_account.id if default_account.id else 'new'
+
+    by_account = {}
+    for row_idx, row in enumerate(rows):
+        parsed = _csv_parse_row(row, header_to_field)
+        if parsed['amount'] is None or parsed['date'] is None:
+            continue
+        account_id = default_key
+        if account_number_header:
+            raw = (row.get(account_number_header) or '').strip()
+            if raw:
+                account_id = resolve_row_account(raw, account_by_mask)
+        if not account_id:
+            continue
+        by_account.setdefault(account_id, []).append(
+            (row_idx, parsed['date'],
+             _apply_amount_sign(parsed['amount'], amount_sign),
+             parsed['name'] or 'Imported Transaction'))
+
+    candidates = []
+    for account_id, items in by_account.items():
+        if not isinstance(account_id, int):
+            # An account this import would create cannot already hold a row.
+            continue
+        lo = min(item[1] for item in items) - timedelta(days=tolerance_days)
+        hi = max(item[1] for item in items) + timedelta(days=tolerance_days)
+        stored = Transaction.query.filter(
+            Transaction.account_id == account_id,
+            Transaction.date >= lo,
+            Transaction.date <= hi,
+            Transaction.is_removed.is_(False),
+        ).order_by(Transaction.date, Transaction.id).all()
+        if not stored:
+            continue
+
+        account_name = stored[0].account.name if stored[0].account else None
+        free = list(stored)
+        near_rows = []
+        for entry in items:
+            if _take_exact_stored_row(free, entry[1], entry[2], entry[3]) is not None:
+                continue
+            near_rows.append(entry)
+
+        groups = {}
+        for entry in near_rows:
+            groups.setdefault(entry[2], []).append(entry)
+        for amount, group in groups.items():
+            pool = [t for t in free if Decimal(t.amount) == amount]
+            if not pool:
+                continue
+            by_id = {t.id: t for t in pool}
+            for row_idx, txn_id, gap in match_duplicate_window(
+                    [(g[0], g[1]) for g in group],
+                    [(t.id, t.date) for t in pool], tolerance_days):
+                row_entry = next(g for g in group if g[0] == row_idx)
+                txn = by_id[txn_id]
+                candidates.append({
+                    'row': row_idx + 2,
+                    'date': row_entry[1].isoformat(),
+                    'amount': str(amount),
+                    'name': row_entry[3],
+                    'account_id': account_id,
+                    'account_name': account_name,
+                    'matched': {
+                        'transaction_id': txn.id,
+                        'date': txn.date.isoformat(),
+                        'amount': str(Decimal(txn.amount)),
+                        'name': txn.name,
+                        'gap_days': gap,
+                    },
+                })
+
+    candidates.sort(key=lambda c: c['row'])
+    return candidates
+
+
+def _csv_duplicate_check_payload(candidates, tolerance_days=_CSV_DUPLICATE_WINDOW_DAYS):
+    """Response shape of the pre-import duplicate question (at most 20 listed)."""
+    listed = candidates[:20]
+    return {
+        'tolerance_days': tolerance_days,
+        'count': len(candidates),
+        'candidates': listed,
+        'truncated': len(candidates) > len(listed),
+    }
 
 
 def _csv_collect_routing_facts(rows, account_number_header, mask_index,
@@ -6789,7 +6974,8 @@ def _csv_import_analyze_payload(user_id):
         return jsonify(error='CSV has no data rows'), 400
 
     # Auto-detect mapping
-    auto_mapping = _auto_detect_mapping(headers)
+    mapping_notes = []
+    auto_mapping = _auto_detect_mapping(headers, mapping_notes)
 
     # Check for a saved template matching this header signature
     header_hash = _compute_header_hash(headers)
@@ -6803,10 +6989,16 @@ def _csv_import_analyze_payload(user_id):
         saved_mappings = json.loads(template.mappings)
         auto_mapping.update({h: saved_mappings.get(h) for h in headers if h in saved_mappings})
 
+    # The guard runs after the merge so a template saved before this rule existed
+    # cannot keep offering account labels as categories.
+    auto_mapping, extra_notes = guard_category_mapping(auto_mapping)
+    mapping_notes.extend(extra_notes)
+
     return jsonify(
         headers=[h for h in headers if h is not None],
         auto_mapping={k: v for k, v in auto_mapping.items() if k is not None},
         date_candidates=_csv_date_candidates(headers),
+        mapping_notes=mapping_notes,
         has_template=template is not None,
         template_label=template.label if template else None,
         preview=_preview_rows(rows[:5]),
@@ -6825,6 +7017,9 @@ def csv_import_analyze():
         column order. Unlike auto_mapping this does not apply the exclusive
         used-fields rule, so a file with both a transaction date and a posting
         date reports both; empty when no header looks like a date column.
+      - mapping_notes: one sentence per column whose mapping the server refused
+        to treat as a category (an account-describing column such as
+        "Account Type"); empty when nothing was changed
       - has_template: whether a saved template matches this header signature
       - template_label: the matched template's label, if any
       - preview: first 3 rows of data
@@ -6860,6 +7055,11 @@ def csv_import_execute():
       - sign_confirmed: str ('true'/'false', default false).  Without it a file
         that looks reversed (see _csv_sign_check) is refused with 409 and a
         ``sign_check`` payload before anything is written.
+      - duplicate_confirmed: str ('true'/'false', default false).  Without it a
+        file holding a row that matches a row the account already has on amount
+        and date (see _csv_duplicate_candidates) is refused with 409 and a
+        ``duplicate_check`` payload listing each overlap.  Exact re-imports are
+        not listed — they stay a silent no-op handled by the normal dedup.
       - mark_closed: str ('true'/'false', default false).  Close every account
         this import creates: a cancelled card keeps its whole history but stops
         counting in the balances.
@@ -6872,6 +7072,10 @@ def csv_import_execute():
       - errors: list of row-level errors
       - created_accounts: accounts auto-created for unrecognised numbers
       - accounts_need_type: accounts left without a type, for the user to name
+      - mapping_notes: columns the server refused to read as categories
+      - category_check: {'dropped': [{row, value, reason}], 'count': n} — the
+        category texts a row carried that were refused (an account label, or a
+        name the user does not have), so no category is ever invented
     """
     # Read fields from multipart form (not JSON — frontend sends FormData)
     account_id = request.form.get('account_id', type=int)
@@ -6971,6 +7175,12 @@ def csv_import_execute():
 
     # Build reverse field -> header lookup
     header_to_field = mapping  # header_name -> field_name
+    # An account-describing column never feeds the category field, whatever the
+    # user picked or an older saved template says. The corrected mapping is the
+    # one saved back as a template, so the file stops asking every time.
+    header_to_field, mapping_notes = guard_category_mapping(header_to_field)
+    known_categories = _csv_known_category_labels(current_user.id)
+    category_dropped = []
 
     inserted = 0
     skipped = 0
@@ -7038,6 +7248,22 @@ def csv_import_execute():
                 sign_check=sign_check,
             ), 409
 
+    # Duplicate guard (before any write): a row that matches a row the account
+    # already holds on amount and date is asked about, not inserted. Exact
+    # re-imports stay a silent no-op — only the near-miss overlap is reported.
+    # The frontend resubmits with duplicate_confirmed=true to insert anyway.
+    if request.form.get('duplicate_confirmed', 'false').lower() != 'true':
+        duplicates = _csv_duplicate_candidates(rows, header_to_field, amount_sign,
+                                               default_account, account_number_header,
+                                               account_by_mask)
+        if duplicates:
+            return jsonify(
+                error='Some rows in this file look like transactions you already have '
+                      '(same account, same amount, dates within %d days of each other). '
+                      'Nothing was imported.' % _CSV_DUPLICATE_WINDOW_DAYS,
+                duplicate_check=_csv_duplicate_check_payload(duplicates),
+            ), 409
+
     if new_account is not None:
         if new_credential is not None:
             db.session.add(new_credential)
@@ -7070,8 +7296,16 @@ def csv_import_execute():
             amount = parsed['amount']
             currency_code = parsed['currency']
             merchant_val = parsed['merchant']
-            category_val = parsed['category']
             account_type_val = parsed['account_type']
+            # A CSV category cell may only name a category the user already has.
+            # Anything else (an account label, or a word the user never created)
+            # is refused here so an import can never mint a category; the row
+            # stays Uncategorized and the value is reported back.
+            category_val, category_reason = _csv_resolve_category_text(parsed['category'],
+                                                                       known_categories)
+            if category_reason:
+                category_dropped.append({'row': row_idx + 2, 'value': parsed['category'].strip(),
+                                         'reason': category_reason})
 
             # Apply the bank's sign convention BEFORE dedup/insert so the dedup
             # keys and the stored row both use the ExMint convention.
@@ -7238,7 +7472,7 @@ def csv_import_execute():
         ).first()
 
         if existing_template:
-            existing_template.mappings = json.dumps(mapping)
+            existing_template.mappings = json.dumps(header_to_field)
             existing_template.header_names = json.dumps(reader.fieldnames)
             existing_template.header_hash = header_hash
             existing_template.bank_name = (default_account.credential.institution_name if default_account and default_account.credential else None)
@@ -7248,7 +7482,7 @@ def csv_import_execute():
                 user_id=current_user.id,
                 header_hash=header_hash,
                 header_names=json.dumps(reader.fieldnames),
-                mappings=json.dumps(mapping),
+                mappings=json.dumps(header_to_field),
                 bank_name=(default_account.credential.institution_name if default_account and default_account.credential else None),
             )
             db.session.add(tmpl)
@@ -7293,6 +7527,8 @@ def csv_import_execute():
         total_errors=len(errors),
         created_accounts=created_accounts,
         accounts_need_type=accounts_need_type,
+        mapping_notes=mapping_notes,
+        category_check={'dropped': category_dropped[:20], 'count': len(category_dropped)},
     )
 
 

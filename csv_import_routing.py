@@ -259,6 +259,117 @@ def to_comma_separated(content, delimiter) -> str:
     return out.getvalue()
 
 
+# Headers that describe *the account a row belongs to* rather than the row
+# itself.  Bank exports carry several of them ("Account Type", "Account Type
+# Description", "Account Name", "Product Name") and their values are account
+# labels — "Chequing", "Royal Credit Line" — never a category for the purchase.
+# A header counts as account-type-ish only when it names an account *and* a
+# type-ish noun; a bare "Type" or "Transaction Type" stays a category column,
+# and anything that mentions the transaction itself ("Card Transaction Type")
+# is about the row, not the account.
+_ACCOUNTISH_HEADER_WORDS = frozenset({
+    'account', 'accounts', 'acct', 'accts', 'accountno', 'acctno', 'subaccount',
+    'institution', 'bank', 'card', 'cards', 'product', 'products', 'loan',
+    'mortgage', 'chequing', 'checking', 'savings',
+})
+_TYPEISH_HEADER_WORDS = frozenset({
+    'type', 'types', 'kind', 'class', 'classification', 'category',
+    'description', 'descriptions', 'desc', 'name', 'names', 'label', 'labels',
+    'style', 'group', 'groups',
+})
+_TRANSACTION_HEADER_WORDS = frozenset({
+    'transaction', 'transactions', 'txn', 'txns', 'trans', 'purchase',
+    'purchases', 'payment', 'payments', 'deposit', 'deposits', 'withdrawal',
+    'withdrawals', 'activity', 'memo', 'narrative', 'entry', 'entries',
+    'amount', 'date', 'number', '#',
+})
+
+
+def looks_like_account_type_header(header) -> bool:
+    """True when a column header describes the account, not the transaction.
+
+    ``'Account Type'``, ``'Account Type Description'``, ``'Account Name'`` and
+    ``'Product Name'`` are True; ``'Type'``, ``'Transaction Type'``,
+    ``'Card Transaction Type'``, ``'Account Number'`` and ``'Description'`` are
+    False. Used to keep account labels out of the category field.
+    """
+    words = set(_default_normalise_header(header).split())
+    if not words:
+        return False
+    if words & _TRANSACTION_HEADER_WORDS:
+        return False
+    return bool(words & _ACCOUNTISH_HEADER_WORDS) and bool(words & _TYPEISH_HEADER_WORDS)
+
+
+def guard_category_mapping(header_to_field):
+    """Neutralise account-type columns that are mapped to the category field.
+
+    Returns ``(mapping, notes)``. A header that describes the account may never
+    feed ``category``: it is moved to ``account_type`` while that field is still
+    free, otherwise unmapped (skipped). ``notes`` names every changed column so
+    the caller can tell the user instead of guessing on their behalf. The input
+    dict is not mutated.
+    """
+    mapping = dict(header_to_field or {})
+    used = {f for f in mapping.values() if f}
+    notes = []
+    for header in list(mapping):
+        if mapping[header] != 'category':
+            continue
+        if not looks_like_account_type_header(header):
+            continue
+        if 'account_type' not in used:
+            mapping[header] = 'account_type'
+            used.add('account_type')
+            notes.append(
+                "'%s' names the account, not the transaction: it was mapped to "
+                "Account Type instead of Category." % header)
+        else:
+            mapping[header] = None
+            notes.append(
+                "'%s' names the account, not the transaction: its values are not "
+                "used as categories." % header)
+    return mapping, notes
+
+
+def match_duplicate_window(csv_items, existing_items, tolerance_days=3):
+    """Pair file rows with already-stored rows whose dates are close.
+
+    ``csv_items`` and ``existing_items`` are iterables of ``(key, date)``. Each
+    side is used at most once, so N stored rows flag at most N file rows and the
+    remaining occurrences stay genuine extras — the same count-aware rule the
+    exact-row dedup applies to identical rows.
+
+    Pairs are taken nearest-first (smallest gap, then file order) so the closest
+    stored row is the one reported. Keys in ``csv_items`` must be unique and are
+    usually the 0-based row index. Returns
+    ``[(csv_key, existing_key, gap_days), ...]`` in file order.
+    """
+    csv_list = [(key, day) for key, day in csv_items if day is not None]
+    existing_list = [(key, day) for key, day in existing_items if day is not None]
+    if not csv_list or not existing_list:
+        return []
+    file_order = {key: order for order, (key, _) in enumerate(csv_list)}
+
+    candidates = []
+    for csv_key, csv_day in csv_list:
+        for existing_key, existing_day in existing_list:
+            gap = abs((csv_day - existing_day).days)
+            if gap <= tolerance_days:
+                candidates.append((gap, file_order[csv_key], csv_key, existing_key))
+    candidates.sort()
+
+    used_csv, used_existing, paired = set(), set(), []
+    for gap, _, csv_key, existing_key in candidates:
+        if csv_key in used_csv or existing_key in used_existing:
+            continue
+        used_csv.add(csv_key)
+        used_existing.add(existing_key)
+        paired.append((csv_key, existing_key, gap))
+    paired.sort(key=lambda pair: file_order[pair[0]])
+    return paired
+
+
 def first_row_is_data(content, is_date, is_amount) -> bool:
     """True when the first non-empty row is a transaction, not a header: one
     cell parses as a date (``is_date``) and another as an amount
