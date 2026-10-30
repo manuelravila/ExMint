@@ -324,6 +324,8 @@ const app = new Vue({
             accountId: null,
             createMissingAccounts: false,
             newAccountCredentialId: '',
+            markClosed: false,
+            accountTypes: {},
             headers: [],
             sampleValues: {},
             autoMapping: {},
@@ -3362,25 +3364,33 @@ const app = new Vue({
                 if (!r.ok) throw new Error('Failed to reconcile');
                 return r.json();
             }).then(function(data) {
-                // Update the local balance to match what was set.
-                // Apply the same sign convention as _collect_balances_summary:
-                // credit/loan accounts are displayed negated (debt = negative).
-                var displayBalance = data.last_known_balance;
-                var t = account.type ? account.type.toLowerCase() : '';
-                var st = account.subtype ? account.subtype.toLowerCase() : '';
-                if (t === 'credit') {
-                    displayBalance = -displayBalance;
-                } else if (t === 'loan' || st === 'line_of_credit' || st === 'revolving') {
-                    // Loan accounts are also debt — negate for display
-                    displayBalance = -displayBalance;
-                }
+                // The server already knows the sign and which source now wins,
+                // so take its computed balance instead of re-deriving either here.
                 account.last_known_balance = data.last_known_balance;
                 account.balance_date = data.balance_date;
-                account.balance = displayBalance;
+                account.balance = data.balance;
+                account.balance_source = data.balance_source;
+                account.balance_as_of = data.balance_as_of;
             }).catch(function(err) {
                 console.error('Error reconciling:', err);
             });
             this.reconcileValue = 0;
+        },
+        toggleAccountClosed: function(account) {
+            // A cancelled card is retired, not deleted: it keeps every
+            // transaction and stops counting in the totals.
+            fetch('/api/accounts/' + account.id + '/closed', {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({closed: !account.is_closed})
+            }).then((r) => {
+                if (!r.ok) throw new Error('Failed to update the account');
+                return r.json();
+            }).then(() => {
+                return this.fetchDashboard({ suppressLoader: true, force: true });
+            }).catch(function(err) {
+                console.error('Error updating account status:', err);
+            });
         },
         fetchBanks: async function() {
             try {
@@ -3976,6 +3986,8 @@ const app = new Vue({
             this.csvImport.newInstitution = { name: '', accountName: '', type: 'credit_card', mask: '' };
             this.csvImport.createMissingAccounts = false;
             this.csvImport.newAccountCredentialId = '';
+            this.csvImport.markClosed = false;
+            this.csvImport.accountTypes = {};
             this.csvImport.headers = [];
             this.csvImport.sampleValues = {};
             this.csvImport.autoMapping = {};
@@ -3992,6 +4004,34 @@ const app = new Vue({
             this.csvImport.saveTemplate = false;
             this.csvImport.newTemplateLabel = '';
             this.csvImport.dragOver = false;
+        },
+
+        saveCsvAccountTypes: async function() {
+            // An import could not tell what a newly created account is, and the
+            // type decides whether it reads as an asset or as debt: ask the owner.
+            const pending = (this.csvImport.result && this.csvImport.result.accounts_need_type) || [];
+            const missing = pending.filter((acct) => !this.csvImport.accountTypes[acct.id]);
+            if (missing.length) {
+                this.csvImport.toastMessage = 'Pick a type for every account listed.';
+                this.csvImport.showToast = true;
+                var self3 = this;
+                setTimeout(function() { self3.csvImport.showToast = false; }, 6000);
+                return;
+            }
+            for (const acct of pending) {
+                const resp = await fetch('/api/accounts/' + acct.id + '/type', {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({account_type: this.csvImport.accountTypes[acct.id]}),
+                });
+                if (!resp.ok) {
+                    console.error('Could not set the type for account', acct.id, await resp.text());
+                    continue;
+                }
+                const entry = this.csvImport.result.accounts_need_type.find((a) => a.id === acct.id);
+                if (entry) entry.solved = true;
+            }
+            await this.fetchDashboard({ suppressLoader: true, force: true });
         },
 
         handleCsvFileSelect: function(event) {
@@ -4145,6 +4185,9 @@ const app = new Vue({
                 formData.append('mapping', JSON.stringify(this.csvImport.userMapping));
                 formData.append('save_template', this.csvImport.saveTemplate ? 'true' : 'false');
                 formData.append('create_missing_accounts', this.csvImport.createMissingAccounts ? 'true' : 'false');
+                if (this.csvImport.markClosed) {
+                    formData.append('mark_closed', 'true');
+                }
                 formData.append('amount_sign', this.csvImport.amountSign || 'as_is');
                 if (this.csvImport.signConfirmed) {
                     formData.append('sign_confirmed', 'true');

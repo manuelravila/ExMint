@@ -18,7 +18,7 @@ from models import (
 )
 from sqlalchemy import func, asc, desc
 from sqlalchemy.orm import joinedload, aliased
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from datetime import datetime, date
 import json
 import hashlib
@@ -82,6 +82,12 @@ from core_views import (
     _csv_new_institution,
     _csv_new_account_in,
     _set_custom_description,
+    _account_balance_payload,
+    _anchor_account_balance,
+    _parse_anchor_date,
+    _record_balance_snapshots,
+    _ACCOUNT_TYPES,
+    _CSV_NEW_ACCOUNT_TYPES,
 )
 
 api_v1 = Blueprint('api_v1', __name__, url_prefix='/api/v1')
@@ -1175,27 +1181,161 @@ def list_accounts():
             pass
     query = query.filter(Account.status.in_(['Active', 'Revoked']))
 
-    accounts = [
-        {
+    accounts = []
+    for a in query.all():
+        accounts.append({
             'id': a.id,
             'name': a.name,
             'mask': a.mask,
             'type': a.type,
             'subtype': a.subtype,
             'is_enabled': a.is_enabled,
+            'is_closed': bool(a.is_closed),
             'credential_id': a.credential_id,
             'institution_name': a.credential.institution_name if a.credential else None,
             'status': a.status,
-            # Balance fields — live from Plaid or computed from transactions
+            # Balance the dashboard actually shows (balance, balance_source,
+            # balance_as_of): anchor + transactions since the anchor, else the
+            # cached Plaid balance, else the transaction sum.
+            **_account_balance_payload(a),
+            # Raw stored figures, unchanged from before for existing callers.
             'current_balance': float(a.current_balance) if a.current_balance is not None else None,
             'available_balance': float(a.available_balance) if a.available_balance is not None else None,
             'last_known_balance': float(a.last_known_balance) if a.last_known_balance is not None else None,
-            # Computed balance for accounts without live Plaid data: sum of transactions
+            'balance_date': a.balance_date.isoformat() if a.balance_date else None,
+            # Sum of all transactions — the old fallback, kept for compatibility.
             '_computed_balance': _get_account_computed_balance(user_id, a.id),
-        }
-        for a in query.all()
-    ]
+        })
     return jsonify({'accounts': accounts})
+
+
+@api_v1.route('/accounts/<int:account_id>/anchor', methods=['PUT'])
+@require_api_auth
+def anchor_account(account_id):
+    """Set the anchor an account's balance is computed from.
+
+    Body: ``balance`` (required) — the bank's own figure for the account on that
+    date: the amount owed for a credit/loan account (either sign), or the signed
+    amount held for every other account.  ``as_of`` (optional, YYYY-MM-DD,
+    default today) back-dates it, which is how a script records a statement
+    balance from an older date.  Every later balance is this anchor plus the
+    transactions after it.
+    """
+    data = request.get_json(silent=True) or {}
+    if data.get('balance') is None:
+        return jsonify({'error': 'balance is required'}), 400
+    try:
+        balance = Decimal(str(data['balance'])).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    except (ValueError, TypeError, InvalidOperation):
+        return jsonify({'error': 'Invalid balance value'}), 400
+    if abs(balance) > Decimal('999999999999') / Decimal('100'):
+        return jsonify(error='Balance value too large'), 400
+    try:
+        as_of = _parse_anchor_date(data.get('as_of'))
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+
+    account = Account.query.join(Credential).filter(
+        Account.id == account_id,
+        Credential.user_id == g.api_user.id
+    ).first()
+    if not account:
+        return jsonify({'error': 'Account not found'}), 404
+
+    _anchor_account_balance(account, balance, as_of)
+    db.session.commit()
+    payload = _account_balance_payload(account)
+    _record_balance_snapshots(g.api_user.id)
+
+    return jsonify({
+        'account_id': account.id,
+        'last_known_balance': float(account.last_known_balance),
+        'balance_date': account.balance_date.isoformat(),
+        **payload,
+    })
+
+
+@api_v1.route('/accounts/<int:account_id>/closed', methods=['PUT'])
+@require_api_auth
+def set_account_closed(account_id):
+    """Close a cancelled account (kept out of totals, history intact) or reopen it.
+
+    Body: ``closed`` (true/false).
+    """
+    data = request.get_json(silent=True) or {}
+    closed = data.get('closed')
+    if not isinstance(closed, bool):
+        return jsonify({'error': 'closed (true/false) is required'}), 400
+
+    account = Account.query.join(Credential).filter(
+        Account.id == account_id,
+        Credential.user_id == g.api_user.id
+    ).first()
+    if not account:
+        return jsonify({'error': 'Account not found'}), 404
+
+    account.is_closed = closed
+    db.session.commit()
+    _record_balance_snapshots(g.api_user.id)
+    return jsonify({'account_id': account.id, 'is_closed': account.is_closed})
+
+
+@api_v1.route('/accounts/<int:account_id>/type', methods=['PUT'])
+@require_api_auth
+def set_account_type(account_id):
+    """Give an account its type when an import could not work it out.
+
+    Body: ``account_type`` — a CSV key (credit_card, chequing, savings,
+    line_of_credit) or Plaid's own type (depository, credit, loan, investment,
+    other) with an optional ``subtype``.  The type decides whether the account
+    reads as an asset or as debt.
+    """
+    data = request.get_json(silent=True) or {}
+    requested = (data.get('account_type') or data.get('type') or '').strip()
+    if requested in _CSV_NEW_ACCOUNT_TYPES:
+        acct_type, subtype = _CSV_NEW_ACCOUNT_TYPES[requested]
+        subtype = data.get('subtype') or subtype
+    elif requested.lower() in _ACCOUNT_TYPES:
+        acct_type, subtype = requested.lower(), (data.get('subtype') or None)
+    else:
+        return jsonify(error='account_type must be one of: %s'
+                       % ', '.join(sorted(list(_CSV_NEW_ACCOUNT_TYPES) + sorted(_ACCOUNT_TYPES)))), 400
+
+    account = Account.query.join(Credential).filter(
+        Account.id == account_id,
+        Credential.user_id == g.api_user.id
+    ).first()
+    if not account:
+        return jsonify({'error': 'Account not found'}), 404
+
+    account.type = acct_type
+    account.subtype = subtype
+    db.session.commit()
+    payload = _account_balance_payload(account)
+    _record_balance_snapshots(g.api_user.id)
+    return jsonify({'account_id': account.id, 'type': acct_type, 'subtype': subtype, **payload})
+
+
+@api_v1.route('/accounts/<int:account_id>/balance', methods=['GET'])
+@require_api_auth
+def account_balance(account_id):
+    """One account's computed balance, its source and the date it is valid as of."""
+    account = Account.query.join(Credential).filter(
+        Account.id == account_id,
+        Credential.user_id == g.api_user.id
+    ).first()
+    if not account:
+        return jsonify({'error': 'Account not found'}), 404
+    payload = _account_balance_payload(account)
+    return jsonify({
+        'account_id': account.id,
+        'name': account.name,
+        'mask': account.mask,
+        'type': account.type,
+        'subtype': account.subtype,
+        'is_closed': bool(account.is_closed),
+        **payload,
+    })
 
 
 @api_v1.route('/institutions', methods=['GET'])
@@ -1471,6 +1611,13 @@ def api_csv_import_execute():
         file that is mostly money in). When the file looks reversed it returns
         409 with ``sign_check`` (reasons, suggested_amount_sign) and imports
         nothing; resend with sign_confirmed=true to import anyway.
+      - mark_closed: bool (optional, default false).  Close every account this
+        import creates: a cancelled card keeps its whole history but stops
+        counting in the balances.
+
+    Returns ``accounts_need_type`` for accounts the file could not identify: the
+    type decides whether an account reads as an asset or as debt, so it is asked
+    for (``PUT /api/v1/accounts/<id>/type``) rather than guessed.
     """
     data = request.get_json(silent=True) or {}
     csv_text = data.get('csv_content', '')
@@ -1483,6 +1630,11 @@ def api_csv_import_execute():
         create_missing_accounts = create_missing_accounts.lower() == 'true'
     else:
         create_missing_accounts = bool(create_missing_accounts)
+    mark_closed = data.get('mark_closed', False)
+    if isinstance(mark_closed, str):
+        mark_closed = mark_closed.lower() == 'true'
+    else:
+        mark_closed = bool(mark_closed)
     new_account_credential_id = data.get('new_account_credential_id')
     if new_account_credential_id is not None:
         try:
@@ -1577,6 +1729,10 @@ def api_csv_import_execute():
     updated = 0
     errors = []
     created_accounts = []
+    # Accounts this import wrote rows into, plus the account-type text their rows
+    # carried: the pool an unidentified account is asked about afterwards.
+    touched_account_ids = set()
+    account_type_texts = {}
 
     credential_id = default_account.credential_id if default_account else None
 
@@ -1757,6 +1913,10 @@ def api_csv_import_execute():
                 errors.append({'row': row_idx + 2, 'error': 'target account is not linked to a bank connection; row skipped'})
                 continue
 
+            touched_account_ids.add(target_account_id)
+            if account_type_val and target_account_id not in account_type_texts:
+                account_type_texts[target_account_id] = account_type_val
+
             # Count-aware dedup.  K1 (account, date, amount, name) is matched at
             # most as many times as rows already exist, so a second genuinely
             # separate identical charge is inserted rather than silently dropped.
@@ -1853,12 +2013,38 @@ def api_csv_import_execute():
             ))
         db.session.commit()
 
+    accounts_need_type = []
+    if touched_account_ids:
+        for acct in Account.query.filter(Account.id.in_(touched_account_ids)).all():
+            if acct.type:
+                continue
+            accounts_need_type.append({
+                'id': acct.id,
+                'name': acct.name,
+                'mask': acct.mask,
+                'institution_name': acct.credential.institution_name if acct.credential else None,
+                'csv_account_type': account_type_texts.get(acct.id),
+            })
+
+    if mark_closed and created_accounts:
+        new_ids = [c.get('id') or c.get('account_id') for c in created_accounts]
+        new_ids = [i for i in new_ids if i]
+        if new_ids:
+            Account.query.filter(Account.id.in_(new_ids)).update(
+                {'is_closed': True}, synchronize_session=False)
+            db.session.commit()
+            for entry in created_accounts:
+                entry['is_closed'] = True
+
+    _record_balance_snapshots(g.api_user.id)
+
     return jsonify(
         inserted=inserted,
         skipped=skipped,
         updated=updated,
         errors=errors,
         created_accounts=created_accounts,
+        accounts_need_type=accounts_need_type,
     )
 
 

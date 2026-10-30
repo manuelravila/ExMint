@@ -972,15 +972,26 @@
                                                             v-for="account in institution.accounts"
                                                             :key="account.id"
                                                             class="tree-account"
+                                                            :class="{ 'tree-account-closed': account.is_closed }"
                                                         >
-                                                            <span class="tree-label">[[ account.name ]] <small v-if="account.mask" class="text-muted">([[ account.mask ]])</small></span>
-                                                            <span v-if="reconcilingAccountId !== account.id" class="tree-value" :class="{ 'text-danger': account.balance < 0, 'reconcilable': account.is_reconcilable }" @click="startReconcile(account)">
-                                                                [[ formatDashboardAmount(account.balance, null) ]]
-                                                                <small v-if="account.is_reconcilable" class="text-muted reconcilable-hint">✎</small>
-                                                            </span>
-                                                            <span v-else class="tree-value">
-                                                                $<input type="number" step="0.01" min="-999999999" class="reconcile-input" v-model.number="reconcileValue" @keydown.enter="saveReconcile(account)" @keydown.escape="cancelReconcile" @blur="saveReconcile(account)" ref="reconcileInput" autofocus>
-                                                            </span>
+                                                            <div class="tree-account-row">
+                                                                <span class="tree-label">[[ account.name ]] <small v-if="account.mask" class="text-muted">([[ account.mask ]])</small><small v-if="account.is_closed" class="badge badge-secondary ml-1" style="font-size: 0.6rem;">Closed</small></span>
+                                                                <span v-if="reconcilingAccountId !== account.id" class="tree-value" :class="{ 'text-danger': account.balance < 0, 'reconcilable': account.is_reconcilable }" @click="startReconcile(account)" title="Enter the balance the bank reports; every later balance is that figure plus the transactions after it">
+                                                                    [[ formatDashboardAmount(account.balance, null) ]]
+                                                                    <small v-if="account.is_reconcilable" class="text-muted reconcilable-hint">✎</small>
+                                                                </span>
+                                                                <span v-else class="tree-value">
+                                                                    $<input type="number" step="0.01" min="-999999999" class="reconcile-input" v-model.number="reconcileValue" @keydown.enter="saveReconcile(account)" @keydown.escape="cancelReconcile" @blur="saveReconcile(account)" ref="reconcileInput" autofocus>
+                                                                </span>
+                                                            </div>
+                                                            <div class="tree-account-meta">
+                                                                <span>as of [[ formatDate(account.balance_as_of) ]] · [[ account.balance_source ]]</span>
+                                                                <span class="tree-account-actions">
+                                                                    <button type="button" class="btn btn-link tree-account-action" @click="toggleAccountClosed(account)" :title="account.is_closed ? 'Reopen this account' : 'Mark closed (a cancelled card): its history stays, it stops counting in the totals'">
+                                                                        <i :class="account.is_closed ? 'fas fa-undo' : 'fas fa-ban'"></i>
+                                                                    </button>
+                                                                </span>
+                                                            </div>
                                                         </div>
                                                     </div>
                                                 </div>
@@ -2175,6 +2186,16 @@
                                     </select>
                                     <small class="text-muted">Auto-detect only works when every matched row belongs to one institution; otherwise pick the institution here.</small>
                                 </div>
+                                <div class="form-check mt-3" v-if="csvImport.createMissingAccounts || isNewCsvAccountTarget">
+                                    <input type="checkbox" class="form-check-input" id="csvMarkClosed" v-model="csvImport.markClosed">
+                                    <label class="form-check-label" for="csvMarkClosed">
+                                        <strong>Any account this import creates is closed</strong>
+                                    </label>
+                                    <div class="small text-muted mt-1">
+                                        For a cancelled card: import its statements and keep the history, but the account stays out of the balance totals.
+                                        You can reopen it later from the Balances card.
+                                    </div>
+                                </div>
                             </div>
                         </div>
 
@@ -2247,8 +2268,30 @@
                             <div v-if="csvImport.result.created_accounts && csvImport.result.created_accounts.length" class="alert alert-info mt-3">
                                 <strong>Created [[ csvImport.result.created_accounts.length ]] new account<span v-if="csvImport.result.created_accounts.length > 1">s</span>:</strong>
                                 <ul class="mb-0">
-                                    <li v-for="acct in csvImport.result.created_accounts" :key="'newacct-'+acct.id">[[ acct.name ]]</li>
+                                    <li v-for="acct in csvImport.result.created_accounts" :key="'newacct-'+acct.id">[[ acct.name ]]<span v-if="acct.is_closed" class="badge badge-secondary ml-1" style="font-size: 0.65rem;">Closed</span></li>
                                 </ul>
+                            </div>
+                            <div v-if="csvImport.result.accounts_need_type && csvImport.result.accounts_need_type.length" class="alert alert-warning mt-3">
+                                <strong>What kind of account is each of these?</strong>
+                                <div class="small text-muted mb-2">
+                                    The file did not say, and the type decides whether an account counts as money you have or debt you owe.
+                                </div>
+                                <div v-for="acct in csvImport.result.accounts_need_type" :key="'needtype-'+acct.id" class="form-row align-items-center mb-2">
+                                    <div class="col-sm-7 small">
+                                        [[ acct.name ]] <span class="text-muted" v-if="acct.mask">(****[[ acct.mask ]])</span>
+                                        <span class="text-muted" v-if="acct.csv_account_type">— the file says "[[ acct.csv_account_type ]]"</span>
+                                    </div>
+                                    <div class="col-sm-5">
+                                        <select class="form-control form-control-sm" v-model="csvImport.accountTypes[acct.id]">
+                                            <option value="" disabled>— Pick a type —</option>
+                                            <option value="credit_card">Credit card</option>
+                                            <option value="chequing">Chequing</option>
+                                            <option value="savings">Savings</option>
+                                            <option value="line_of_credit">Line of credit</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <button type="button" class="btn btn-sm btn-primary" @click="saveCsvAccountTypes">Save account types</button>
                             </div>
                             <div v-if="csvImport.result.errors && csvImport.result.errors.length" class="alert alert-warning mt-3">
                                 <strong>[[ csvImport.result.total_errors ]] errors:</strong>

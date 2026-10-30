@@ -1211,9 +1211,48 @@ body.mobile-sidebar-open {
 
 .tree-account {
     display: flex;
-    justify-content: space-between;
+    flex-direction: column;
     font-size: 0.85rem;
     padding: 0.2rem 0;
+}
+
+.tree-account-row {
+    display: flex;
+    justify-content: space-between;
+}
+
+/* "as of 2026-07-14 · anchor+tx": which balance this is and how current it is. */
+.tree-account-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.7rem;
+    line-height: 1.1;
+    opacity: 0.72;
+}
+
+.tree-account-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+.tree-account-action {
+    padding: 0 0.2rem;
+    font-size: 0.7rem;
+    line-height: 1;
+    opacity: 0.55;
+}
+
+.tree-account-action:hover {
+    opacity: 1;
+}
+
+/* A cancelled account stays listed, just visibly retired. */
+.tree-account-closed .tree-label {
+    text-decoration: line-through;
+    opacity: 0.75;
 }
 
 .tree-footer {
