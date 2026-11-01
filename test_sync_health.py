@@ -72,10 +72,12 @@ def main():
     from app import app
     from models import Account, ApiKey, Credential, Transaction, User, db
     from sync_health import (
-        ACTIVITY_WINDOW_DAYS, MIN_SILENT_DAYS, GAP_MULTIPLIER,
-        REASON_NO_RECENT_ACTIVITY, REASON_NO_TRANSACTIONS, REASON_REQUIRES_UPDATE,
-        REASON_REVOKED, REASON_SOFT_DISCONNECTED,
-        collect_sync_health, summarize_institutions,
+        ACTIVITY_WINDOW_DAYS, ALERT_REASONS, ACTIVITY_REASONS,
+        BANNER_INSTITUTION_LIMIT, CONNECTION_REASONS, GAP_MULTIPLIER,
+        MIN_SILENT_DAYS, REASON_NO_RECENT_ACTIVITY, REASON_NO_TRANSACTIONS,
+        REASON_ORDER, REASON_REQUIRES_UPDATE, REASON_REVOKED,
+        REASON_SOFT_DISCONNECTED, STATUS_HEALTHY,
+        banner_selection, collect_sync_health, summarize_institutions,
         _median_gap_days, _median_tx_per_month, _silent_after_days, _cadence_phrase,
     )
 
@@ -421,6 +423,60 @@ def main():
               and report['gap_multiplier'] == GAP_MULTIPLIER, repr(report))
 
         # ---- institutions roll up -----------------------------------------
+        def _rollup_record(institution_name, credential_id, status, quiet_days, sequence=0):
+            """One account record, fabricated just far enough for a roll-up.
+
+            The dev fixtures cannot prove the *ordering* on their own: no two of
+            them need attention and differ only in urgency.  These isolate each
+            element of the sort key — reason, how many accounts went quiet on the
+            bank, then how long the longest silence is.
+            """
+            return {
+                'account_id': 900000 + credential_id * 100 + sequence,
+                'account_name': '%s account %d' % (institution_name, sequence),
+                'mask': '%04d' % sequence,
+                'account_type': 'credit',
+                'subtype': 'credit card',
+                'is_closed': False,
+                'credential_id': credential_id,
+                'institution_name': institution_name,
+                'credential_label': None,
+                'csv_only': False,
+                'status': status,
+                'reasons': [status],
+                'connection_reasons': [status] if status in CONNECTION_REASONS else [],
+                'activity_reasons': [status] if status in ACTIVITY_REASONS else [],
+                'needs_attention': status in ALERT_REASONS,
+                'detail': '%s detail' % status,
+                'last_transaction_date': quiet_days.isoformat() if quiet_days else None,
+                'days_since_last_transaction': (today - quiet_days).days if quiet_days else None,
+                'transaction_count': 0,
+                'expected_tx_per_month': 0.0,
+                'expected_gap_days': None,
+                'silent_after_days': MIN_SILENT_DAYS,
+                'requires_update': status == REASON_REQUIRES_UPDATE,
+                'soft_disconnected': status == REASON_SOFT_DISCONNECTED,
+                'revoked': status == REASON_REVOKED,
+                'shadowed': False,
+            }
+
+        def _quiet_bank(name, credential_id, status, quiet_day_offsets):
+            return [_rollup_record(name, credential_id, status,
+                                   today - datetime.timedelta(days=offset), sequence)
+                    for sequence, offset in enumerate(quiet_day_offsets)]
+
+        crowded = (_quiet_bank('Quiet Eight Bank', 901, REASON_NO_RECENT_ACTIVITY,
+                               [40, 31, 22, 20, 19, 15, 12, 11])
+                   + _quiet_bank('Quiet Tie Bank', 908, REASON_NO_RECENT_ACTIVITY, [300, 250, 240])
+                   + _quiet_bank('Quiet Three Bank', 902, REASON_NO_RECENT_ACTIVITY, [200, 120, 60])
+                   + _quiet_bank('Reconnect Bank', 903, REASON_REQUIRES_UPDATE, [7])
+                   + _quiet_bank('Revoked Bank', 904, REASON_REVOKED, [500])
+                   + _quiet_bank('Paused Bank', 905, REASON_SOFT_DISCONNECTED, [30])
+                   + _quiet_bank('Never Used Bank', 906, REASON_NO_TRANSACTIONS, [0])
+                   + _quiet_bank('Fine Bank', 907, STATUS_HEALTHY, [1]))
+        crowded_rollup = summarize_institutions(crowded)
+        crowded_order = [i['institution_name'] for i in crowded_rollup]
+
         check('an institution is reported by its most urgent account',
               inst_by_id[amex.id]['status'] == REASON_REVOKED
               and inst_by_id[westjet_cred.id]['status'] == REASON_NO_RECENT_ACTIVITY,
@@ -439,6 +495,47 @@ def main():
               == sorted([i['needs_attention'] for i in report['institutions']], reverse=True),
               repr([(i['institution_name'], i['needs_attention'])
                     for i in report['institutions']]))
+        check('institutions needing attention sort by urgency, not by id',
+              [REASON_ORDER.index(i['status']) for i in report['institutions'] if i['needs_attention']]
+              == sorted([REASON_ORDER.index(i['status'])
+                         for i in report['institutions'] if i['needs_attention']]),
+              repr([(i['institution_name'], i['status'])
+                    for i in report['institutions'] if i['needs_attention']]))
+        check('the roll-up ranks a revoked bank above one needing a reconnect, '
+              'that above a paused one, and those above a merely quiet one',
+              crowded_order[:3] == ['Revoked Bank', 'Reconnect Bank', 'Paused Bank'],
+              repr(crowded_order))
+        check('of two quiet banks the one with more accounts gone quiet comes first',
+              crowded_order.index('Quiet Eight Bank') < crowded_order.index('Quiet Tie Bank')
+              and crowded_order.index('Quiet Tie Bank') < crowded_order.index('Quiet Three Bank'),
+              repr(crowded_order))
+        check('two banks with the same number of quiet accounts split on the longest silence',
+              [i['quiet_account_count'] for i in crowded_rollup
+               if i['institution_name'] in ('Quiet Tie Bank', 'Quiet Three Bank')] == [3, 3]
+              and [i['days_since_last_transaction'] for i in crowded_rollup
+                   if i['institution_name'] in ('Quiet Tie Bank', 'Quiet Three Bank')] == [240, 60],
+              repr([(i['institution_name'], i['quiet_account_count'],
+                     i['days_since_last_transaction'])
+                    for i in crowded_rollup if i['institution_name'].startswith('Quiet')]))
+        check('a bank that has never transacted does not outrank one that is actually broken',
+              crowded_order.index('Never Used Bank') > crowded_order.index('Paused Bank')
+              and crowded_order.index('Never Used Bank') < crowded_order.index('Fine Bank'),
+              repr(crowded_order))
+        check('the banner shows at most %d institutions' % BANNER_INSTITUTION_LIMIT,
+              banner_selection(crowded_rollup)[0] == crowded_rollup[:5]
+              and len(banner_selection(crowded_rollup)[0]) == BANNER_INSTITUTION_LIMIT,
+              repr([i['institution_name'] for i in crowded_rollup[:6]]))
+        check('what the banner cuts is counted, so the page can point at the rest',
+              banner_selection(crowded_rollup)[1] == 1
+              and banner_selection(crowded_rollup)[0][-1]['institution_name'] == 'Quiet Tie Bank'
+              and banner_selection(crowded_rollup)[0][-1]['institution_name'] != 'Quiet Three Bank',
+              repr(banner_selection(crowded_rollup)[1]))
+        check('a banner that does not need cutting cuts nothing',
+              banner_selection(crowded_rollup[:2]) == (crowded_rollup[:2], 0),
+              repr([i['institution_name'] for i in crowded_rollup[:2]]))
+        check('a bank with nothing to report is never in the banner',
+              all(inst['needs_attention'] for inst in banner_selection(crowded_rollup)[0]),
+              repr([i['institution_name'] for i in banner_selection(crowded_rollup)[0]]))
         check('summarize_institutions stands on its own (no database needed)',
               summarize_institutions([]) == [], repr(summarize_institutions([])))
 
@@ -463,6 +560,23 @@ def main():
           and health.get('counts', {}).get('soft_disconnected') == 2
           and health.get('counts', {}).get('no_recent_activity') == 5,
           repr(health.get('counts')))
+
+    check('GET /api/dashboard hands the banner its capped slice',
+          health.get('banner_institution_limit') == BANNER_INSTITUTION_LIMIT
+          and len(health.get('banner_institutions', [])) <= BANNER_INSTITUTION_LIMIT,
+          repr({k: health.get(k) for k in ('banner_institution_limit',
+                                           'alert_institution_count')}))
+    check('the banner slice is the head of the urgency-ordered list, not a random cut',
+          [i['id'] for i in health.get('banner_institutions', [])]
+          == [i['id'] for i in health.get('institutions', [])
+              if i['needs_attention']][:BANNER_INSTITUTION_LIMIT],
+          repr([(i['institution_name'], i['status'])
+                for i in health.get('banner_institutions', [])]))
+    check('the institutions the banner left out are counted for the page',
+          health.get('banner_omitted_institution_count')
+          == max(0, health.get('alert_institution_count', 0) - len(health.get('banner_institutions', []))),
+          repr({k: health.get(k) for k in ('alert_institution_count',
+                                           'banner_omitted_institution_count')}))
 
     sync_only = client.get('/api/sync-health').get_json() or {}
     check('GET /api/sync-health answers the same report on its own',
@@ -489,6 +603,19 @@ def main():
     check('the dashboard renders with the banner markup on it',
           page.status_code == 200 and b'sync-health-banner' in page.data,
           str(page.status_code))
+    check('the banner hands what it cut to the Accounts pane',
+          b'sync-health-more' in page.data and b'openAccountsPane' in page.data
+          and b'see Accounts' in page.data,
+          repr([token for token in (b'sync-health-more', b'openAccountsPane', b'see Accounts')
+                if token not in page.data]))
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           'static', 'js', 'vuePlaid.js')) as script:
+        vue_source = script.read()
+    check('the dashboard script renders the capped list and counts the rest',
+          'banner_institutions' in vue_source and 'syncHealthMoreInstitutions' in vue_source
+          and 'openAccountsPane' in vue_source and 'syncHealthInstitutions' in vue_source,
+          repr([token for token in ('banner_institutions', 'syncHealthMoreInstitutions',
+                                    'openAccountsPane') if token not in vue_source]))
 
     v1 = client.get('/api/v1/institutions').get_json() or {}
     v1_inst = {i['id']: i for i in v1.get('institutions', [])}
@@ -532,6 +659,12 @@ def main():
           [i['needs_attention'] for i in v1.get('institutions', [])]
           == sorted([i['needs_attention'] for i in v1.get('institutions', [])], reverse=True),
           repr([(i['institution_name'], i['needs_attention'])
+                for i in v1.get('institutions', [])]))
+    check('v1 lists the banks in the same urgency order the banner uses',
+          [i['id'] for i in v1.get('institutions', []) if i['id'] in inst_by_id]
+          == [i['id'] for i in report['institutions']
+              if i['id'] in {inst['id'] for inst in v1.get('institutions', [])}],
+          repr([(i['institution_name'], i['sync_status'], i['needs_attention'])
                 for i in v1.get('institutions', [])]))
     check('v1 answers the same way through an X-API-Key',
           (client.get('/api/v1/institutions', headers=api_headers).get_json() or {})

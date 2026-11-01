@@ -893,6 +893,15 @@
                                     </ul>
                                 </li>
                             </ul>
+                            <div class="sync-health-more mb-1" v-if="syncHealthMoreInstitutions">
+                                <button
+                                    type="button"
+                                    class="btn btn-link btn-sm p-0 sync-health-more-btn"
+                                    @click="openAccountsPane"
+                                >
+                                    <i class="fas fa-list mr-1" aria-hidden="true"></i>and [[ syncHealthMoreInstitutions ]] more [[ syncHealthMoreInstitutions === 1 ? 'institution' : 'institutions' ]] — see Accounts
+                                </button>
+                            </div>
                             <small class="text-muted">
                                 Spending on these accounts is not being recorded, so the totals here are lower than what you actually spent.
                                 Reconnect the bank, or import its statement, to bring them back up to date.

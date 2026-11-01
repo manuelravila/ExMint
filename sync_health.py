@@ -96,6 +96,13 @@ REASON_TEXT = {
 # Account types where silence means real spending is going unrecorded.
 SPENDING_TYPES = {'depository', 'credit'}
 
+# The dashboard banner is read on a phone, and Manuel's honest render is ten
+# institution lines with twenty-two accounts under them — long enough that the
+# revoked card at the top gets scrolled past.  The banner therefore shows the
+# most urgent institutions only and hands the rest to the Accounts pane, which
+# already names every one of them.
+BANNER_INSTITUTION_LIMIT = 5
+
 
 def _csv_only_credential(credential):
     """True for an institution that was built by the CSV importer, not by Plaid.
@@ -375,6 +382,7 @@ def collect_sync_health(user_id, today=None):
     counts = {reason: sum(1 for a in counted if reason in a['reasons'])
               for reason in REASON_ORDER}
     institutions = summarize_institutions(accounts)
+    banner_institutions, banner_omitted = banner_selection(institutions)
     return {
         'today': today.isoformat(),
         'activity_window_days': ACTIVITY_WINDOW_DAYS,
@@ -397,6 +405,11 @@ def collect_sync_health(user_id, today=None):
         'accounts': accounts,
         'alerts': alerts,
         'institutions': institutions,
+        # The banner's slice of that list, already in urgency order, plus the
+        # count it left out so the page can say where to find the rest.
+        'banner_institution_limit': BANNER_INSTITUTION_LIMIT,
+        'banner_institutions': banner_institutions,
+        'banner_omitted_institution_count': banner_omitted,
     }
 
 
@@ -473,8 +486,37 @@ def summarize_institutions(accounts):
             'alert_accounts': [_account_brief(r) for r in sorted(
                 named_flagged, key=lambda r: -(r['days_since_last_transaction'] or 0))],
         })
-    institutions.sort(key=lambda i: (not i['needs_attention'], i['id']))
+    institutions.sort(key=_institution_urgency)
     return institutions
+
+
+def _institution_urgency(institution):
+    """Banner rank: worst reason first, then most accounts quiet, then longest silence.
+
+    Sorting by id instead puts a bank that lost twelve accounts behind one that
+    lost none, so a cap cuts the wrong institutions.  Unhealthy institutions are
+    forced ahead of healthy ones by the leading element: ``no_transactions`` is
+    in ``REASON_ORDER`` but is not an alert, and an institution whose only
+    account has never transacted must not outrank one that is actually broken.
+    """
+    reason_rank = (REASON_ORDER.index(institution['status'])
+                   if institution['status'] in REASON_ORDER else len(REASON_ORDER))
+    longest_silence = max((a['days_since_last_transaction'] or 0
+                           for a in institution['quiet_accounts']), default=0)
+    return (not institution['needs_attention'], reason_rank,
+            -institution['quiet_account_count'], -longest_silence,
+            (institution['institution_name'] or '').lower(), institution['id'])
+
+
+def banner_selection(institutions):
+    """The institutions the banner shows, and how many it leaves to the Accounts pane.
+
+    The full list stays in the payload — the accounts sidebar, the API and the
+    daily report all need every institution — so only the banner is capped.
+    """
+    attention = [inst for inst in institutions if inst['needs_attention']]
+    shown = attention[:BANNER_INSTITUTION_LIMIT]
+    return shown, max(0, len(attention) - len(shown))
 
 
 def _institution_headline(connection_reasons, quiet_accounts):

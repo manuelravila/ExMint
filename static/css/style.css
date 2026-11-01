@@ -1868,4 +1868,8 @@ tr.budget-excluded-row .spending-category-link {
 .sync-health-banner .sync-health-accounts { padding-left: 1.1rem; margin-top: 0.15rem; }
 .sync-health-banner .sync-health-accounts li { font-size: 0.85rem; }
 .sync-health-banner .sync-health-count { white-space: nowrap; }
+/* The banner is capped at BANNER_INSTITUTION_LIMIT institutions; everything it
+   left out is reached through this link, which opens the Accounts pane. */
+.sync-health-more { font-size: 0.85rem; }
+.sync-health-more-btn { text-decoration: underline; }
 .sync-issue-badge { cursor: help; }

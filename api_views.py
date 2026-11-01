@@ -1429,7 +1429,12 @@ def list_institutions():
             'sync_headline': inst_health.get('headline', ''),
             'accounts': accounts,
         })
-    result.sort(key=lambda inst: (not inst['needs_attention'], inst['id']))
+    # Same urgency order the banner uses — revoked first, then the banks with the
+    # most accounts gone quiet — so a caller that shows only its first few lines
+    # cuts the same banks the banner cuts.  A credential the report dropped (its
+    # cards all reappear under a live one) has no rank and lands last.
+    urgency_rank = {inst['id']: rank for rank, inst in enumerate(health['institutions'])}
+    result.sort(key=lambda inst: (urgency_rank.get(inst['id'], len(urgency_rank)), inst['id']))
     return jsonify({
         'institutions': result,
         'sync_health_summary': {

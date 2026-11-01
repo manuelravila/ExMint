@@ -355,12 +355,25 @@ const app = new Vue({
         totalAccountCount: function() {
             return this.banks.reduce((count, bank) => count + bank.accounts.length, 0);
         },
-        // EX-03: the institutions whose feeds have gone quiet, most urgent first
-        // (the server already sorted them). A broken connection is one line, not
-        // one line per account under it.
+        // EX-03: the institutions the banner gets a line each.  The server
+        // already ranked them by urgency and cut the list at
+        // banner_institution_limit; the rest are counted here and named in the
+        // Accounts pane, so the banner cannot push a revoked card off screen.
         syncHealthInstitutions: function() {
             const health = (this.dashboardData && this.dashboardData.sync_health) || {};
-            return (health.institutions || []).filter(inst => inst.needs_attention);
+            if (Array.isArray(health.banner_institutions)) {
+                return health.banner_institutions;
+            }
+            const all = (health.institutions || []).filter(inst => inst.needs_attention);
+            return all.slice(0, health.banner_institution_limit || all.length);
+        },
+        syncHealthMoreInstitutions: function() {
+            const health = (this.dashboardData && this.dashboardData.sync_health) || {};
+            if (typeof health.banner_omitted_institution_count === 'number') {
+                return health.banner_omitted_institution_count;
+            }
+            const all = (health.institutions || []).filter(inst => inst.needs_attention);
+            return Math.max(0, all.length - this.syncHealthInstitutions.length);
         },
         syncHealthSummary: function() {
             const health = (this.dashboardData && this.dashboardData.sync_health) || {};
@@ -754,6 +767,29 @@ const app = new Vue({
                 return;
             }
             this.mobileSidebarVisible = false;
+        },
+        // EX-03: the banner's "see Accounts" link.  The Accounts pane is this
+        // very sidebar, so the link has to undo whatever is hiding it — a
+        // collapsed sidebar on desktop, a collapsed account list, a closed
+        // drawer on a phone — and then bring it into view.
+        openAccountsPane: function() {
+            if (this.isMobileView) {
+                this.mobileSidebarVisible = true;
+            } else if (this.isSidebarCollapsed) {
+                this.isSidebarCollapsed = false;
+                this.lastDesktopSidebarPreference = false;
+                this.persistSidebarState();
+            }
+            if (this.transactionsCollapsed) {
+                this.transactionsCollapsed = false;
+            }
+            this.$nextTick(() => {
+                const pane = document.getElementById('accounts-navigation');
+                if (pane && typeof pane.scrollIntoView === 'function') {
+                    pane.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+                this.updateStickyPositions();
+            });
         },
         sidebarTooltip: function(label) {
             if (this.isMobileView) {
