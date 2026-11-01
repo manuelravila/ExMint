@@ -6,8 +6,9 @@ Two questions are answered for every account the user still sees in the app:
     has, whatever its age;
   * what it usually does — ``expected_tx_per_month`` (the median of the three
     30-day buckets that make up the last 90 days) and ``expected_gap_days``
-    (the median gap between consecutive transaction dates over the last 365
-    days).
+    (the *mean* gap between consecutive transaction dates over the last 365
+    days — the span from the first date to the newest one divided by the number
+    of gaps between distinct dates).
 
 An account is reported when its connection is already flagged (Plaid
 ``requires_update``, soft-disconnected/paused, or a revoked credential or
@@ -20,6 +21,13 @@ normally posts every 12 days drift for 36 days unnoticed.  Multiplying the
 account's own gap keeps an account that legitimately transacts quarterly out of
 the alert, while a card that posts every few days and has been silent since
 August is named on the day it stops.
+
+The usual gap is a mean and not a median because transactions bunch.  A credit
+card whose purchase and its payment land three days apart, weeks after the pair
+before it (dates 0, 3, 30, 33, 60, 63), has a median gap of 3 days — it would
+look like a card that posts every three days and be reported after ten days of
+ordinary silence.  Its real rhythm is one episode every 12.6 days, so the limit
+that fits it is 38.
 
 An account that has never had a transaction is reported only when it is a
 spending account (``depository``/``credit``): a GIC, an RDSP or a mortgage
@@ -83,6 +91,13 @@ ALERT_REASONS = (
 # *account*, and only that account is named.
 CONNECTION_REASONS = (REASON_REVOKED, REASON_REQUIRES_UPDATE, REASON_SOFT_DISCONNECTED)
 ACTIVITY_REASONS = (REASON_NO_RECENT_ACTIVITY, REASON_NO_TRANSACTIONS)
+# Only ``no_recent_activity`` means "nothing arriving".  An account that has
+# never transacted says nothing about a feed that stopped — it was never
+# arriving — so it keeps its badge in the Accounts pane (it stays in every
+# account's ``reasons``/``activity_reasons`` and in the institution's own
+# ``reasons``) but it is not counted as quiet, does not appear in the headline,
+# and does not push a genuinely broken bank down the banner.
+QUIET_REASONS = (REASON_NO_RECENT_ACTIVITY,)
 
 # One line per reason, ready for the dashboard banner and the daily report.
 REASON_TEXT = {
@@ -119,17 +134,23 @@ def _csv_only_credential(credential):
     return bool(str(credential.item_id or '').startswith('csv-'))
 
 
-def _median_gap_days(dates):
-    """Median gap in days between consecutive transaction *dates* (None if unusable).
+def _mean_gap_days(dates):
+    """Mean gap in days between consecutive transaction *dates* (None if unusable).
 
-    Same-day transactions collapse to one date: the question is how long
-    between episodes of activity, not how many purchases one Saturday held.
+    Same-day transactions collapse to one date: the question is how long between
+    episodes of activity, not how many purchases one Saturday held.
+
+    The span divided by the number of gaps, never the median of those gaps: a
+    card whose purchase and payment land a few days apart but weeks after each
+    other (0, 3, 30, 33, 60, 63) has a median gap of 3, and a median would call
+    it a every-3-days card that must be reported after 10 quiet days.  Measured
+    across the whole span its rhythm is one episode every 12.6 days, and the
+    limit that actually fits it is 38.
     """
     ordered = sorted(set(dates))
     if len(ordered) < 2:
         return None
-    gaps = [(later - earlier).days for earlier, later in zip(ordered, ordered[1:])]
-    return float(median(gaps))
+    return float((ordered[-1] - ordered[0]).days) / (len(ordered) - 1)
 
 
 def _median_tx_per_month(dates, today):
@@ -204,7 +225,7 @@ def evaluate_account(account, credential, transaction_dates, last_transaction_da
     else:
         days_since = None
 
-    expected_gap_days = _median_gap_days(transaction_dates)
+    expected_gap_days = _mean_gap_days(transaction_dates)
     silent_after = _silent_after_days(expected_gap_days)
     expected_tx_per_month = _median_tx_per_month(transaction_dates, today)
 
@@ -395,7 +416,9 @@ def collect_sync_health(user_id, today=None):
         # and how many accounts have stopped receiving anything.
         'alert_institution_count': sum(1 for i in institutions if i['needs_attention']),
         'connection_problem_count': sum(1 for i in institutions if i['connection_reasons']),
-        'quiet_account_count': sum(1 for a in counted if a['activity_reasons']),
+        'quiet_account_count': sum(1 for a in counted
+                                   if any(reason in a['activity_reasons']
+                                          for reason in QUIET_REASONS)),
         # Credentials left behind by a re-connection.  They are not a broken
         # feed — the same bank is connected elsewhere — so a caller that lists
         # every credential (v1 /institutions does) should not report one as
@@ -406,10 +429,22 @@ def collect_sync_health(user_id, today=None):
         'alerts': alerts,
         'institutions': institutions,
         # The banner's slice of that list, already in urgency order, plus the
-        # count it left out so the page can say where to find the rest.
+        # institutions it left out — named, not just counted, so a connection
+        # that is broken is never reduced to a number on a phone screen.
         'banner_institution_limit': BANNER_INSTITUTION_LIMIT,
         'banner_institutions': banner_institutions,
-        'banner_omitted_institution_count': banner_omitted,
+        'banner_omitted_institution_count': len(banner_omitted),
+        'banner_omitted_institutions': banner_omitted,
+    }
+
+
+def _institution_brief(institution):
+    """The institution line the banner could not fit: who it is, and what is wrong."""
+    return {
+        'id': institution['id'],
+        'institution_name': institution['institution_name'],
+        'label': institution['label'],
+        'status': institution['status'],
     }
 
 
@@ -452,7 +487,8 @@ def summarize_institutions(accounts):
         dated = [r['last_transaction_date'] for r in records if r['last_transaction_date']]
         connection_reasons = [reason for reason in CONNECTION_REASONS
                               if any(reason in r['connection_reasons'] for r in records)]
-        quiet = sorted((r for r in named if r['activity_reasons']),
+        quiet = sorted((r for r in named if any(reason in r['activity_reasons']
+                                                for reason in QUIET_REASONS)),
                        key=lambda r: -(r['days_since_last_transaction'] or 0))
         reasons = list(connection_reasons)
         for reason in ACTIVITY_REASONS:
@@ -509,14 +545,17 @@ def _institution_urgency(institution):
 
 
 def banner_selection(institutions):
-    """The institutions the banner shows, and how many it leaves to the Accounts pane.
+    """The institutions the banner shows, and the ones it leaves to the Accounts pane.
 
     The full list stays in the payload — the accounts sidebar, the API and the
-    daily report all need every institution — so only the banner is capped.
+    daily report all need every institution — so only the banner is capped.  The
+    cut institutions are still named: a bank whose connection is broken must not
+    disappear into a count.
     """
     attention = [inst for inst in institutions if inst['needs_attention']]
     shown = attention[:BANNER_INSTITUTION_LIMIT]
-    return shown, max(0, len(attention) - len(shown))
+    omitted = [_institution_brief(inst) for inst in attention[len(shown):]]
+    return shown, omitted
 
 
 def _institution_headline(connection_reasons, quiet_accounts):

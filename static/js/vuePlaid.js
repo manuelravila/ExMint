@@ -369,11 +369,31 @@ const app = new Vue({
         },
         syncHealthMoreInstitutions: function() {
             const health = (this.dashboardData && this.dashboardData.sync_health) || {};
+            if (Array.isArray(health.banner_omitted_institutions)) {
+                return health.banner_omitted_institutions.length;
+            }
             if (typeof health.banner_omitted_institution_count === 'number') {
                 return health.banner_omitted_institution_count;
             }
             const all = (health.institutions || []).filter(inst => inst.needs_attention);
             return Math.max(0, all.length - this.syncHealthInstitutions.length);
+        },
+        // EX-03 review: the cut institutions are named, not counted.  A revoked
+        // or paused connection that fell below the cap still has to be readable
+        // on the banner, or the card behind it looks like a month of thrift.
+        syncHealthOmittedInstitutions: function() {
+            const health = (this.dashboardData && this.dashboardData.sync_health) || {};
+            if (Array.isArray(health.banner_omitted_institutions)) {
+                return health.banner_omitted_institutions;
+            }
+            const all = (health.institutions || []).filter(inst => inst.needs_attention);
+            return all.slice(this.syncHealthInstitutions.length);
+        },
+        // 'RBC Royal Bank (Manu)' — the label matters when one bank is connected
+        // twice, which is exactly what hid Scotiabank on 2026-10-22.
+        syncHealthOmittedNames: function() {
+            return this.syncHealthOmittedInstitutions.map(inst =>
+                inst.label ? inst.institution_name + ' (' + inst.label + ')' : inst.institution_name);
         },
         syncHealthSummary: function() {
             const health = (this.dashboardData && this.dashboardData.sync_health) || {};

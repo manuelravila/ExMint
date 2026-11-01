@@ -13,23 +13,30 @@ card 1008 (revoked since June).  None of them was shown prominently.
 
 A throwaway user is created and given accounts reproducing exactly those four
 shapes plus the controls that decide whether the rule is any good — a healthy
-card, a genuinely low-cadence account that must NOT be flagged, a CSV-only
-institution, a closed account, a disabled account, an investment account with
-no transactions and a spending account with none either.  Under the dev app it
-then checks, through ``collect_sync_health`` and the three routes that publish
-it (``GET /api/dashboard``, ``GET /api/banks`` and v1 ``GET /institutions``):
+card, a genuinely low-cadence account that must NOT be flagged, a card whose
+transactions bunch up, a CSV-only institution, a closed account, a disabled
+account, an investment account with no transactions and a spending account with
+none either.  Under the dev app it then checks, through ``collect_sync_health``
+and the three routes that publish it (``GET /api/dashboard``, ``GET /api/banks``
+and v1 ``GET /institutions``):
 
 * all four shapes are reported, each for the right reason;
 * an account is called silent only past ``max(10 days, 3 x its own usual gap)``,
   so a quarterly account is left alone while a daily card that stopped eight
   weeks ago is not;
 * ``expected_tx_per_month`` is the median of the three 30-day buckets of the
-  last 90 days, and ``expected_gap_days`` the median gap between transaction
-  dates;
+  last 90 days, and ``expected_gap_days`` the *mean* gap between transaction
+  dates — the span divided by the number of gaps — because a card whose purchase
+  and payment land a few days apart is not an every-3-days card;
 * a revoked/paused/reconnect-needed connection is reported even when its
   account is otherwise quiet, and a CSV-only institution is not called paused
   just because it has no Plaid connection — but a CSV account nobody has
   imported for two months is still named;
+* an account that has never transacted keeps its badge but is not counted as
+  "nothing arriving": it is absent from the quiet counts, the institution
+  headline and the banner ranking, so it cannot bury a bank that really broke;
+* the banner shows at most ``BANNER_INSTITUTION_LIMIT`` institutions and its
+  "+N more" line names the ones it cut;
 * closed and disabled accounts are left out of the report entirely, and an
   account with no transactions is only reported as missing data when it is a
   spending account (a GIC or a mortgage genuinely produces none);
@@ -78,7 +85,7 @@ def main():
         REASON_ORDER, REASON_REQUIRES_UPDATE, REASON_REVOKED,
         REASON_SOFT_DISCONNECTED, STATUS_HEALTHY,
         banner_selection, collect_sync_health, summarize_institutions,
-        _median_gap_days, _median_tx_per_month, _silent_after_days, _cadence_phrase,
+        _mean_gap_days, _median_tx_per_month, _silent_after_days, _cadence_phrase,
     )
 
     uri = str(app.config.get('SQLALCHEMY_DATABASE_URI', ''))
@@ -96,7 +103,7 @@ def main():
     # The rule itself, checked away from any database.
     daily = [today - datetime.timedelta(days=n) for n in range(0, 60, 3)]
     check('a card that posts every 3 days reports a 3-day usual gap',
-          _median_gap_days(daily) == 3.0, repr(_median_gap_days(daily)))
+          _mean_gap_days(daily) == 3.0, repr(_mean_gap_days(daily)))
     check('a fast account is judged by the 10-day floor, not by 3 x 3 days',
           _silent_after_days(3.0) == MIN_SILENT_DAYS and _silent_after_days(5.0) == GAP_MULTIPLIER * 5,
           repr((_silent_after_days(3.0), _silent_after_days(5.0))))
@@ -107,8 +114,20 @@ def main():
     check('a quarterly account is allowed a longer silence than a 9-day threshold',
           _silent_after_days(90.0) == 270, repr(_silent_after_days(90.0)))
     check('transactions on the same day collapse into one activity date',
-          _median_gap_days([today, today, today - datetime.timedelta(days=10)]) == 10.0,
-          repr(_median_gap_days([today, today, today - datetime.timedelta(days=10)])))
+          _mean_gap_days([today, today, today - datetime.timedelta(days=10)]) == 10.0,
+          repr(_mean_gap_days([today, today, today - datetime.timedelta(days=10)])))
+    # Ringo's repro for the median bug: a purchase and its payment land 3 days
+    # apart, each pair 27 days after the one before it.  A median gap reads 3 —
+    # an every-3-days card that has to be named after 10 quiet days — while the
+    # span says what the card really does: one episode every 12.6 days.
+    bunched_dates = [today - datetime.timedelta(days=n) for n in (0, 3, 30, 33, 60, 63)]
+    check('transactions that bunch up are measured across the span, not by the median gap',
+          _mean_gap_days(bunched_dates) == 12.6, repr(_mean_gap_days(bunched_dates)))
+    check('a bunched card is reported after 38 quiet days, not the 10 a median gap would give',
+          _silent_after_days(_mean_gap_days(bunched_dates)) == 38
+          and _silent_after_days(3.0) == MIN_SILENT_DAYS,
+          repr((_mean_gap_days(bunched_dates),
+                _silent_after_days(_mean_gap_days(bunched_dates)))))
     check('expected activity is the median of the three 30-day buckets of the last 90 days',
           _median_tx_per_month(daily, today) == 10.0,
           repr(_median_tx_per_month(daily, today)))
@@ -146,10 +165,17 @@ def main():
 
         def transactions(acct, credential, start_offset, count, stride):
             """``count`` transactions ``stride`` days apart, newest first, ending
-            ``start_offset`` days before today.  Amounts are not part of this
-            test; the column just gets a plausible figure."""
-            for i in range(count):
-                day = today - datetime.timedelta(days=start_offset + i * stride)
+            ``start_offset`` days before today."""
+            add_transactions(acct, credential,
+                             [start_offset + i * stride for i in range(count)])
+
+        def add_transactions(acct, credential, offsets):
+            """Transactions on exactly these day-offsets before today.  Needed for
+            a cadence that does not repeat on a fixed stride — see the bunched
+            card below.  Amounts are not part of this test; the column just gets
+            a plausible figure."""
+            for offset in offsets:
+                day = today - datetime.timedelta(days=offset)
                 db.session.add(Transaction(
                     plaid_transaction_id='%s-%s' % (tag, uuid.uuid4().hex[:10]),
                     user_id=user.id, credential_id=credential.id, account_id=acct.id,
@@ -193,6 +219,16 @@ def main():
         slow = account(slow_cred, 'Quarterly Savings', 'depository', '2222', 'savings')
         transactions(slow, slow_cred, 55, 8, 20)
 
+        # Bunched cadence: a purchase and its payment 3 days apart, each pair 27
+        # days after the last (15, 18, 45, 48, 75, 78 days before today).  The
+        # median gap is 3, which would call this an every-3-days card that
+        # belongs on the banner after 10 ordinary days; the span gives 12.6 and a
+        # limit of 38, and 15 days is simply this card being itself.
+        bunched_cred = cred('Bunched Cadence Bank')
+        bunched = account(bunched_cred, 'Purchase and Payment Card', 'credit',
+                          '3131', 'credit card')
+        add_transactions(bunched, bunched_cred, [15, 18, 45, 48, 75, 78])
+
         # CSV-only institution: soft_disconnected by construction, so it is not
         # "paused" — but two months without an import is still reported.
         csv_live_cred = cred('Imported Brokerage', soft_disconnected=True,
@@ -225,8 +261,12 @@ def main():
         reconnected_dead = cred('Reconnected Bank', status='Revoked')
         shadowed_card = account(reconnected_dead, 'Old Reconnected Card', 'credit',
                                 '9999', 'credit card')
+        # The card the re-connection dropped keeps the data it last received —
+        # that is what the same card looks like in PROD — so its own silence is
+        # what gets reported, and it is named under the bank it still belongs to.
         orphan_card = account(reconnected_dead, 'Card Lost On Reconnect', 'credit',
                               '9998', 'credit card')
+        transactions(orphan_card, reconnected_dead, 200, 15, 10)
 
         # A leftover credential whose every card already shows under the live one.
         reconnected_dead_again = cred('Reconnected Bank', status='Revoked')
@@ -320,7 +360,7 @@ def main():
         check('the report counts connections broken and accounts gone quiet, separately',
               report['connection_problem_count'] == 5
               and report['alert_institution_count'] == 7
-              and report['quiet_account_count'] == 8,
+              and report['quiet_account_count'] == 6,
               repr({k: report.get(k) for k in ('connection_problem_count',
                                                'alert_institution_count', 'quiet_account_count')}))
 
@@ -340,6 +380,17 @@ def main():
               and slow_rec['silent_after_days'] == 60
               and slow_rec['days_since_last_transaction'] == 55,
               repr(slow_rec))
+        bunched_rec = by_account[bunched.id]
+        check('a card whose transactions bunch up is judged on 12.6 days, not on the 3 its median gap shows',
+              bunched_rec['expected_gap_days'] == 12.6
+              and bunched_rec['silent_after_days'] == 38
+              and bunched_rec['days_since_last_transaction'] == 15,
+              repr(bunched_rec))
+        check('so 15 days of ordinary silence does not put that card on the banner',
+              bunched_rec['needs_attention'] is False
+              and bunched_rec['reasons'] == []
+              and bunched_rec['status'] == STATUS_HEALTHY,
+              repr(bunched_rec))
         csv_live_rec = by_account[csv_live.id]
         check('a CSV-only institution is not reported as paused',
               csv_live_rec['csv_only'] is True
@@ -361,16 +412,25 @@ def main():
               and empty_rec['needs_attention'] is False
               and empty_rec['last_transaction_date'] is None,
               repr(empty_rec))
+        check('an account that has never transacted keeps its reason for the Accounts badge',
+              empty_rec['activity_reasons'] == [REASON_NO_TRANSACTIONS]
+              and inst_by_id[empty_cred.id]['reasons'] == [REASON_NO_TRANSACTIONS],
+              repr([empty_rec['activity_reasons'], inst_by_id[empty_cred.id]['reasons']]))
+        check('but it is not counted as an account with nothing arriving',
+              inst_by_id[empty_cred.id]['quiet_accounts'] == []
+              and inst_by_id[empty_cred.id]['quiet_account_count'] == 0
+              and 'nothing arriving' not in inst_by_id[empty_cred.id]['headline'],
+              repr(inst_by_id[empty_cred.id]['headline']))
         check('a closed account is out of the report', by_account.get(closed.id) is None,
               repr(by_account.get(closed.id)))
         check('a disabled account is out of the report', by_account.get(disabled.id) is None,
               repr(by_account.get(disabled.id)))
-        # Fifteen accounts stay in the report: the four failed connections, the
-        # five controls that must be judged healthy/reported-only, the GIC, the
+        # Sixteen accounts stay in the report: the four failed connections, the
+        # six controls that must be judged healthy/reported-only, the GIC, the
         # unused card and the four cards of the re-connected bank.  Closed,
         # disabled and the fully duplicated credential are out of it.
         check('the report covers every account the user still sees, and no others',
-              report['account_count'] == 15, repr(report['account_count']))
+              report['account_count'] == 16, repr(report['account_count']))
         check('the alert list is ordered most urgent first',
               [a['status'] for a in report['alerts']]
               == sorted([a['status'] for a in report['alerts']],
@@ -476,6 +536,7 @@ def main():
                    + _quiet_bank('Fine Bank', 907, STATUS_HEALTHY, [1]))
         crowded_rollup = summarize_institutions(crowded)
         crowded_order = [i['institution_name'] for i in crowded_rollup]
+        crowded_by_name = {i['institution_name']: i for i in crowded_rollup}
 
         check('an institution is reported by its most urgent account',
               inst_by_id[amex.id]['status'] == REASON_REVOKED
@@ -517,21 +578,62 @@ def main():
               repr([(i['institution_name'], i['quiet_account_count'],
                      i['days_since_last_transaction'])
                     for i in crowded_rollup if i['institution_name'].startswith('Quiet')]))
+        # Fix 3 consequence, made explicit: a bank whose accounts never
+        # transacted has nothing that stopped arriving, so it no longer borrows
+        # rank from them — it stays below every broken bank and out of the
+        # banner altogether, which is where a bank with no data of its own
+        # belongs.
         check('a bank that has never transacted does not outrank one that is actually broken',
               crowded_order.index('Never Used Bank') > crowded_order.index('Paused Bank')
-              and crowded_order.index('Never Used Bank') < crowded_order.index('Fine Bank'),
+              and crowded_by_name['Never Used Bank']['quiet_account_count'] == 0
+              and 'Never Used Bank' not in [i['institution_name'] for i in banner_selection(crowded_rollup)[0]]
+              and 'Never Used Bank' not in [i['institution_name'] for i in banner_selection(crowded_rollup)[1]],
               repr(crowded_order))
+
+        # Ringo's shape for fix 3: a bank whose only fault is a revoked login,
+        # with four accounts that never had a transaction in ExMint.  Those four
+        # say nothing about a feed that stopped, so the headline names the
+        # connection and nothing else, and the bank cannot outrank the revoked
+        # one next to it that really did lose a feed.
+        never_used_revoked = ([_rollup_record('Revoked Never Used Bank', 910, REASON_REVOKED, None)]
+                              + [_rollup_record('Revoked Never Used Bank', 910, REASON_NO_TRANSACTIONS,
+                                                None, sequence) for sequence in (1, 2, 3, 4)])
+        revoked_and_quiet = ([_rollup_record('Revoked Quiet Bank', 911, REASON_REVOKED, None)]
+                             + [_rollup_record('Revoked Quiet Bank', 911, REASON_NO_RECENT_ACTIVITY,
+                                               today - datetime.timedelta(days=100), 1)])
+        never_used_rollup = summarize_institutions(never_used_revoked + revoked_and_quiet)
+        never_used_inst = {i['institution_name']: i for i in never_used_rollup}
+        check('a revoked bank with four never-transacted accounts says only "connection revoked"',
+              never_used_inst['Revoked Never Used Bank']['headline'] == 'connection revoked'
+              and never_used_inst['Revoked Never Used Bank']['quiet_accounts'] == []
+              and never_used_inst['Revoked Never Used Bank']['quiet_account_count'] == 0,
+              repr(never_used_inst['Revoked Never Used Bank']))
+        check('and it ranks below the revoked bank that has one account with nothing arriving',
+              [i['institution_name'] for i in never_used_rollup]
+              == ['Revoked Quiet Bank', 'Revoked Never Used Bank'],
+              repr([(i['institution_name'], i['status'], i['quiet_account_count'])
+                    for i in never_used_rollup]))
+        check('the never-transacted accounts still reach the institution, so the badge survives',
+              never_used_inst['Revoked Never Used Bank']['reasons']
+              == [REASON_REVOKED, REASON_NO_TRANSACTIONS]
+              and never_used_inst['Revoked Never Used Bank']['alert_account_count'] == 1,
+              repr(never_used_inst['Revoked Never Used Bank']['reasons']))
         check('the banner shows at most %d institutions' % BANNER_INSTITUTION_LIMIT,
               banner_selection(crowded_rollup)[0] == crowded_rollup[:5]
               and len(banner_selection(crowded_rollup)[0]) == BANNER_INSTITUTION_LIMIT,
               repr([i['institution_name'] for i in crowded_rollup[:6]]))
-        check('what the banner cuts is counted, so the page can point at the rest',
-              banner_selection(crowded_rollup)[1] == 1
-              and banner_selection(crowded_rollup)[0][-1]['institution_name'] == 'Quiet Tie Bank'
-              and banner_selection(crowded_rollup)[0][-1]['institution_name'] != 'Quiet Three Bank',
+        check('what the banner cuts is named, not just counted',
+              [i['institution_name'] for i in banner_selection(crowded_rollup)[1]] == ['Quiet Three Bank']
+              and all(sorted(i) == ['id', 'institution_name', 'label', 'status']
+                      for i in banner_selection(crowded_rollup)[1]),
               repr(banner_selection(crowded_rollup)[1]))
+        check('the cut institutions keep the banner order they were cut from',
+              [i['id'] for i in banner_selection(crowded_rollup)[1]]
+              == [i['id'] for i in crowded_rollup if i['needs_attention']][BANNER_INSTITUTION_LIMIT:]
+              and banner_selection(crowded_rollup)[0][-1]['institution_name'] == 'Quiet Tie Bank',
+              repr([i['institution_name'] for i in crowded_rollup if i['needs_attention']]))
         check('a banner that does not need cutting cuts nothing',
-              banner_selection(crowded_rollup[:2]) == (crowded_rollup[:2], 0),
+              banner_selection(crowded_rollup[:2]) == (crowded_rollup[:2], []),
               repr([i['institution_name'] for i in crowded_rollup[:2]]))
         check('a bank with nothing to report is never in the banner',
               all(inst['needs_attention'] for inst in banner_selection(crowded_rollup)[0]),
@@ -558,7 +660,8 @@ def main():
           health.get('counts', {}).get('revoked') == 2
           and health.get('counts', {}).get('requires_update') == 2
           and health.get('counts', {}).get('soft_disconnected') == 2
-          and health.get('counts', {}).get('no_recent_activity') == 5,
+          and health.get('counts', {}).get('no_recent_activity') == 6
+          and health.get('counts', {}).get('no_transactions') == 2,
           repr(health.get('counts')))
 
     check('GET /api/dashboard hands the banner its capped slice',
@@ -574,9 +677,24 @@ def main():
                 for i in health.get('banner_institutions', [])]))
     check('the institutions the banner left out are counted for the page',
           health.get('banner_omitted_institution_count')
-          == max(0, health.get('alert_institution_count', 0) - len(health.get('banner_institutions', []))),
+          == max(0, health.get('alert_institution_count', 0) - len(health.get('banner_institutions', [])))
+          and health.get('banner_omitted_institution_count')
+          == len(health.get('banner_omitted_institutions', [])),
           repr({k: health.get(k) for k in ('alert_institution_count',
                                            'banner_omitted_institution_count')}))
+    omitted = health.get('banner_omitted_institutions', [])
+    check('the payload names the institutions the banner cut, in the order it cut them',
+          omitted == [{'id': i['id'], 'institution_name': i['institution_name'],
+                       'label': i['label'], 'status': i['status']}
+                      for i in health.get('institutions', [])
+                      if i['needs_attention']][BANNER_INSTITUTION_LIMIT:]
+          and all(sorted(i) == ['id', 'institution_name', 'label', 'status'] for i in omitted),
+          repr([(i['institution_name'], i['label'], i['status']) for i in omitted]))
+    check('nothing that needs attention is dropped: shown plus cut is the whole flagged list',
+          [i['id'] for i in health.get('banner_institutions', [])] + [i['id'] for i in omitted]
+          == [i['id'] for i in health.get('institutions', []) if i['needs_attention']],
+          repr((health.get('alert_institution_count'), len(health.get('banner_institutions', [])),
+                len(omitted))))
 
     sync_only = client.get('/api/sync-health').get_json() or {}
     check('GET /api/sync-health answers the same report on its own',
@@ -608,6 +726,13 @@ def main():
           and b'see Accounts' in page.data,
           repr([token for token in (b'sync-health-more', b'openAccountsPane', b'see Accounts')
                 if token not in page.data]))
+    check('and names the banks it cut instead of leaving them as a number',
+          b'syncHealthOmittedNames' in page.data
+          and b'more<template v-if="syncHealthOmittedNames.length">: ' in page.data
+          and b'\xe2\x80\x94 see Accounts' in page.data,
+          repr([token for token in (b'syncHealthOmittedNames',
+                                    b'more<template v-if="syncHealthOmittedNames.length">: ',
+                                    b'\xe2\x80\x94 see Accounts') if token not in page.data]))
     with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            'static', 'js', 'vuePlaid.js')) as script:
         vue_source = script.read()
@@ -616,6 +741,18 @@ def main():
           and 'openAccountsPane' in vue_source and 'syncHealthInstitutions' in vue_source,
           repr([token for token in ('banner_institutions', 'syncHealthMoreInstitutions',
                                     'openAccountsPane') if token not in vue_source]))
+    check('the dashboard script names each cut bank, label and all',
+          'banner_omitted_institutions' in vue_source
+          and 'syncHealthOmittedInstitutions' in vue_source
+          and 'syncHealthOmittedNames' in vue_source
+          and "inst.institution_name + ' (' + inst.label + ')'" in vue_source,
+          repr([token for token in ('banner_omitted_institutions', 'syncHealthOmittedInstitutions',
+                                    'syncHealthOmittedNames',
+                                    "inst.institution_name + ' (' + inst.label + ')'")
+                if token not in vue_source]))
+    check('the accounts pane still badges an account that has never transacted',
+          "no_transactions: 'No data'" in vue_source,
+          repr([line.strip() for line in vue_source.splitlines() if 'no_transactions' in line]))
 
     v1 = client.get('/api/v1/institutions').get_json() or {}
     v1_inst = {i['id']: i for i in v1.get('institutions', [])}
@@ -734,9 +871,11 @@ def main():
         db.init_app(copy_app)
         with copy_app.app_context():
             copy_users = [c.user_id for c in Credential.query.all()]
+            copy_reports = {}
             flagged = {}
             for uid in sorted(set(copy_users)):
                 copy_report = collect_sync_health(uid)
+                copy_reports[uid] = copy_report
                 for a in copy_report['alerts']:
                     flagged['%s %s' % (a['institution_name'], a['mask'] or '')] = a
             print('\n--- read-only copy of PROD: %d flagged accounts ---' % len(flagged))
@@ -746,6 +885,71 @@ def main():
                       % (rec['institution_name'], rec['account_name'] or '',
                          rec['last_transaction_date'] or 'no data',
                          rec['days_since_last_transaction'], rec['expected_tx_per_month']))
+
+            # What the banner actually shows each reader: the capped lines, then
+            # the names it cut.  Printed here because it is the one place the
+            # real 2026-10-22 rows exist.
+            for uid in sorted(copy_reports):
+                report_copy = copy_reports[uid]
+                shown = report_copy['banner_institutions']
+                cut = report_copy['banner_omitted_institutions']
+                if not shown and not cut:
+                    continue
+                print('\n--- user %d: banner shows %d of %d institutions needing attention '
+                      '(limit %d) ---'
+                      % (uid, len(shown), report_copy['alert_institution_count'],
+                         BANNER_INSTITUTION_LIMIT))
+                for rank, inst in enumerate(shown, start=1):
+                    print('    banner %d. %s (%s) [%s] — %s'
+                          % (rank, inst['institution_name'], inst['label'] or 'no label',
+                             inst['status'], inst['headline']))
+                for inst in cut:
+                    print('    cut:  %s (%s) [%s]'
+                          % (inst['institution_name'], inst['label'] or 'no label', inst['status']))
+
+            def _named_on_banner(uid):
+                report_copy = copy_reports.get(uid) or {}
+                names = [inst['institution_name'] for inst in report_copy.get('banner_institutions', [])]
+                names += [inst['institution_name'] for inst in report_copy.get('banner_omitted_institutions', [])]
+                return names
+
+            def _named_with_label(uid):
+                report_copy = copy_reports.get(uid) or {}
+                lines = ['%s (%s)' % (i['institution_name'], i['label'])
+                         if i['label'] else i['institution_name']
+                         for i in (report_copy.get('banner_institutions', [])
+                                   + report_copy.get('banner_omitted_institutions', []))]
+                return lines
+
+            for uid in sorted(copy_reports):
+                if not copy_reports[uid]['banner_institutions'] and not copy_reports[uid]['banner_omitted_institutions']:
+                    continue
+                check('PROD copy: user %d gets every flagged institution named by the banner '
+                      'or its cut list' % uid,
+                      len(_named_on_banner(uid)) == copy_reports[uid]['alert_institution_count'],
+                      repr((copy_reports[uid]['alert_institution_count'], _named_on_banner(uid))))
+            manuel_report = copy_reports.get(2) or {}
+            manuel_named = _named_with_label(2)
+            manuel_ids = ([i['id'] for i in manuel_report.get('banner_institutions', [])]
+                          + [i['id'] for i in manuel_report.get('banner_omitted_institutions', [])])
+            # The card, not just the bank: WestJet 9669 sits under RBC and Amex
+            # 1008 under its own revoked credential, so each is named through the
+            # institution that answers for it — banner line or cut list.
+            def _answer_for(mask):
+                return [inst for inst in manuel_report.get('institutions', [])
+                        if any(acct['mask'] == mask for acct in inst.get('alert_accounts', []))]
+            check('PROD copy (Manuel, user 2): the banks behind all four 2026-10-22 cases are named',
+                  all(any(named.startswith(want) for named in manuel_named)
+                      for want in ('Scotiabank', 'RBC Royal Bank', 'American Express')),
+                  repr(manuel_named))
+            check('PROD copy (Manuel, user 2): WestJet 9669 and Amex 1008 are each named by the banner '
+                  'or by its cut list',
+                  all(any(inst['id'] in manuel_ids for inst in _answer_for(mask))
+                      for mask in ('9669', '1008'))
+                  and bool(_answer_for('9669')) and bool(_answer_for('1008')),
+                  repr({m: [(i['institution_name'], i['label'], i['status'],
+                             i['id'] in manuel_ids) for i in _answer_for(m)]
+                        for m in ('9669', '1008')}))
             check('PROD copy: Scotiabank is flagged for the reconnect it needs',
                   any(rec['institution_name'] == 'Scotiabank'
                       and REASON_REQUIRES_UPDATE in rec['reasons'] for rec in flagged.values()),

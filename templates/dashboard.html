@@ -899,7 +899,7 @@
                                     class="btn btn-link btn-sm p-0 sync-health-more-btn"
                                     @click="openAccountsPane"
                                 >
-                                    <i class="fas fa-list mr-1" aria-hidden="true"></i>and [[ syncHealthMoreInstitutions ]] more [[ syncHealthMoreInstitutions === 1 ? 'institution' : 'institutions' ]] — see Accounts
+                                    <i class="fas fa-list mr-1" aria-hidden="true"></i>and [[ syncHealthMoreInstitutions ]] more<template v-if="syncHealthOmittedNames.length">: [[ syncHealthOmittedNames.join(', ') ]]</template> — see Accounts
                                 </button>
                             </div>
                             <small class="text-muted">
