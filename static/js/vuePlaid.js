@@ -285,7 +285,8 @@ const app = new Vue({
         dashboardData: {
             balances: { groups: [], grand_total: 0 },
             spending: { years: [], current_year: null, current_month: null },
-            cashflow: { months: [], categories: [], series: {} }
+            cashflow: { months: [], categories: [], series: {} },
+            sync_health: { alerts: [], alert_count: 0, account_count: 0, counts: {} }
         },
         selectedCashflowCategory: 'all',
         openBalanceGroups: [],
@@ -353,6 +354,34 @@ const app = new Vue({
     computed: {
         totalAccountCount: function() {
             return this.banks.reduce((count, bank) => count + bank.accounts.length, 0);
+        },
+        // EX-03: the institutions whose feeds have gone quiet, most urgent first
+        // (the server already sorted them). A broken connection is one line, not
+        // one line per account under it.
+        syncHealthInstitutions: function() {
+            const health = (this.dashboardData && this.dashboardData.sync_health) || {};
+            return (health.institutions || []).filter(inst => inst.needs_attention);
+        },
+        syncHealthSummary: function() {
+            const health = (this.dashboardData && this.dashboardData.sync_health) || {};
+            const counts = health.counts || {};
+            const parts = [];
+            if (counts.revoked) parts.push(counts.revoked + ' revoked');
+            if (counts.requires_update) parts.push(counts.requires_update + ' needing reconnect');
+            if (counts.soft_disconnected) parts.push(counts.soft_disconnected + ' paused');
+            if (counts.no_recent_activity) parts.push(counts.no_recent_activity + ' silent');
+            const institutions = (health.institutions || []).filter(inst => inst.needs_attention).length;
+            const quiet = health.quiet_account_count || 0;
+            return {
+                institutionCount: institutions,
+                quietAccountCount: quiet,
+                heading: institutions === 1
+                    ? '1 institution is not delivering its transactions'
+                    : institutions + ' institutions are not delivering their transactions',
+                text: quiet
+                    ? (quiet + (quiet === 1 ? ' account' : ' accounts') + ' with nothing arriving')
+                    : parts.join(', ')
+            };
         },
         areAllAccountsSelected: function() {
             return this.totalAccountCount > 0 && this.selectedAccountIds.length === this.totalAccountCount;
@@ -805,7 +834,8 @@ const app = new Vue({
                 this.dashboardData = {
                     balances: data.balances || { groups: [], grand_total: 0 },
                     spending: data.spending || { years: [], current_year: null, current_month: null },
-                    cashflow: data.cashflow || { months: [], categories: [], series: {} }
+                    cashflow: data.cashflow || { months: [], categories: [], series: {} },
+                    sync_health: data.sync_health || { alerts: [], alert_count: 0, account_count: 0, counts: {} }
                 };
                 this.dashboardLoaded = true;
                 this.initializeDashboardState();
@@ -3651,6 +3681,20 @@ const app = new Vue({
                 return isoDate;
             }
             return parsed.toLocaleDateString();
+        },
+        // EX-03: the badge a stale account gets in the accounts list. The whole
+        // sentence it produced is in the badge's title, so the badge itself stays
+        // short enough for a sidebar row.
+        syncIssueLabel: function(reasons) {
+            const labels = {
+                revoked: 'Revoked',
+                requires_update: 'Reconnect',
+                soft_disconnected: 'Paused',
+                no_recent_activity: 'No data',
+                no_transactions: 'No data'
+            };
+            const first = (reasons || [])[0];
+            return labels[first] || 'Sync issue';
         },
         applyTransactionFilters: function() {
             const start = this.filters.startDate;

@@ -29,6 +29,24 @@ from version import __version__ as VERSION
 from csv_import_routing import (
     build_mask_index, resolve_row_account, unroutable_reason, guard_category_mapping,
 )
+from sync_health import collect_sync_health
+
+
+def _sync_health_fields(record):
+    """The EX-03 sync-health fields, spelled identically on every v1 payload."""
+    return {
+        'last_transaction_date': record.get('last_transaction_date'),
+        'days_since_last_transaction': record.get('days_since_last_transaction'),
+        'expected_tx_per_month': record.get('expected_tx_per_month'),
+        'expected_gap_days': record.get('expected_gap_days'),
+        'silent_after_days': record.get('silent_after_days'),
+        'sync_status': record.get('status', 'healthy'),
+        'sync_reasons': record.get('reasons', []),
+        'needs_attention': record.get('needs_attention', False),
+        'sync_detail': record.get('detail', ''),
+        'csv_only': record.get('csv_only', False),
+        'shadowed': record.get('shadowed', False),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1346,16 +1364,34 @@ def account_balance(account_id):
 @api_v1.route('/institutions', methods=['GET'])
 @require_api_auth
 def list_institutions():
-    """List all active institutions (credentials) for the current user."""
+    """List all active institutions (credentials) for the current user.
+
+    Each institution and each of its accounts carries the EX-03 sync-health
+    fields — ``last_transaction_date``, ``expected_tx_per_month``,
+    ``expected_gap_days``, ``days_since_last_transaction``, ``sync_status``,
+    ``sync_reasons`` and ``needs_attention`` — so a caller can tell that a card
+    has stopped receiving data instead of only that its balance looks smaller.
+    """
     banks = Credential.query.filter_by(
         user_id=g.api_user.id
     ).filter(
         Credential.status.in_(['Active', 'Revoked'])
     ).all()
+    health = collect_sync_health(g.api_user.id)
+    account_health = {record['account_id']: record for record in health['accounts']}
+    credential_health = {inst['id']: inst for inst in health['institutions']}
+    # Every credential is listed here, including the dead ones the accounts pane
+    # hides, so say which are leftovers of a re-connection: a caller that reads
+    # ``revoked`` alone would call a bank that works disconnected.
+    superseded = set(health.get('superseded_credential_ids', []))
     result = []
     for b in banks:
-        accounts = [
-            {
+        accounts = []
+        for a in b.accounts:
+            if a.status not in ('Active', 'Revoked'):
+                continue
+            record = account_health.get(a.id, {})
+            accounts.append({
                 'id': a.id,
                 'name': a.name,
                 'mask': a.mask,
@@ -1366,19 +1402,45 @@ def list_institutions():
                 # Balance fields — live from Plaid or computed from transactions
                 'current_balance': float(a.current_balance) if a.current_balance is not None else None,
                 'available_balance': float(a.available_balance) if a.available_balance is not None else None,
-            }
-            for a in b.accounts
-            if a.status in ('Active', 'Revoked')
-        ]
+                **_sync_health_fields(record),
+            })
+        inst_health = credential_health.get(b.id, {})
         result.append({
             'id': b.id,
             'institution_name': b.institution_name,
             'requires_update': b.requires_update,
             'soft_disconnected': b.soft_disconnected,
             'revoked': b.status == 'Revoked',
+            'superseded': b.id in superseded,
+            'csv_only': inst_health.get('csv_only', False),
+            'sync_status': inst_health.get('status', 'healthy'),
+            'sync_reasons': inst_health.get('reasons', []),
+            'needs_attention': inst_health.get('needs_attention', False),
+            'last_transaction_date': inst_health.get('last_transaction_date'),
+            'days_since_last_transaction': inst_health.get('days_since_last_transaction'),
+            # The bank's own cadence is its liveliest account's: the number a
+            # reader compares "nothing since Aug 5" against.
+            'expected_tx_per_month': max(
+                (r['expected_tx_per_month'] for r in health['accounts']
+                 if r['credential_id'] == b.id),
+                default=None),
+            'silent_accounts': inst_health.get('quiet_accounts', []),
+            'quiet_account_count': inst_health.get('quiet_account_count', 0),
+            'sync_headline': inst_health.get('headline', ''),
             'accounts': accounts,
         })
-    return jsonify({'institutions': result})
+    result.sort(key=lambda inst: (not inst['needs_attention'], inst['id']))
+    return jsonify({
+        'institutions': result,
+        'sync_health_summary': {
+            'today': health['today'],
+            'account_count': health['account_count'],
+            'alert_count': health['alert_count'],
+            'counts': health['counts'],
+            'min_silent_days': health['min_silent_days'],
+            'gap_multiplier': health['gap_multiplier'],
+        },
+    })
 
 
 # ---------------------------------------------------------------------------

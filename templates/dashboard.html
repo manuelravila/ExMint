@@ -257,6 +257,14 @@
                             </span>
                             <span v-if="bank.soft_disconnected" class="badge badge-secondary ml-1" style="font-size: 0.65rem;">CSV Only</span>
                             <span v-if="bank.revoked" class="badge badge-secondary ml-1" style="font-size: 0.65rem;">Revoked</span>
+                            <span
+                                v-if="bank.sync_alert_accounts && bank.sync_alert_accounts.length"
+                                class="badge badge-warning ml-1 sync-issue-badge"
+                                style="font-size: 0.65rem;"
+                                :title="bank.sync_alert_accounts.map(a => a.account_name + ': ' + a.detail).join('\n')"
+                            >
+                                [[ bank.sync_alert_accounts.length ]] quiet
+                            </span>
                             <button
                                 v-if="bank.requires_update"
                                 type="button"
@@ -293,6 +301,13 @@
                                 <span>
                                     <span class="badge badge-light text-uppercase ml-2" v-if="account.subtype">[[ account.subtype ]]</span>
                                     <span v-if="account.status === 'Revoked'" class="badge badge-secondary ml-1 account-status-badge">Inactive</span>
+                                    <span
+                                        v-if="account.needs_attention && !account.shadowed"
+                                        class="badge badge-warning ml-1 account-status-badge sync-issue-badge"
+                                        :title="account.sync_detail"
+                                    >
+                                        [[ syncIssueLabel(account.sync_reasons) ]]
+                                    </span>
                                 </span>
                             </label>
                             <div v-if="!bank.accounts.length" class="list-group-item text-muted small">
@@ -850,6 +865,42 @@
             </div>
             </section>
             <section v-else-if="activePane === 'dashboard'" class="dashboard-section">
+                <div
+                    v-if="syncHealthSummary.institutionCount"
+                    class="alert alert-warning sync-health-banner"
+                    role="alert"
+                >
+                    <div class="d-flex justify-content-between align-items-start">
+                        <div>
+                            <h6 class="mb-1">
+                                <i class="fas fa-triangle-exclamation mr-1" aria-hidden="true"></i>
+                                [[ syncHealthSummary.heading ]]
+                            </h6>
+                            <ul class="sync-health-list mb-1">
+                                <li v-for="bank in syncHealthInstitutions" :key="bank.id">
+                                    <strong>[[ bank.institution_name ]]</strong>
+                                    <span v-if="bank.label" class="text-muted">- [[ bank.label ]]</span>:
+                                    [[ bank.headline ]]
+                                    <ul class="sync-health-accounts" v-if="bank.quiet_account_count">
+                                        <li v-for="account in bank.quiet_accounts.slice(0, 3)" :key="account.account_id">
+                                            [[ account.account_name ]]
+                                            <span class="text-muted" v-if="account.mask">([[ account.mask ]])</span>
+                                            — [[ account.detail ]]
+                                        </li>
+                                        <li class="text-muted" v-if="bank.quiet_account_count > 3">
+                                            and [[ bank.quiet_account_count - 3 ]] more in the accounts list
+                                        </li>
+                                    </ul>
+                                </li>
+                            </ul>
+                            <small class="text-muted">
+                                Spending on these accounts is not being recorded, so the totals here are lower than what you actually spent.
+                                Reconnect the bank, or import its statement, to bring them back up to date.
+                            </small>
+                        </div>
+                        <span class="badge badge-warning sync-health-count">[[ syncHealthSummary.text ]]</span>
+                    </div>
+                </div>
                 <div class="dashboard-tabs tab-switch" role="tablist">
                     <button
                         type="button"

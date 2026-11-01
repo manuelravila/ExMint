@@ -1860,3 +1860,12 @@ tr.budget-excluded-row .spending-category-link {
 .original-description { font-size: 0.75rem; line-height: 1.2; margin-top: 0.1rem; }
 .original-description .btn-link { color: #a0aec0; font-size: 0.7rem; }
 .description-edit-input { min-width: 12rem; }
+
+/* EX-03 sync health: the banner lists one line per institution and names only
+   the accounts underneath it that have actually gone quiet. */
+.sync-health-banner ul { list-style: none; padding-left: 0; margin-bottom: 0; }
+.sync-health-banner > div > div > ul > li { margin-bottom: 0.35rem; }
+.sync-health-banner .sync-health-accounts { padding-left: 1.1rem; margin-top: 0.15rem; }
+.sync-health-banner .sync-health-accounts li { font-size: 0.85rem; }
+.sync-health-banner .sync-health-count { white-space: nowrap; }
+.sync-issue-badge { cursor: help; }

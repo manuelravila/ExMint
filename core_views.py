@@ -60,6 +60,7 @@ import hashlib
 import time as _time
 import jwt as _pyjwt
 from jwt.algorithms import ECAlgorithm as _ECAlgorithm
+from sync_health import collect_sync_health
 
 core = Blueprint('core', __name__)
 
@@ -3015,6 +3016,27 @@ def get_accounts():
 @core.route('/api/banks', methods=['GET'])
 @login_required
 def get_banks():
+    health = collect_sync_health(current_user.id)
+    account_health = {record['account_id']: record for record in health['accounts']}
+    credential_health = {inst['id']: inst for inst in health['institutions']}
+
+    def _account_health_fields(account_id):
+        record = account_health.get(account_id) or {}
+        return {
+            'last_transaction_date': record.get('last_transaction_date'),
+            'days_since_last_transaction': record.get('days_since_last_transaction'),
+            'expected_tx_per_month': record.get('expected_tx_per_month'),
+            'expected_gap_days': record.get('expected_gap_days'),
+            'silent_after_days': record.get('silent_after_days'),
+            'sync_status': record.get('status'),
+            'sync_reasons': record.get('reasons', []),
+            'needs_attention': record.get('needs_attention', False),
+            'sync_detail': record.get('detail', ''),
+            # This card is also shown by a live credential of the same bank, so
+            # the sidebar row is a leftover from a re-connect: no second badge.
+            'shadowed': record.get('shadowed', False),
+        }
+
     banks = Credential.query.filter_by(user_id=current_user.id).filter(
         Credential.status.in_(['Active', 'Revoked'])
     ).all()
@@ -3033,7 +3055,8 @@ def get_banks():
                 'subtype': account.subtype,
                 'plaid_account_id': account.plaid_account_id,
                 'is_enabled': account.is_enabled,
-                'status': account.status
+                'status': account.status,
+                **_account_health_fields(account.id)
             })
 
         # Skip credentials with no accounts
@@ -3068,6 +3091,7 @@ def get_banks():
         if not extra and b['revoked']:
             continue  # all accounts already visible via another credential
         covered |= b['_masks']
+        inst_health = credential_health.get(b['id'], {})
         # Strip internal fields before returning
         banks_data.append({
             'id': b['id'],
@@ -3076,7 +3100,17 @@ def get_banks():
             'requires_update': b['requires_update'],
             'soft_disconnected': b['soft_disconnected'],
             'revoked': b['revoked'],
-            'accounts': b['accounts']
+            'accounts': b['accounts'],
+            # EX-03: the bank's own standing plus the accounts under it that
+            # have gone quiet, so the accounts pane can name them.
+            'sync_status': inst_health.get('status', 'healthy'),
+            'sync_reasons': inst_health.get('reasons', []),
+            'sync_headline': inst_health.get('headline', ''),
+            'needs_attention': inst_health.get('needs_attention', False),
+            'last_transaction_date': inst_health.get('last_transaction_date'),
+            'days_since_last_transaction': inst_health.get('days_since_last_transaction'),
+            'sync_quiet_accounts': inst_health.get('quiet_accounts', []),
+            'sync_alert_accounts': inst_health.get('alert_accounts', []),
         })
 
     return jsonify(banks=banks_data)
@@ -4761,8 +4795,19 @@ def dashboard_summary():
     return jsonify({
         'balances': balances,
         'spending': spending,
-        'cashflow': cashflow
+        'cashflow': cashflow,
+        # EX-03: which accounts have stopped receiving transactions. Carried on
+        # the same call the dashboard already makes so the banner needs no extra
+        # round trip.
+        'sync_health': collect_sync_health(current_user.id)
     })
+
+
+@core.route('/api/sync-health', methods=['GET'])
+@login_required
+def sync_health_report():
+    """EX-03: the whole sync-health read on its own, for the accounts pane."""
+    return jsonify(collect_sync_health(current_user.id))
 
 
 @core.route('/api/budgets', methods=['GET'])
