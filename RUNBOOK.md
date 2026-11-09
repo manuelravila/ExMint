@@ -36,7 +36,6 @@ whenever infrastructure changes are made.
 | Branch | Purpose |
 |--------|---------|
 | `dev` | Active development — all new work starts here |
-| `stag` | Staging — merged from `dev` for QA before production |
 | `main` | Production — merged from `dev` when ready to release |
 
 Changes always flow **dev → main**. Never commit directly to `main`.
@@ -46,7 +45,6 @@ Changes always flow **dev → main**. Never commit directly to `main`.
 | Remote | URL | Purpose |
 |--------|-----|---------|
 | `origin` | `https://github.com/manuelravila/ExMint` | GitHub mirror — requires credentials from local machine; cannot push from the dev container |
-| `vps-stag` | `vps-exmint:/root/repos/exmint-stag.git` | VPS staging bare repo — triggers staging deployment on push |
 | `vps-prod` | `vps-exmint:/root/repos/exmint-prod.git` | VPS production bare repo — triggers production deployment on push |
 
 ### SSH Alias (`~/.ssh/config`)
@@ -147,23 +145,21 @@ name are used:
 
 ```bash
 # Check running containers
-docker-compose --env-file .env.stag -p exmint-stag ps
+docker-compose --env-file .env.main -p exmint-prod ps
 
 # View live logs
-docker-compose --env-file .env.stag -p exmint-stag logs -f
+docker-compose --env-file .env.main -p exmint-prod logs -f
 
 # Force rebuild without pushing
-docker-compose --env-file .env.stag -p exmint-stag down
-docker-compose --env-file .env.stag -p exmint-stag up -d --build
+docker-compose --env-file .env.main -p exmint-prod down
+docker-compose --env-file .env.main -p exmint-prod up -d --build
 ```
-
-Replace `--env-file .env.stag -p exmint-stag` with `--env-file .env.main -p exmint-prod` for production.
 
 ---
 
 ## 6. Standard Deployment Workflow
 
-### Dev → Staging
+### Dev → Production
 
 ```bash
 # 1. Commit all changes on dev
@@ -171,35 +167,21 @@ git checkout dev
 git add <files>
 git commit -m "..."
 
-# 2. Merge into stag (always fast-forward)
-git checkout stag
+# 2. Merge into main (always fast-forward)
+git checkout main
 git merge --ff-only dev
 
 # 3. Push to VPS — hook deploys and rebuilds Docker automatically
-git push vps-stag stag
-
-# 4. Return to dev
-git checkout dev
-```
-
-### Staging → Production
-
-```bash
-# 1. Confirm stag is stable, then merge into main
-git checkout main
-git merge --ff-only stag
-
-# 2. Push to VPS — hook deploys and rebuilds Docker automatically
 git push vps-prod main
 
-# 3. Return to dev
+# 4. Return to dev
 git checkout dev
 ```
 
 ### Syncing GitHub (optional, from local machine with credentials)
 
 ```bash
-git push origin dev stag main
+git push origin dev main
 ```
 
 This cannot be done from the dev container — GitHub credentials are only available
@@ -215,15 +197,12 @@ won't fire. Create an empty commit to force it:
 
 ```bash
 git checkout dev
-git commit --allow-empty -m "Trigger stag deployment"
-git checkout stag
+git commit --allow-empty -m "Trigger production deployment"
+git checkout main
 git merge --ff-only dev
-git push vps-stag stag
+git push vps-prod main
 git checkout dev
 ```
-
-Use the same pattern substituting `stag`/`vps-stag` with `main`/`vps-prod` for
-production.
 
 ---
 
@@ -279,4 +258,4 @@ The Docker image may not have been rebuilt. Run `up -d --build` (not just
 | Minor (`Y`) | New features |
 | Patch (`Z`) | Bug fixes and small improvements |
 
-Both files must be updated together before merging to `stag` or `main`.
+Both files must be updated together before merging to `main`.
