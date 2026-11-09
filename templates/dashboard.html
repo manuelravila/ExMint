@@ -941,6 +941,15 @@
                     <button
                         type="button"
                         class="dashboard-tab-btn tab-switch-btn"
+                        :class="{ active: dashboardTab === 'recurring' }"
+                        @click="setDashboardTab('recurring')"
+                    >
+                        <i class="fas fa-redo mr-2"></i>
+                        Recurring
+                    </button>
+                    <button
+                        type="button"
+                        class="dashboard-tab-btn tab-switch-btn"
                         :class="{ active: dashboardTab === 'projects' }"
                         @click="setDashboardTab('projects')"
                     >
@@ -1440,6 +1449,75 @@
                                 <div class="cashflow-chart-container">
                                     <line-chart :chart-data="cashflowChartData" :options="cashflowChartOptions"></line-chart>
                                 </div>
+                            </div>
+                        </div>
+                    </template>
+                    <template v-else-if="dashboardTab === 'recurring'">
+                        <div class="card shadow-sm dashboard-card recurring-card">
+                            <div class="card-header d-flex justify-content-between align-items-center">
+                                <div>
+                                    <h5 class="mb-0">Recurring charges</h5>
+                                    <small class="text-muted">Bills and subscriptions that charge monthly or every two weeks</small>
+                                </div>
+                                <button type="button" class="btn btn-sm btn-outline-secondary" @click="fetchRecurring()"
+                                        :disabled="recurringLoading" title="Refresh">
+                                    <i class="fas fa-sync-alt" :class="{ 'fa-spin': recurringLoading }"></i>
+                                </button>
+                            </div>
+                            <div class="card-body">
+                                <div v-if="recurringError" class="alert alert-warning py-2 px-3">[[ recurringError ]]</div>
+                                <div v-else-if="recurringLoading && !recurring" class="text-muted">Loading…</div>
+                                <template v-else-if="recurring">
+                                    <div class="mb-3">
+                                        <span class="text-muted">Monthly total</span>
+                                        <h3 class="mb-0">[[ formatCurrency(recurring.total_monthly) ]]</h3>
+                                        <small class="text-muted">[[ recurring.recurring.length ]] active</small>
+                                    </div>
+                                    <div v-for="alert in recurring.alerts" :key="alert.key + alert.type + alert.date"
+                                         class="alert py-1 px-2 mb-1 small"
+                                         :class="alert.type === 'price_change' ? 'alert-warning' : 'alert-info'">
+                                        <template v-if="alert.type === 'price_change'">
+                                            <strong>[[ alert.merchant ]]</strong> changed price on [[ alert.date ]]:
+                                            [[ formatCurrency(alert.old_amount) ]] → [[ formatCurrency(alert.new_amount) ]]
+                                            ([[ alert.change_pct > 0 ? '+' : '' ]][[ alert.change_pct ]]%)
+                                        </template>
+                                        <template v-else>
+                                            New recurring charge: <strong>[[ alert.merchant ]]</strong> (third charge [[ alert.date ]])
+                                        </template>
+                                    </div>
+                                    <div class="table-responsive mt-3">
+                                        <table class="table table-sm">
+                                            <thead>
+                                                <tr><th>Merchant</th><th>Cadence</th><th class="text-right">Last charge</th>
+                                                    <th class="text-right">Per month</th><th>Last date</th><th>Next expected</th></tr>
+                                            </thead>
+                                            <tbody>
+                                                <tr v-for="item in recurring.recurring" :key="item.key + item.first_date + item.last_amount">
+                                                    <td>
+                                                        [[ item.merchant ]]
+                                                        <span v-for="a in item.alerts" :key="a.type" class="badge ml-1"
+                                                              :class="a.type === 'price_change' ? 'badge-warning' : 'badge-info'">
+                                                            [[ a.type === 'price_change' ? 'price change' : 'new' ]]
+                                                        </span>
+                                                    </td>
+                                                    <td>[[ item.cadence ]]</td>
+                                                    <td class="text-right">[[ formatCurrency(item.last_amount) ]]</td>
+                                                    <td class="text-right">[[ formatCurrency(item.monthly_equivalent) ]]</td>
+                                                    <td>[[ item.last_date ]]</td>
+                                                    <td :class="{ 'text-danger': item.overdue }">
+                                                        [[ item.next_expected ]]<span v-if="item.overdue"> (overdue)</span>
+                                                    </td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    <details v-if="recurring.inactive.length" class="small text-muted">
+                                        <summary>[[ recurring.inactive.length ]] stopped (not in the total)</summary>
+                                        <div v-for="item in recurring.inactive" :key="'i' + item.key + item.first_date + item.last_amount">
+                                            [[ item.merchant ]] — [[ formatCurrency(item.last_amount) ]] [[ item.cadence ]], last [[ item.last_date ]]
+                                        </div>
+                                    </details>
+                                </template>
                             </div>
                         </div>
                     </template>

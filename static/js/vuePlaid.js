@@ -305,6 +305,9 @@ const app = new Vue({
             },
             sync_health: { alerts: [], alert_count: 0, account_count: 0, counts: {} }
         },
+        recurring: null,
+        recurringLoading: false,
+        recurringError: null,
         debtIncludeMortgage: false,
         debtLoading: false,
         debtError: null,
@@ -1100,6 +1103,28 @@ const app = new Vue({
                 if (!this.debtHistory.dates || !this.debtHistory.dates.length) {
                     this.fetchDebtHistory();
                 }
+            } else if (tab === 'recurring' && !this.recurring) {
+                this.fetchRecurring();
+            }
+        },
+        fetchRecurring: async function() {
+            if (this.recurringLoading) {
+                return;
+            }
+            this.recurringLoading = true;
+            this.recurringError = null;
+            try {
+                const response = await fetch('/api/recurring');
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to load recurring charges.');
+                }
+                this.recurring = data;
+            } catch (error) {
+                console.error('Error fetching recurring charges:', error);
+                this.recurringError = error.message || 'Failed to load recurring charges.';
+            } finally {
+                this.recurringLoading = false;
             }
         },
         fetchDebtHistory: async function(options = {}) {

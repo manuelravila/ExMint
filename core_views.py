@@ -61,6 +61,7 @@ import time as _time
 import jwt as _pyjwt
 from jwt.algorithms import ECAlgorithm as _ECAlgorithm
 from sync_health import collect_sync_health
+from recurring import collect_recurring
 
 core = Blueprint('core', __name__)
 
@@ -5428,6 +5429,13 @@ def dashboard_summary():
 def sync_health_report():
     """EX-03: the whole sync-health read on its own, for the accounts pane."""
     return jsonify(collect_sync_health(current_user.id))
+
+
+@core.route('/api/recurring', methods=['GET'])
+@login_required
+def recurring_report():
+    """EX-06: recurring charges, the monthly total and price-change alerts."""
+    return jsonify(collect_recurring(current_user.id))
 
 
 @core.route('/api/budgets', methods=['GET'])
