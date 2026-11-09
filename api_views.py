@@ -109,6 +109,9 @@ from core_views import (
     _anchor_account_balance,
     _parse_anchor_date,
     _record_balance_snapshots,
+    _refresh_account_snapshots,
+    _collect_balance_history,
+    _parse_history_query_args,
     _ACCOUNT_TYPES,
     _CSV_NEW_ACCOUNT_TYPES,
 )
@@ -208,7 +211,7 @@ def sync_all():
     def handler():
         user = g.api_user
         active_creds = Credential.query.filter_by(
-            user_id=user.id, status='Active'
+            user_id=user.id, status='Active', soft_disconnected=False
         ).all()
 
         summary = []
@@ -264,6 +267,7 @@ def sync_all():
             category_summary = apply_category_rules(user.id)
 
         db.session.commit()
+        _record_balance_snapshots(user.id)
         status_code = 200 if not errors else 207
         return jsonify({
             'summary': summary,
@@ -1333,10 +1337,32 @@ def set_account_type(account_id):
 
     account.type = acct_type
     account.subtype = subtype
+    _refresh_account_snapshots(account)
     db.session.commit()
     payload = _account_balance_payload(account)
     _record_balance_snapshots(g.api_user.id)
     return jsonify({'account_id': account.id, 'type': acct_type, 'subtype': subtype, **payload})
+
+
+@api_v1.route('/balances/history', methods=['GET'])
+@require_api_auth
+def get_balance_history_v1():
+    """EX-01: Balance history and debt dashboard metrics.
+
+    Query parameters:
+      - ``include_mortgage`` (true/false, default false)
+      - ``account_id`` (optional int filter)
+      - ``start_date`` / ``from`` (optional YYYY-MM-DD)
+      - ``end_date`` / ``to`` (optional YYYY-MM-DD)
+      - ``days`` (optional int lookback days)
+      - ``debt_only`` (true/false, default false)
+      - ``include_closed`` (true/false, default false)
+    """
+    try:
+        opts = _parse_history_query_args(request.args)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    return jsonify(_collect_balance_history(g.api_user.id, **opts))
 
 
 @api_v1.route('/accounts/<int:account_id>/balance', methods=['GET'])

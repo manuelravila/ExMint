@@ -1873,3 +1873,9 @@ tr.budget-excluded-row .spending-category-link {
 .sync-health-more { font-size: 0.85rem; }
 .sync-health-more-btn { text-decoration: underline; }
 .sync-issue-badge { cursor: help; }
+
+/* EX-01 Debt dashboard */
+.debt-kpi { background-color: #f8fafc; }
+.debt-chart-container { position: relative; height: 320px; width: 100%; }
+.debt-account-table th, .debt-account-table td { vertical-align: middle; }
+

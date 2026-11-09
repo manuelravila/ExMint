@@ -286,8 +286,32 @@ const app = new Vue({
             balances: { groups: [], grand_total: 0 },
             spending: { years: [], current_year: null, current_month: null },
             cashflow: { months: [], categories: [], series: {} },
+            debt_history: {
+                dates: [],
+                include_mortgage: false,
+                current_total_debt: 0,
+                previous_month_total_debt: 0,
+                previous_month_date: null,
+                change_vs_last_month: 0,
+                change_vs_last_month_pct: null,
+                is_debt_going_down: false,
+                summary_excl_mortgage: null,
+                summary_incl_mortgage: null,
+                total_debt: [],
+                total_debt_excl_mortgage: [],
+                total_debt_incl_mortgage: [],
+                debt_accounts: [],
+                all_debt_accounts: []
+            },
             sync_health: { alerts: [], alert_count: 0, account_count: 0, counts: {} }
         },
+        debtIncludeMortgage: false,
+        debtLoading: false,
+        debtError: null,
+        debtEditingAccountId: null,
+        debtEditBalance: '',
+        debtEditAsOf: '',
+        debtSavingAccountId: null,
         selectedCashflowCategory: 'all',
         openBalanceGroups: [],
         openBalanceInstitutions: {},
@@ -650,6 +674,97 @@ const app = new Vue({
                     }]
                 }
             }
+        },
+        debtHistory: function() {
+            return (this.dashboardData && this.dashboardData.debt_history) || {};
+        },
+        debtSummary: function() {
+            const dh = this.debtHistory;
+            const sub = this.debtIncludeMortgage
+                ? (dh.summary_incl_mortgage || dh)
+                : (dh.summary_excl_mortgage || dh);
+            return {
+                current_total_debt: Number((sub && sub.current_total_debt) || 0),
+                previous_month_total_debt: Number((sub && sub.previous_month_total_debt) || 0),
+                previous_month_date: (sub && sub.previous_month_date) || null,
+                change_vs_last_month: Number((sub && sub.change_vs_last_month) || 0),
+                change_vs_last_month_pct: (sub && sub.change_vs_last_month_pct !== undefined)
+                    ? sub.change_vs_last_month_pct
+                    : null,
+                is_debt_going_down: Boolean(sub && sub.is_debt_going_down)
+            };
+        },
+        visibleDebtAccounts: function() {
+            const dh = this.debtHistory;
+            const all = Array.isArray(dh.all_debt_accounts)
+                ? dh.all_debt_accounts
+                : (Array.isArray(dh.debt_accounts) ? dh.debt_accounts : []);
+            if (this.debtIncludeMortgage) {
+                return all;
+            }
+            return all.filter(acct => !acct.is_mortgage);
+        },
+        mortgageDebtAccountsCount: function() {
+            const dh = this.debtHistory;
+            const all = Array.isArray(dh.all_debt_accounts) ? dh.all_debt_accounts : [];
+            return all.filter(acct => acct.is_mortgage).length;
+        },
+        debtChartData: function() {
+            const dh = this.debtHistory;
+            const labels = Array.isArray(dh.dates) ? dh.dates : [];
+            const totalSeries = this.debtIncludeMortgage
+                ? (Array.isArray(dh.total_debt_incl_mortgage) ? dh.total_debt_incl_mortgage : (dh.total_debt || []))
+                : (Array.isArray(dh.total_debt_excl_mortgage) ? dh.total_debt_excl_mortgage : (dh.total_debt || []));
+
+            const palette = [
+                '#2563EB', '#D97706', '#7C3AED', '#0891B2',
+                '#059669', '#DB2777', '#4F46E5', '#EA580C'
+            ];
+            const datasets = [
+                {
+                    label: this.debtIncludeMortgage
+                        ? 'Total Debt (incl. mortgage)'
+                        : 'Total Debt (excl. mortgage)',
+                    backgroundColor: 'rgba(220, 38, 38, 0.08)',
+                    borderColor: '#DC2626',
+                    borderWidth: 3,
+                    pointRadius: 4,
+                    data: totalSeries,
+                    fill: true
+                }
+            ];
+
+            this.visibleDebtAccounts.forEach((acct, idx) => {
+                const color = palette[idx % palette.length];
+                datasets.push({
+                    label: acct.display_name || acct.name || `Account #${acct.id}`,
+                    backgroundColor: color,
+                    borderColor: color,
+                    borderWidth: 2,
+                    borderDash: acct.is_csv_only ? [5, 4] : [],
+                    pointRadius: 3,
+                    data: Array.isArray(acct.debt_series) ? acct.debt_series : (acct.series || []),
+                    fill: false
+                });
+            });
+
+            return {
+                labels: labels,
+                datasets: datasets
+            };
+        },
+        debtChartOptions: function() {
+            return {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    yAxes: [{
+                        ticks: {
+                            beginAtZero: true
+                        }
+                    }]
+                }
+            };
         }
     },
     methods: {
@@ -891,6 +1006,23 @@ const app = new Vue({
                     balances: data.balances || { groups: [], grand_total: 0 },
                     spending: data.spending || { years: [], current_year: null, current_month: null },
                     cashflow: data.cashflow || { months: [], categories: [], series: {} },
+                    debt_history: data.debt_history || {
+                        dates: [],
+                        include_mortgage: false,
+                        current_total_debt: 0,
+                        previous_month_total_debt: 0,
+                        previous_month_date: null,
+                        change_vs_last_month: 0,
+                        change_vs_last_month_pct: null,
+                        is_debt_going_down: false,
+                        summary_excl_mortgage: null,
+                        summary_incl_mortgage: null,
+                        total_debt: [],
+                        total_debt_excl_mortgage: [],
+                        total_debt_incl_mortgage: [],
+                        debt_accounts: [],
+                        all_debt_accounts: []
+                    },
                     sync_health: data.sync_health || { alerts: [], alert_count: 0, account_count: 0, counts: {} }
                 };
                 this.dashboardLoaded = true;
@@ -964,6 +1096,88 @@ const app = new Vue({
             this.dashboardTab = tab;
             if (tab === 'projects') {
                 this.fetchProjects();
+            } else if (tab === 'debt') {
+                if (!this.debtHistory.dates || !this.debtHistory.dates.length) {
+                    this.fetchDebtHistory();
+                }
+            }
+        },
+        fetchDebtHistory: async function(options = {}) {
+            const { force = false } = options;
+            if (this.debtLoading && !force) {
+                return;
+            }
+            this.debtLoading = true;
+            this.debtError = null;
+            try {
+                const includeMortgage = this.debtIncludeMortgage ? 'true' : 'false';
+                const response = await fetch(`/api/balances/history?include_mortgage=${includeMortgage}`);
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to load debt history.');
+                }
+                this.$set(this.dashboardData, 'debt_history', data);
+            } catch (error) {
+                console.error('Error fetching debt history:', error);
+                this.debtError = error.message || 'Failed to load debt history.';
+            } finally {
+                this.debtLoading = false;
+            }
+        },
+        onDebtMortgageToggle: function() {
+            this.fetchDebtHistory({ force: true });
+        },
+        balanceSourceShortLabel: function(acct) {
+            if (!acct) return '';
+            const src = acct.balance_source;
+            if (src === 'plaid') return 'Plaid';
+            if (src === 'anchor+tx') return 'Manual anchor';
+            return 'Computed sum';
+        },
+        startDebtBalanceEdit: function(acct) {
+            if (!acct) return;
+            this.debtEditingAccountId = acct.id;
+            this.debtEditBalance = acct.current_debt !== undefined
+                ? acct.current_debt
+                : Math.abs(Number(acct.balance || 0));
+            const todayIso = new Date().toISOString().slice(0, 10);
+            this.debtEditAsOf = acct.balance_date || todayIso;
+        },
+        cancelDebtBalanceEdit: function() {
+            this.debtEditingAccountId = null;
+            this.debtEditBalance = '';
+            this.debtEditAsOf = '';
+        },
+        saveDebtBalanceEdit: async function(acct) {
+            if (!acct || this.debtSavingAccountId === acct.id) return;
+            const val = this.debtEditBalance;
+            if (val === null || val === undefined || val === '') {
+                this.cancelDebtBalanceEdit();
+                return;
+            }
+            this.debtSavingAccountId = acct.id;
+            this.debtError = null;
+            try {
+                const payload = { balance: val };
+                if (this.debtEditAsOf) {
+                    payload.as_of = this.debtEditAsOf;
+                }
+                const response = await fetch(`/api/accounts/${acct.id}/reconcile`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to update balance.');
+                }
+                this.cancelDebtBalanceEdit();
+                await this.fetchDashboard({ suppressLoader: true, force: true });
+            } catch (error) {
+                console.error('Error updating debt balance:', error);
+                this.debtError = error.message || 'Failed to update balance.';
+            } finally {
+                this.debtSavingAccountId = null;
             }
         },
         handleSpendingYearChange: function() {
@@ -3437,8 +3651,9 @@ const app = new Vue({
         },
         saveReconcile: function(account) {
             const val = this.reconcileValue;
-            // If value hasn't changed from original, cancel instead of saving
-            if (val === null || val === undefined || val === '' || val === this._originalBalance) {
+            const self = this;
+            // If value hasn't changed from original and is already anchored, cancel instead of saving
+            if (val === null || val === undefined || val === '' || (val === this._originalBalance && account.balance_source === 'anchor+tx')) {
                 this.cancelReconcile();
                 return;
             }
@@ -3458,6 +3673,7 @@ const app = new Vue({
                 account.balance = data.balance;
                 account.balance_source = data.balance_source;
                 account.balance_as_of = data.balance_as_of;
+                return self.fetchDashboard({ suppressLoader: true, force: true });
             }).catch(function(err) {
                 console.error('Error reconciling:', err);
             });

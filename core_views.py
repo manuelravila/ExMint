@@ -1277,6 +1277,19 @@ def _account_owes(account):
     return (account.type or '').lower() in _DEBT_TYPES
 
 
+def _is_mortgage_account(account):
+    """True when the account is a mortgage (excluded from total debt by default)."""
+    subtype = (account.subtype or '').strip().lower()
+    name = (account.name or '').strip().lower()
+    return 'mortgage' in subtype or 'mortgage' in name
+
+
+def _clean_float(value):
+    """Quantize a money value to cents and return a float without -0.0."""
+    dec = Decimal(value or 0).quantize(CENT, rounding=ROUND_HALF_UP)
+    return 0.0 if dec == Decimal('0.00') else float(dec)
+
+
 def _compute_account_balance(account, txn_total=None, plaid_live=True, last_txn_date=None):
     """Compute one account's balance and say where it came from.
 
@@ -1302,8 +1315,9 @@ def _compute_account_balance(account, txn_total=None, plaid_live=True, last_txn_
         owed_or_held = anchor - (post_total or Decimal('0.00')) if owes \
             else anchor + (post_total or Decimal('0.00'))
         source, as_of = 'anchor+tx', account.balance_date
-    elif plaid_live and account.current_balance is not None:
-        owed_or_held = Decimal(account.current_balance)
+    elif plaid_live and (account.current_balance is not None or getattr(account, 'available_balance', None) is not None):
+        raw_plaid = account.current_balance if account.current_balance is not None else getattr(account, 'available_balance', None)
+        owed_or_held = Decimal(raw_plaid)
         source = 'plaid'
         as_of = account.balance_fetched_at.date() if account.balance_fetched_at else date.today()
     else:
@@ -1311,6 +1325,68 @@ def _compute_account_balance(account, txn_total=None, plaid_live=True, last_txn_
         # On a card the whole cash-flow total is the mirror image of the debt.
         owed_or_held = -total if owes else total
         source, as_of = 'sum', last_txn_date
+    owed_or_held = owed_or_held or Decimal('0.00')
+    balance = -owed_or_held if owes else owed_or_held
+    return balance.quantize(CENT, rounding=ROUND_HALF_UP), source, as_of
+
+
+def _compute_account_balance_as_of(account, target_date, plaid_live=True):
+    """Compute one account's signed dashboard balance as of ``target_date``."""
+    owes = _account_owes(account)
+
+    if account.last_known_balance is not None and account.balance_date is not None:
+        anchor = Decimal(account.last_known_balance)
+        if target_date >= account.balance_date:
+            delta = db.session.query(
+                func.coalesce(func.sum(Transaction.amount), Decimal('0.00'))
+            ).filter(
+                Transaction.account_id == account.id,
+                Transaction.is_removed.is_(False),
+                Transaction.date > account.balance_date,
+                Transaction.date <= target_date,
+            ).scalar() or Decimal('0.00')
+            owed_or_held = anchor - delta if owes else anchor + delta
+        else:
+            delta = db.session.query(
+                func.coalesce(func.sum(Transaction.amount), Decimal('0.00'))
+            ).filter(
+                Transaction.account_id == account.id,
+                Transaction.is_removed.is_(False),
+                Transaction.date > target_date,
+                Transaction.date <= account.balance_date,
+            ).scalar() or Decimal('0.00')
+            owed_or_held = anchor + delta if owes else anchor - delta
+        source, as_of = 'anchor+tx', target_date
+    elif plaid_live and (account.current_balance is not None or getattr(account, 'available_balance', None) is not None):
+        raw_plaid = account.current_balance if account.current_balance is not None else getattr(account, 'available_balance', None)
+        base = Decimal(raw_plaid)
+        ref_date = account.balance_fetched_at.date() if account.balance_fetched_at else date.today()
+        if target_date >= ref_date:
+            owed_or_held = base
+        else:
+            delta = db.session.query(
+                func.coalesce(func.sum(Transaction.amount), Decimal('0.00'))
+            ).filter(
+                Transaction.account_id == account.id,
+                Transaction.is_removed.is_(False),
+                Transaction.date > target_date,
+                Transaction.date <= ref_date,
+            ).scalar() or Decimal('0.00')
+            owed_or_held = base + delta if owes else base - delta
+        source, as_of = 'plaid', target_date
+    else:
+        row = db.session.query(
+            func.coalesce(func.sum(Transaction.amount), Decimal('0.00')),
+            func.max(Transaction.date),
+        ).filter(
+            Transaction.account_id == account.id,
+            Transaction.is_removed.is_(False),
+            Transaction.date <= target_date,
+        ).one()
+        total = Decimal(row[0] or 0)
+        owed_or_held = -total if owes else total
+        source, as_of = 'sum', row[1] or target_date
+
     owed_or_held = owed_or_held or Decimal('0.00')
     balance = -owed_or_held if owes else owed_or_held
     return balance.quantize(CENT, rounding=ROUND_HALF_UP), source, as_of
@@ -1354,14 +1430,14 @@ def _collect_balances_summary(user_id):
     processed_accounts = set()
 
     for account, institution_name, soft_disconnected, credential_status, credential_label, txn_total, txn_last_date in accounts:
+        # Skip revoked accounts entirely before deduplication so they never shadow active ones
+        if account.status == 'Revoked' or credential_status == 'Revoked':
+            continue
+
         account_key = (institution_name, account.name, account.mask)
         if account_key in processed_accounts:
             continue
         processed_accounts.add(account_key)
-
-        # Skip revoked accounts entirely
-        if account.status == 'Revoked' or credential_status == 'Revoked':
-            continue
 
         account_balance, balance_source, balance_as_of = _compute_account_balance(
             account,
@@ -2438,6 +2514,8 @@ def handle_token_and_accounts():
                     is_enabled=is_enabled
                 )
                 db.session.add(new_account)
+        db.session.flush()
+        _store_plaid_balances(credential, accounts_data)
         db.session.commit()
 
         db.session.refresh(credential)
@@ -2485,6 +2563,7 @@ def handle_token_and_accounts():
             credential.requires_update = False
 
         db.session.commit()
+        _record_balance_snapshots(credential.user_id)
         db.session.refresh(credential)  # Ensure we have the latest cursor state
 
         response_payload = {
@@ -2830,7 +2909,14 @@ def _sync_account_balances(credential, payload_accounts=None):
     """
     payload_accounts = list(payload_accounts or [])
     stored = _store_plaid_balances(credential, payload_accounts)
-    covered = {pa.get('account_id') for pa in payload_accounts if pa.get('account_id')}
+    covered = {
+        pa.get('account_id')
+        for pa in payload_accounts
+        if pa.get('account_id') and (
+            (pa.get('balances') or {}).get('current') is not None
+            or (pa.get('balances') or {}).get('available') is not None
+        )
+    }
     # /transactions/sync only reports the accounts its transactions belong to,
     # so an account with no movement in this delta still needs a lookup.
     stale = [a for a in credential.accounts
@@ -2841,10 +2927,23 @@ def _sync_account_balances(credential, payload_accounts=None):
                 AccountsGetRequest(access_token=credential.access_token)
             )
             stored += _store_plaid_balances(credential, response.to_dict().get('accounts', []))
+        except plaid.ApiException as exc:
+            error_code = None
+            error_message = str(exc)
+            try:
+                body = json.loads(exc.body) if getattr(exc, 'body', None) else {}
+                error_code = body.get('error_code')
+                error_message = body.get('error_message') or error_message
+            except Exception:
+                pass
+            current_app.logger.warning(
+                "Plaid error fetching account balances via /accounts/get for credential %s (%s): code=%s message=%s",
+                credential.id, credential.institution_name, error_code, error_message
+            )
         except Exception as exc:
             current_app.logger.warning(
-                "Failed to fetch account balances for credential %s: %s",
-                credential.id, exc
+                "Failed to fetch account balances for credential %s (%s): %s",
+                credential.id, credential.institution_name, exc
             )
 
     if stored:
@@ -3153,6 +3252,36 @@ def _parse_anchor_date(raw):
     return as_of
 
 
+def _upsert_snapshot(account_id, day, balance, source):
+    """Insert or update one (account_id, snapshot_date) balance snapshot row."""
+    balance = Decimal(str(balance)).quantize(CENT, rounding=ROUND_HALF_UP)
+    row = AccountBalanceSnapshot.query.filter_by(
+        account_id=account_id, snapshot_date=day
+    ).first()
+    if row is None:
+        db.session.add(AccountBalanceSnapshot(
+            account_id=account_id,
+            snapshot_date=day,
+            balance=balance,
+            source=source,
+        ))
+    else:
+        row.balance = balance
+        row.source = source
+
+
+def _refresh_account_snapshots(account):
+    """Recompute existing snapshots for an account after its type changes."""
+    plaid_live = bool(account.credential and not account.credential.soft_disconnected)
+    rows = AccountBalanceSnapshot.query.filter_by(account_id=account.id).all()
+    for row in rows:
+        bal, src, _ = _compute_account_balance_as_of(
+            account, row.snapshot_date, plaid_live=plaid_live
+        )
+        row.balance = bal
+        row.source = src
+
+
 def _anchor_account_balance(account, balance, as_of=None):
     """Point an account's balance at a known real figure, and return it.
 
@@ -3163,6 +3292,13 @@ def _anchor_account_balance(account, balance, as_of=None):
     """
     account.last_known_balance = abs(balance) if _account_owes(account) else balance
     account.balance_date = as_of or date.today()
+    if account.id is not None and account.balance_date < date.today():
+        signed_anchor = (
+            -abs(account.last_known_balance)
+            if _account_owes(account)
+            else account.last_known_balance
+        )
+        _upsert_snapshot(account.id, account.balance_date, signed_anchor, 'anchor+tx')
     return account.last_known_balance
 
 
@@ -3199,25 +3335,500 @@ def _record_balance_snapshots(user_id, snapshot_day=None):
     daily cron plus every sync and every anchor land exactly one snapshot per
     account per day.  Returns the number of accounts written.
     """
-    summary = _collect_balances_summary(user_id)
     day = snapshot_day or date.today()
+    seen_ids = set()
     written = 0
-    for group in summary.get('groups', []):
-        for institution in group.get('institutions', []):
-            for acct in institution.get('accounts', []):
-                balance = Decimal(str(acct['balance']))
-                row = AccountBalanceSnapshot.query.filter_by(
-                    account_id=acct['id'], snapshot_date=day).first()
-                if row is None:
-                    db.session.add(AccountBalanceSnapshot(
-                        account_id=acct['id'], snapshot_date=day,
-                        balance=balance, source=acct['balance_source']))
-                else:
-                    row.balance = balance
-                    row.source = acct['balance_source']
-                written += 1
+
+    if day == date.today():
+        summary = _collect_balances_summary(user_id)
+        for group in summary.get('groups', []):
+            for institution in group.get('institutions', []):
+                for acct in institution.get('accounts', []):
+                    acct_id = acct['id']
+                    seen_ids.add(acct_id)
+                    _upsert_snapshot(
+                        acct_id,
+                        day,
+                        Decimal(str(acct['balance'])),
+                        acct['balance_source'],
+                    )
+                    written += 1
+
+    extra_accounts = (
+        db.session.query(Account, Credential.soft_disconnected)
+        .join(Credential, Account.credential_id == Credential.id)
+        .filter(
+            Credential.user_id == user_id,
+            Credential.status == 'Active',
+            Account.status == 'Active',
+            Account.is_enabled.is_(True),
+        )
+        .all()
+    )
+    for account, soft_disconnected in extra_accounts:
+        if account.id in seen_ids:
+            continue
+        seen_ids.add(account.id)
+        bal, src, _ = _compute_account_balance_as_of(
+            account, day, plaid_live=not bool(soft_disconnected)
+        )
+        _upsert_snapshot(account.id, day, bal, src)
+        written += 1
+
     db.session.commit()
     return written
+
+
+def _collect_balance_history(
+    user_id,
+    include_mortgage=False,
+    account_id=None,
+    start_date=None,
+    end_date=None,
+    debt_only=False,
+    include_closed=False,
+):
+    """EX-01: Balance history and debt dashboard payload for a user.
+
+    Read-only: never writes to the database. Uses ``AccountBalanceSnapshot`` rows
+    when present and reconstructs missing dates from anchors/Plaid balances and
+    transaction history so the debt chart always has >= 2 points.
+    """
+    today = date.today()
+    raw_totals = db.session.query(
+        Transaction.account_id.label('account_id'),
+        func.coalesce(func.sum(Transaction.amount), Decimal('0.00')).label('txn_total'),
+        func.max(Transaction.date).label('txn_last_date'),
+    ).filter(
+        Transaction.user_id == user_id,
+        Transaction.is_removed.is_(False),
+    ).group_by(Transaction.account_id).subquery()
+
+    query = (
+        db.session.query(
+            Account,
+            Credential.institution_name,
+            Credential.soft_disconnected,
+            Credential.label,
+            func.coalesce(raw_totals.c.txn_total, Decimal('0.00')).label('txn_total'),
+            raw_totals.c.txn_last_date,
+        )
+        .join(Credential, Account.credential_id == Credential.id)
+        .outerjoin(raw_totals, raw_totals.c.account_id == Account.id)
+        .filter(
+            Credential.user_id == user_id,
+            Credential.status == 'Active',
+            Account.status == 'Active',
+            Account.is_enabled.is_(True),
+        )
+    )
+    if account_id is not None:
+        query = query.filter(Account.id == account_id)
+
+    rows = query.all()
+    seen_keys = set()
+    active_accounts = []
+    for account, inst_name, soft_disconnected, cred_label, txn_total, txn_last_date in rows:
+        if account_id is None:
+            key = (inst_name, account.name, account.mask)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+        active_accounts.append(
+            (account, inst_name or 'Unknown Institution', bool(soft_disconnected),
+             cred_label or '', txn_total, txn_last_date)
+        )
+
+    acct_ids = [item[0].id for item in active_accounts]
+    snapshots_by_acct = defaultdict(dict)
+    snapshot_records = []
+    db_dates = set()
+
+    if acct_ids:
+        snap_q = AccountBalanceSnapshot.query.filter(
+            AccountBalanceSnapshot.account_id.in_(acct_ids)
+        )
+        if start_date is not None:
+            snap_q = snap_q.filter(AccountBalanceSnapshot.snapshot_date >= start_date)
+        if end_date is not None:
+            snap_q = snap_q.filter(AccountBalanceSnapshot.snapshot_date <= end_date)
+        snap_rows = snap_q.order_by(
+            AccountBalanceSnapshot.snapshot_date.asc(),
+            AccountBalanceSnapshot.account_id.asc(),
+        ).all()
+        for snap in snap_rows:
+            bal_dec = Decimal(snap.balance or 0).quantize(CENT, rounding=ROUND_HALF_UP)
+            snapshots_by_acct[snap.account_id][snap.snapshot_date] = (bal_dec, snap.source)
+            db_dates.add(snap.snapshot_date)
+            snapshot_records.append({
+                'account_id': snap.account_id,
+                'date': snap.snapshot_date.isoformat(),
+                'snapshot_date': snap.snapshot_date.isoformat(),
+                'balance': _clean_float(bal_dec),
+                'source': snap.source,
+            })
+
+    effective_end = min(end_date, today) if end_date else today
+    prev_month_target = effective_end - timedelta(days=30)
+
+    date_set = set(db_dates)
+    if start_date is None or effective_end >= start_date:
+        date_set.add(effective_end)
+    if len(date_set) < 2:
+        fallback_prior = prev_month_target
+        if start_date is not None and fallback_prior < start_date:
+            fallback_prior = start_date
+        if fallback_prior == effective_end:
+            fallback_prior = effective_end - timedelta(days=1)
+        date_set.add(fallback_prior)
+
+    date_list = sorted(date_set)
+    date_strs = [d.isoformat() for d in date_list]
+
+    daily_txns = defaultdict(list)
+    if acct_ids:
+        txn_rows = (
+            db.session.query(
+                Transaction.account_id,
+                Transaction.date,
+                func.coalesce(func.sum(Transaction.amount), Decimal('0.00')),
+            )
+            .filter(
+                Transaction.user_id == user_id,
+                Transaction.account_id.in_(acct_ids),
+                Transaction.is_removed.is_(False),
+                Transaction.date.isnot(None),
+            )
+            .group_by(Transaction.account_id, Transaction.date)
+            .all()
+        )
+        for a_id, t_date, day_sum in txn_rows:
+            daily_txns[a_id].append((t_date, Decimal(day_sum or 0)))
+
+    def _balance_at_date(account, d, curr_bal, curr_source, plaid_live):
+        acct_snaps = snapshots_by_acct.get(account.id, {})
+        if d in acct_snaps:
+            return acct_snaps[d]
+        if d == today:
+            return (curr_bal, curr_source)
+        txns = daily_txns.get(account.id, ())
+        if acct_snaps:
+            prior_dates = [sd for sd in acct_snaps if sd <= d]
+            if prior_dates:
+                nearest_prior = max(prior_dates)
+                base_bal, base_src = acct_snaps[nearest_prior]
+                delta = sum(
+                    (amt for dt, amt in txns if nearest_prior < dt <= d),
+                    Decimal('0.00'),
+                )
+                return ((base_bal + delta).quantize(CENT, rounding=ROUND_HALF_UP), base_src)
+            first_snap = min(acct_snaps)
+            base_bal, base_src = acct_snaps[first_snap]
+            delta = sum(
+                (amt for dt, amt in txns if d < dt <= first_snap),
+                Decimal('0.00'),
+            )
+            return ((base_bal - delta).quantize(CENT, rounding=ROUND_HALF_UP), base_src)
+
+        owes = _account_owes(account)
+        if account.last_known_balance is not None and account.balance_date is not None:
+            anchor_raw = Decimal(account.last_known_balance)
+            anchor = -abs(anchor_raw) if owes else anchor_raw
+            if d >= account.balance_date:
+                after_total = sum(
+                    (amt for dt, amt in txns if account.balance_date < dt <= d),
+                    Decimal('0.00'),
+                )
+                return ((anchor + after_total).quantize(CENT, rounding=ROUND_HALF_UP), 'anchor+tx')
+            between_total = sum(
+                (amt for dt, amt in txns if d < dt <= account.balance_date),
+                Decimal('0.00'),
+            )
+            return ((anchor - between_total).quantize(CENT, rounding=ROUND_HALF_UP), 'anchor+tx')
+
+        raw_plaid = (
+            account.current_balance
+            if account.current_balance is not None
+            else getattr(account, 'available_balance', None)
+        )
+        if plaid_live and raw_plaid is not None:
+            plaid_raw = Decimal(raw_plaid)
+            plaid_bal = -abs(plaid_raw) if owes else plaid_raw
+            ref_date = (
+                account.balance_fetched_at.date()
+                if account.balance_fetched_at
+                else today
+            )
+            if d >= ref_date:
+                return (plaid_bal.quantize(CENT, rounding=ROUND_HALF_UP), 'plaid')
+            after_target = sum(
+                (amt for dt, amt in txns if d < dt <= ref_date),
+                Decimal('0.00'),
+            )
+            return ((plaid_bal - after_target).quantize(CENT, rounding=ROUND_HALF_UP), 'plaid')
+
+        upto_total = sum((amt for dt, amt in txns if dt <= d), Decimal('0.00'))
+        return (upto_total.quantize(CENT, rounding=ROUND_HALF_UP), 'sum')
+
+    prior_candidates = [d for d in date_list[:-1]] if len(date_list) >= 2 else list(date_list)
+    if prior_candidates:
+        comparison_date = min(
+            prior_candidates,
+            key=lambda d: (abs((d - prev_month_target).days), d),
+        )
+    else:
+        comparison_date = effective_end
+    comparison_idx = date_list.index(comparison_date) if comparison_date in date_list else 0
+    latest_idx = len(date_list) - 1 if date_list else 0
+
+    total_debt_excl_series = [Decimal('0.00') for _ in date_list]
+    total_debt_incl_series = [Decimal('0.00') for _ in date_list]
+
+    accounts_payload = []
+    debt_accounts_excl = []
+    debt_accounts_incl = []
+
+    for account, inst_name, soft_disconnected, cred_label, txn_total, txn_last_date in active_accounts:
+        if account.is_closed and not include_closed:
+            pass
+        group_key = _classify_account_group(account)
+        is_debt = _account_owes(account)
+        is_mortgage = _is_mortgage_account(account)
+
+        if debt_only and not is_debt:
+            continue
+
+        plaid_live = not soft_disconnected
+        curr_bal, curr_source, curr_as_of = _compute_account_balance(
+            account,
+            txn_total=txn_total,
+            plaid_live=plaid_live,
+            last_txn_date=txn_last_date,
+        )
+
+        bal_series = []
+        debt_series = []
+        history_points = []
+        for idx, d in enumerate(date_list):
+            bal_d, src_d = _balance_at_date(account, d, curr_bal, curr_source, plaid_live)
+            debt_d = (
+                max(Decimal('0.00'), -bal_d)
+                if (is_debt and bal_d < Decimal('0.00'))
+                else Decimal('0.00')
+            ).quantize(CENT, rounding=ROUND_HALF_UP)
+
+            bal_series.append(_clean_float(bal_d))
+            debt_series.append(_clean_float(debt_d))
+            history_points.append({
+                'date': date_strs[idx],
+                'balance': _clean_float(bal_d),
+                'debt': _clean_float(debt_d),
+                'source': src_d,
+            })
+
+            if is_debt and not account.is_closed:
+                total_debt_incl_series[idx] += debt_d
+                if not is_mortgage:
+                    total_debt_excl_series[idx] += debt_d
+
+        curr_debt_dec = (
+            Decimal(str(debt_series[latest_idx]))
+            if debt_series
+            else (max(Decimal('0.00'), -curr_bal) if is_debt else Decimal('0.00'))
+        ).quantize(CENT, rounding=ROUND_HALF_UP)
+        prev_debt_dec = (
+            Decimal(str(debt_series[comparison_idx]))
+            if debt_series
+            else curr_debt_dec
+        ).quantize(CENT, rounding=ROUND_HALF_UP)
+        change_debt_dec = (curr_debt_dec - prev_debt_dec).quantize(CENT, rounding=ROUND_HALF_UP)
+        if prev_debt_dec > Decimal('0.00'):
+            change_pct = float(
+                ((change_debt_dec / prev_debt_dec) * Decimal('100')).quantize(
+                    Decimal('0.1'), rounding=ROUND_HALF_UP
+                )
+            )
+        else:
+            change_pct = None
+
+        display_label = f"{inst_name} - {account.name or 'Account'}"
+        if account.mask:
+            display_label += f" (\u2022\u2022{account.mask})"
+
+        acct_entry = {
+            'id': account.id,
+            'account_id': account.id,
+            'name': account.name or 'Account',
+            'display_name': display_label,
+            'mask': account.mask,
+            'institution_name': inst_name,
+            'credential_label': cred_label,
+            'soft_disconnected': soft_disconnected,
+            'is_csv_only': bool(
+                soft_disconnected
+                or (account.plaid_account_id or '').startswith('csv_acct_')
+            ),
+            'type': account.type,
+            'subtype': account.subtype,
+            'group': group_key,
+            'is_debt': is_debt,
+            'is_mortgage': is_mortgage,
+            'is_closed': bool(account.is_closed),
+            'balance': _clean_float(curr_bal),
+            'current_debt': _clean_float(curr_debt_dec),
+            'previous_month_debt': _clean_float(prev_debt_dec),
+            'change_vs_last_month': _clean_float(change_debt_dec),
+            'change_vs_last_month_pct': change_pct,
+            'balance_source': curr_source,
+            'balance_as_of': curr_as_of.isoformat() if curr_as_of else None,
+            'last_known_balance': (
+                float(account.last_known_balance)
+                if account.last_known_balance is not None
+                else None
+            ),
+            'balance_date': (
+                account.balance_date.isoformat() if account.balance_date else None
+            ),
+            'dates': date_strs,
+            'balance_series': bal_series,
+            'debt_series': debt_series,
+            'series': debt_series if is_debt else bal_series,
+            'history': history_points,
+        }
+        if not account.is_closed or include_closed:
+            accounts_payload.append(acct_entry)
+        if is_debt and (not account.is_closed or include_closed):
+            debt_accounts_incl.append(acct_entry)
+            if not is_mortgage:
+                debt_accounts_excl.append(acct_entry)
+
+    debt_accounts_incl.sort(key=lambda a: (-a['current_debt'], a['display_name']))
+    debt_accounts_excl.sort(key=lambda a: (-a['current_debt'], a['display_name']))
+
+    def _build_debt_summary(series_dec):
+        curr_val = (
+            series_dec[latest_idx] if series_dec else Decimal('0.00')
+        ).quantize(CENT, rounding=ROUND_HALF_UP)
+        prev_val = (
+            series_dec[comparison_idx] if series_dec else Decimal('0.00')
+        ).quantize(CENT, rounding=ROUND_HALF_UP)
+        diff_val = (curr_val - prev_val).quantize(CENT, rounding=ROUND_HALF_UP)
+        if prev_val > Decimal('0.00'):
+            pct_val = float(
+                ((diff_val / prev_val) * Decimal('100')).quantize(
+                    Decimal('0.1'), rounding=ROUND_HALF_UP
+                )
+            )
+        else:
+            pct_val = None
+        return {
+            'current_total_debt': _clean_float(curr_val),
+            'previous_month_total_debt': _clean_float(prev_val),
+            'previous_month_date': comparison_date.isoformat() if date_list else None,
+            'change_vs_last_month': _clean_float(diff_val),
+            'change_vs_last_month_pct': pct_val,
+            'is_debt_going_down': bool(diff_val < Decimal('0.00')),
+        }
+
+    summary_excl = _build_debt_summary(total_debt_excl_series)
+    summary_incl = _build_debt_summary(total_debt_incl_series)
+    active_summary = summary_incl if include_mortgage else summary_excl
+
+    total_debt_excl_floats = [_clean_float(v) for v in total_debt_excl_series]
+    total_debt_incl_floats = [_clean_float(v) for v in total_debt_incl_series]
+    active_total_series = (
+        total_debt_incl_floats if include_mortgage else total_debt_excl_floats
+    )
+    selected_debt_accounts = (
+        debt_accounts_incl if include_mortgage else debt_accounts_excl
+    )
+
+    return {
+        'dates': date_strs,
+        'include_mortgage': bool(include_mortgage),
+        'current_total_debt': active_summary['current_total_debt'],
+        'previous_month_total_debt': active_summary['previous_month_total_debt'],
+        'previous_month_date': active_summary['previous_month_date'],
+        'change_vs_last_month': active_summary['change_vs_last_month'],
+        'change_vs_last_month_pct': active_summary['change_vs_last_month_pct'],
+        'is_debt_going_down': active_summary['is_debt_going_down'],
+        'summary_excl_mortgage': summary_excl,
+        'summary_incl_mortgage': summary_incl,
+        'total_debt': active_total_series,
+        'total_debt_excl_mortgage': total_debt_excl_floats,
+        'total_debt_incl_mortgage': total_debt_incl_floats,
+        'total_debt_series': [
+            {
+                'date': date_strs[i],
+                'total_debt': active_total_series[i],
+                'total_debt_excl_mortgage': total_debt_excl_floats[i],
+                'total_debt_incl_mortgage': total_debt_incl_floats[i],
+            }
+            for i in range(len(date_strs))
+        ],
+        'debt_accounts': selected_debt_accounts,
+        'all_debt_accounts': debt_accounts_incl,
+        'accounts': accounts_payload,
+        'snapshots': snapshot_records,
+    }
+
+
+def _parse_history_query_args(args):
+    """Parse query arguments for /api/balances/history and /api/v1/balances/history."""
+    raw_mortgage = (args.get('include_mortgage') or '').strip().lower()
+    include_mortgage = raw_mortgage in ('1', 'true', 'yes', 'on')
+
+    raw_debt_only = (args.get('debt_only') or '').strip().lower()
+    debt_only = raw_debt_only in ('1', 'true', 'yes', 'on')
+
+    raw_closed = (args.get('include_closed') or '').strip().lower()
+    include_closed = raw_closed in ('1', 'true', 'yes', 'on')
+
+    account_id = args.get('account_id', type=int)
+
+    start_date = None
+    raw_start = (args.get('start_date') or args.get('from') or '').strip()
+    if raw_start:
+        try:
+            start_date = datetime.strptime(raw_start, '%Y-%m-%d').date()
+        except ValueError:
+            raise ValueError('start_date must be in YYYY-MM-DD format')
+
+    end_date = None
+    raw_end = (args.get('end_date') or args.get('to') or '').strip()
+    if raw_end:
+        try:
+            end_date = datetime.strptime(raw_end, '%Y-%m-%d').date()
+        except ValueError:
+            raise ValueError('end_date must be in YYYY-MM-DD format')
+
+    days = args.get('days', type=int)
+    if days is not None and days > 0 and start_date is None:
+        ref_end = end_date or date.today()
+        start_date = ref_end - timedelta(days=days)
+
+    if start_date and end_date and start_date > end_date:
+        raise ValueError('start_date cannot be after end_date')
+
+    return {
+        'include_mortgage': include_mortgage,
+        'account_id': account_id,
+        'start_date': start_date,
+        'end_date': end_date,
+        'debt_only': debt_only,
+        'include_closed': include_closed,
+    }
+
+
+@core.route('/api/balances/history', methods=['GET'])
+@login_required
+def get_balance_history():
+    """Return balance history and debt dashboard metrics for the current user."""
+    try:
+        opts = _parse_history_query_args(request.args)
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    return jsonify(_collect_balance_history(current_user.id, **opts))
 
 
 @core.route('/api/accounts/<int:account_id>/reconcile', methods=['PUT'])
@@ -3323,6 +3934,7 @@ def set_account_type(account_id):
 
     account.type = acct_type
     account.subtype = subtype
+    _refresh_account_snapshots(account)
     db.session.commit()
     payload = _account_balance_payload(account)
     _record_balance_snapshots(current_user.id)
@@ -4796,6 +5408,7 @@ def dashboard_summary():
         'balances': balances,
         'spending': spending,
         'cashflow': cashflow,
+        'debt_history': _collect_balance_history(current_user.id),
         # EX-03: which accounts have stopped receiving transactions. Carried on
         # the same call the dashboard already makes so the banner needs no extra
         # round trip.
@@ -5313,6 +5926,9 @@ def fetch_balances():
     try:
         accounts_response = current_app.plaid_client.accounts_get(accounts_request)
         accounts = accounts_response.to_dict().get('accounts', [])
+        if _store_plaid_balances(credential, accounts):
+            db.session.commit()
+            _record_balance_snapshots(current_user.id)
 
         balances = [
             {"account_id": account.get('account_id'), "balances": account.get('balances')}
@@ -5320,6 +5936,10 @@ def fetch_balances():
         ]
         return jsonify({"balances": balances})
     except plaid.ApiException as e:
+        current_app.logger.warning(
+            "Plaid error in /api/balance for credential %s (%s): %s",
+            credential.id, credential.institution_name, e.body
+        )
         return jsonify(json.loads(e.body)), e.status
 
 @core.route('/api/soft_disconnect_bank/<int:bank_id>', methods=['POST'])
