@@ -113,8 +113,10 @@ def _plaid_acct(plaid_id, mask, acct_type, subtype, current, available=None):
 
 
 def _ensure_reachable_dev_db():
-    """Use the configured _dev_db if reachable; fall back to a temp SQLite _dev_db
-    when running inside an offline sandbox where MySQL 127.0.0.1:3306 is not mounted.
+    """Verify the configured _dev_db is reachable.
+
+    Aborts and exits non-zero when MySQL is unreachable, unless
+    EXMINT_TEST_SQLITE=1 is set in the environment for offline sandbox runs.
     """
     import config
     from sqlalchemy import create_engine, text
@@ -128,11 +130,16 @@ def _ensure_reachable_dev_db():
             eng.dispose()
             return None
         except Exception as exc:
-            fd, tmp_db = tempfile.mkstemp(prefix='exmint_test_ex01_', suffix='_dev_db.sqlite')
-            os.close(fd)
-            config.Config.SQLALCHEMY_DATABASE_URI = 'sqlite:///' + tmp_db
-            print('NOTE: MySQL dev DB unreachable in sandbox (%s); using scratch %s' % (exc.__class__.__name__, tmp_db))
-            return tmp_db
+            target = uri.split('@', 1)[-1]
+            if os.environ.get('EXMINT_TEST_SQLITE') == '1':
+                fd, tmp_db = tempfile.mkstemp(prefix='exmint_test_ex01_', suffix='_dev_db.sqlite')
+                os.close(fd)
+                config.Config.SQLALCHEMY_DATABASE_URI = 'sqlite:///' + tmp_db
+                print('NOTE: EXMINT_TEST_SQLITE=1 set and MySQL dev DB (%s) unreachable (%s); using scratch SQLite %s'
+                      % (target, exc.__class__.__name__, tmp_db))
+                return tmp_db
+            print('ABORT — dev database unreachable (%s: %s)' % (target, exc))
+            sys.exit(1)
     return None
 
 
@@ -154,8 +161,12 @@ def main():
 
         tag = 'EXMINT-EX01-%s' % uuid.uuid4().hex[:8]
         today = datetime.date.today()
-        thirty_days_ago = today - datetime.timedelta(days=30)
+        yesterday = today - datetime.timedelta(days=1)
+        three_days_ago = today - datetime.timedelta(days=3)
+        seven_days_ago = today - datetime.timedelta(days=7)
         ten_days_ago = today - datetime.timedelta(days=10)
+        fourteen_days_ago = today - datetime.timedelta(days=14)
+        thirty_days_ago = today - datetime.timedelta(days=30)
 
         state = {
             'cred_ids': [],
@@ -361,37 +372,91 @@ def main():
                 )
 
             # ── Step 2: Manual balance entry for CSV-only account ──────────────
-            # Add a $200 payment (+200.00) 10 days ago on the Home Depot CSV card.
-            # If we anchor the card at $600 owed as of 30 days ago, then:
-            #   - 30 days ago snapshot = -600.00 (600 owed)
-            #   - today's balance = -600.00 + 200.00 = -400.00 (400 owed)
+            # Seed stale 'sum'-source snapshots on the CSV card for each of the
+            # last 14 days, plus two transactions:
+            #   - 10 days ago (in (today-14, today-7]): -$150.00 purchase
+            #   -  3 days ago (in (today-7,  today]):   +$350.00 payment
+            # When we anchor at $600 owed as of today-14:
+            #   - today-14 snapshot = -600.00 (anchor+tx)
+            #   - today-7  snapshot = -600.00 + (-150.00) = -750.00 (anchor+tx)
+            #   - today    snapshot = -600.00 - 150.00 + 350.00 = -400.00 (anchor+tx)
             with app.app_context():
-                db.session.add(Transaction(
-                    plaid_transaction_id='txn-hd-payment-%s' % tag,
-                    user_id=user_id,
-                    credential_id=csv_cred_id,
-                    account_id=hd_id,
-                    name='PAYMENT RECEIVED',
-                    amount=Decimal('200.00'),
-                    date=ten_days_ago,
-                    pending=False,
-                    is_removed=False,
-                ))
+                from core_views import _upsert_snapshot
+                db.session.add_all([
+                    Transaction(
+                        plaid_transaction_id='txn-hd-purchase-%s' % tag,
+                        user_id=user_id,
+                        credential_id=csv_cred_id,
+                        account_id=hd_id,
+                        name='LUMBER PURCHASE',
+                        amount=Decimal('-150.00'),
+                        date=ten_days_ago,
+                        pending=False,
+                        is_removed=False,
+                    ),
+                    Transaction(
+                        plaid_transaction_id='txn-hd-payment-%s' % tag,
+                        user_id=user_id,
+                        credential_id=csv_cred_id,
+                        account_id=hd_id,
+                        name='PAYMENT RECEIVED',
+                        amount=Decimal('350.00'),
+                        date=three_days_ago,
+                        pending=False,
+                        is_removed=False,
+                    ),
+                ])
+                for offset in range(15):
+                    snap_day = today - datetime.timedelta(days=offset)
+                    _upsert_snapshot(hd_id, snap_day, Decimal('-999.00'), 'sum')
                 db.session.commit()
 
+            rec_14_resp = client.put(
+                '/api/accounts/%d/reconcile' % hd_id,
+                json={'balance': 600.00, 'as_of': fourteen_days_ago.isoformat()},
+            )
+            rec_14_data = rec_14_resp.get_json() or {}
+            check(
+                'manual balance entry (PUT /api/accounts/<id>/reconcile) works for CSV account',
+                rec_14_resp.status_code == 200
+                and rec_14_data.get('balance_source') == 'anchor+tx'
+                and close(rec_14_data.get('balance'), -400.00),
+                repr(rec_14_data),
+            )
+
+            with app.app_context():
+                hd_snap_14 = AccountBalanceSnapshot.query.filter_by(
+                    account_id=hd_id, snapshot_date=fourteen_days_ago
+                ).first()
+                hd_snap_7 = AccountBalanceSnapshot.query.filter_by(
+                    account_id=hd_id, snapshot_date=seven_days_ago
+                ).first()
+                hd_snap_today = AccountBalanceSnapshot.query.filter_by(
+                    account_id=hd_id, snapshot_date=today
+                ).first()
+                check(
+                    'back-dated manual balance recomputes snapshots >= as_of (today-7 equals anchor + txns in (as_of, today-7])',
+                    hd_snap_14 is not None
+                    and Decimal(hd_snap_14.balance) == Decimal('-600.00')
+                    and hd_snap_14.source == 'anchor+tx'
+                    and hd_snap_7 is not None
+                    and Decimal(hd_snap_7.balance) == Decimal('-750.00')
+                    and hd_snap_7.source == 'anchor+tx'
+                    and hd_snap_today is not None
+                    and Decimal(hd_snap_today.balance) == Decimal('-400.00')
+                    and hd_snap_today.source == 'anchor+tx',
+                    repr((
+                        hd_snap_14 and (str(hd_snap_14.balance), hd_snap_14.source),
+                        hd_snap_7 and (str(hd_snap_7.balance), hd_snap_7.source),
+                        hd_snap_today and (str(hd_snap_today.balance), hd_snap_today.source),
+                    )),
+                )
+
+            # Anchor at 30 days ago ($600 owed) and verify both 30d-ago and today snapshots
             rec_resp = client.put(
                 '/api/accounts/%d/reconcile' % hd_id,
                 json={'balance': 600.00, 'as_of': thirty_days_ago.isoformat()},
             )
-            rec_data = rec_resp.get_json() or {}
-            check(
-                'manual balance entry (PUT /api/accounts/<id>/reconcile) works for CSV account',
-                rec_resp.status_code == 200
-                and rec_data.get('balance_source') == 'anchor+tx'
-                and close(rec_data.get('balance'), -400.00),
-                repr(rec_data),
-            )
-
             with app.app_context():
                 hd_snap_past = AccountBalanceSnapshot.query.filter_by(
                     account_id=hd_id, snapshot_date=thirty_days_ago
@@ -401,7 +466,8 @@ def main():
                 ).first()
                 check(
                     'manual balance entry recorded both the back-dated anchor snapshot (-600.00) and today\'s snapshot (-400.00)',
-                    hd_snap_past is not None
+                    rec_resp.status_code == 200
+                    and hd_snap_past is not None
                     and Decimal(hd_snap_past.balance) == Decimal('-600.00')
                     and hd_snap_today is not None
                     and Decimal(hd_snap_today.balance) == Decimal('-400.00'),
@@ -427,6 +493,29 @@ def main():
             )
 
             # ── Step 3 & 4: Debt history & GET /api/v1/balances/history ────────
+            # First verify that when an account only has 2 recent snapshots
+            # (today-1 and today), GET /api/v1/balances/history still uses
+            # today-30d as previous_month_date (not yesterday) and includes weekly
+            # trend points so len(dates) >= 3.
+            with app.app_context():
+                from core_views import _upsert_snapshot
+                _upsert_snapshot(cc_id, yesterday, Decimal('-1300.00'), 'plaid')
+                db.session.commit()
+
+            two_snap_resp = client.get(
+                '/api/v1/balances/history?account_id=%d' % cc_id,
+                headers=api_headers,
+            )
+            two_snap_hist = two_snap_resp.get_json() or {}
+            check(
+                'with only 2 recent snapshots (today-1 and today), previous_month_date is today-30d and len(dates) >= 3',
+                two_snap_resp.status_code == 200
+                and two_snap_hist.get('previous_month_date') == thirty_days_ago.isoformat()
+                and isinstance(two_snap_hist.get('dates'), list)
+                and len(two_snap_hist['dates']) >= 3,
+                repr((two_snap_hist.get('previous_month_date'), two_snap_hist.get('dates'))),
+            )
+
             # Seed last-month snapshots (30 days ago) for our Plaid debt accounts so
             # we can verify exact multi-point debt series and change vs last month:
             # 30 days ago (excl. mortgage) on our test accounts:

@@ -3270,10 +3270,15 @@ def _upsert_snapshot(account_id, day, balance, source):
         row.source = source
 
 
-def _refresh_account_snapshots(account):
-    """Recompute existing snapshots for an account after its type changes."""
+def _refresh_account_snapshots(account, since=None):
+    """Recompute existing snapshots for an account (all, or from ``since`` onward)."""
+    if account.id is None:
+        return
     plaid_live = bool(account.credential and not account.credential.soft_disconnected)
-    rows = AccountBalanceSnapshot.query.filter_by(account_id=account.id).all()
+    query = AccountBalanceSnapshot.query.filter_by(account_id=account.id)
+    if since is not None:
+        query = query.filter(AccountBalanceSnapshot.snapshot_date >= since)
+    rows = query.all()
     for row in rows:
         bal, src, _ = _compute_account_balance_as_of(
             account, row.snapshot_date, plaid_live=plaid_live
@@ -3292,13 +3297,15 @@ def _anchor_account_balance(account, balance, as_of=None):
     """
     account.last_known_balance = abs(balance) if _account_owes(account) else balance
     account.balance_date = as_of or date.today()
-    if account.id is not None and account.balance_date < date.today():
-        signed_anchor = (
-            -abs(account.last_known_balance)
-            if _account_owes(account)
-            else account.last_known_balance
-        )
-        _upsert_snapshot(account.id, account.balance_date, signed_anchor, 'anchor+tx')
+    if account.id is not None:
+        if account.balance_date < date.today():
+            signed_anchor = (
+                -abs(account.last_known_balance)
+                if _account_owes(account)
+                else account.last_known_balance
+            )
+            _upsert_snapshot(account.id, account.balance_date, signed_anchor, 'anchor+tx')
+        _refresh_account_snapshots(account, since=account.balance_date)
     return account.last_known_balance
 
 
@@ -3470,17 +3477,18 @@ def _collect_balance_history(
 
     effective_end = min(end_date, today) if end_date else today
     prev_month_target = effective_end - timedelta(days=30)
+    trend_start = start_date if start_date is not None else (effective_end - timedelta(days=90))
 
     date_set = set(db_dates)
     if start_date is None or effective_end >= start_date:
         date_set.add(effective_end)
-    if len(date_set) < 2:
-        fallback_prior = prev_month_target
-        if start_date is not None and fallback_prior < start_date:
-            fallback_prior = start_date
-        if fallback_prior == effective_end:
-            fallback_prior = effective_end - timedelta(days=1)
-        date_set.add(fallback_prior)
+    date_set.add(prev_month_target)
+    cursor = effective_end - timedelta(days=7)
+    while cursor >= trend_start:
+        date_set.add(cursor)
+        cursor -= timedelta(days=7)
+    if start_date is not None and start_date <= effective_end:
+        date_set.add(start_date)
 
     date_list = sorted(date_set)
     date_strs = [d.isoformat() for d in date_list]
@@ -3590,7 +3598,7 @@ def _collect_balance_history(
 
     for account, inst_name, soft_disconnected, cred_label, txn_total, txn_last_date in active_accounts:
         if account.is_closed and not include_closed:
-            pass
+            continue
         group_key = _classify_account_group(account)
         is_debt = _account_owes(account)
         is_mortgage = _is_mortgage_account(account)
@@ -3695,9 +3703,8 @@ def _collect_balance_history(
             'series': debt_series if is_debt else bal_series,
             'history': history_points,
         }
-        if not account.is_closed or include_closed:
-            accounts_payload.append(acct_entry)
-        if is_debt and (not account.is_closed or include_closed):
+        accounts_payload.append(acct_entry)
+        if is_debt:
             debt_accounts_incl.append(acct_entry)
             if not is_mortgage:
                 debt_accounts_excl.append(acct_entry)
