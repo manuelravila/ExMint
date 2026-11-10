@@ -285,8 +285,39 @@ const app = new Vue({
         dashboardData: {
             balances: { groups: [], grand_total: 0 },
             spending: { years: [], current_year: null, current_month: null },
-            cashflow: { months: [], categories: [], series: {} }
+            cashflow: { months: [], categories: [], series: {} },
+            debt_history: {
+                dates: [],
+                include_mortgage: false,
+                current_total_debt: 0,
+                previous_month_total_debt: 0,
+                previous_month_date: null,
+                change_vs_last_month: 0,
+                change_vs_last_month_pct: null,
+                is_debt_going_down: false,
+                summary_excl_mortgage: null,
+                summary_incl_mortgage: null,
+                total_debt: [],
+                total_debt_excl_mortgage: [],
+                total_debt_incl_mortgage: [],
+                debt_accounts: [],
+                all_debt_accounts: []
+            },
+            sync_health: { alerts: [], alert_count: 0, account_count: 0, counts: {} }
         },
+        recurring: null,
+        recurringLoading: false,
+        recurringError: null,
+        interestFees: null,
+        interestFeesLoading: false,
+        interestFeesError: null,
+        debtIncludeMortgage: false,
+        debtLoading: false,
+        debtError: null,
+        debtEditingAccountId: null,
+        debtEditBalance: '',
+        debtEditAsOf: '',
+        debtSavingAccountId: null,
         selectedCashflowCategory: 'all',
         openBalanceGroups: [],
         openBalanceInstitutions: {},
@@ -324,6 +355,8 @@ const app = new Vue({
             accountId: null,
             createMissingAccounts: false,
             newAccountCredentialId: '',
+            markClosed: false,
+            accountTypes: {},
             headers: [],
             sampleValues: {},
             autoMapping: {},
@@ -331,6 +364,7 @@ const app = new Vue({
             dateCandidates: [],
             amountSign: 'as_is',
             signConfirmed: false,
+            duplicateConfirmed: false,
             newInstitution: { name: '', accountName: '', type: 'credit_card', mask: '' },
             hasTemplate: false,
             templateLabel: '',
@@ -350,6 +384,67 @@ const app = new Vue({
     computed: {
         totalAccountCount: function() {
             return this.banks.reduce((count, bank) => count + bank.accounts.length, 0);
+        },
+        // EX-03: the institutions the banner gets a line each.  The server
+        // already ranked them by urgency and cut the list at
+        // banner_institution_limit; the rest are counted here and named in the
+        // Accounts pane, so the banner cannot push a revoked card off screen.
+        syncHealthInstitutions: function() {
+            const health = (this.dashboardData && this.dashboardData.sync_health) || {};
+            if (Array.isArray(health.banner_institutions)) {
+                return health.banner_institutions;
+            }
+            const all = (health.institutions || []).filter(inst => inst.needs_attention);
+            return all.slice(0, health.banner_institution_limit || all.length);
+        },
+        syncHealthMoreInstitutions: function() {
+            const health = (this.dashboardData && this.dashboardData.sync_health) || {};
+            if (Array.isArray(health.banner_omitted_institutions)) {
+                return health.banner_omitted_institutions.length;
+            }
+            if (typeof health.banner_omitted_institution_count === 'number') {
+                return health.banner_omitted_institution_count;
+            }
+            const all = (health.institutions || []).filter(inst => inst.needs_attention);
+            return Math.max(0, all.length - this.syncHealthInstitutions.length);
+        },
+        // EX-03 review: the cut institutions are named, not counted.  A revoked
+        // or paused connection that fell below the cap still has to be readable
+        // on the banner, or the card behind it looks like a month of thrift.
+        syncHealthOmittedInstitutions: function() {
+            const health = (this.dashboardData && this.dashboardData.sync_health) || {};
+            if (Array.isArray(health.banner_omitted_institutions)) {
+                return health.banner_omitted_institutions;
+            }
+            const all = (health.institutions || []).filter(inst => inst.needs_attention);
+            return all.slice(this.syncHealthInstitutions.length);
+        },
+        // 'RBC Royal Bank (Manu)' — the label matters when one bank is connected
+        // twice, which is exactly what hid Scotiabank on 2026-10-22.
+        syncHealthOmittedNames: function() {
+            return this.syncHealthOmittedInstitutions.map(inst =>
+                inst.label ? inst.institution_name + ' (' + inst.label + ')' : inst.institution_name);
+        },
+        syncHealthSummary: function() {
+            const health = (this.dashboardData && this.dashboardData.sync_health) || {};
+            const counts = health.counts || {};
+            const parts = [];
+            if (counts.revoked) parts.push(counts.revoked + ' revoked');
+            if (counts.requires_update) parts.push(counts.requires_update + ' needing reconnect');
+            if (counts.soft_disconnected) parts.push(counts.soft_disconnected + ' paused');
+            if (counts.no_recent_activity) parts.push(counts.no_recent_activity + ' silent');
+            const institutions = (health.institutions || []).filter(inst => inst.needs_attention).length;
+            const quiet = health.quiet_account_count || 0;
+            return {
+                institutionCount: institutions,
+                quietAccountCount: quiet,
+                heading: institutions === 1
+                    ? '1 institution is not delivering its transactions'
+                    : institutions + ' institutions are not delivering their transactions',
+                text: quiet
+                    ? (quiet + (quiet === 1 ? ' account' : ' accounts') + ' with nothing arriving')
+                    : parts.join(', ')
+            };
         },
         areAllAccountsSelected: function() {
             return this.totalAccountCount > 0 && this.selectedAccountIds.length === this.totalAccountCount;
@@ -585,6 +680,97 @@ const app = new Vue({
                     }]
                 }
             }
+        },
+        debtHistory: function() {
+            return (this.dashboardData && this.dashboardData.debt_history) || {};
+        },
+        debtSummary: function() {
+            const dh = this.debtHistory;
+            const sub = this.debtIncludeMortgage
+                ? (dh.summary_incl_mortgage || dh)
+                : (dh.summary_excl_mortgage || dh);
+            return {
+                current_total_debt: Number((sub && sub.current_total_debt) || 0),
+                previous_month_total_debt: Number((sub && sub.previous_month_total_debt) || 0),
+                previous_month_date: (sub && sub.previous_month_date) || null,
+                change_vs_last_month: Number((sub && sub.change_vs_last_month) || 0),
+                change_vs_last_month_pct: (sub && sub.change_vs_last_month_pct !== undefined)
+                    ? sub.change_vs_last_month_pct
+                    : null,
+                is_debt_going_down: Boolean(sub && sub.is_debt_going_down)
+            };
+        },
+        visibleDebtAccounts: function() {
+            const dh = this.debtHistory;
+            const all = Array.isArray(dh.all_debt_accounts)
+                ? dh.all_debt_accounts
+                : (Array.isArray(dh.debt_accounts) ? dh.debt_accounts : []);
+            if (this.debtIncludeMortgage) {
+                return all;
+            }
+            return all.filter(acct => !acct.is_mortgage);
+        },
+        mortgageDebtAccountsCount: function() {
+            const dh = this.debtHistory;
+            const all = Array.isArray(dh.all_debt_accounts) ? dh.all_debt_accounts : [];
+            return all.filter(acct => acct.is_mortgage).length;
+        },
+        debtChartData: function() {
+            const dh = this.debtHistory;
+            const labels = Array.isArray(dh.dates) ? dh.dates : [];
+            const totalSeries = this.debtIncludeMortgage
+                ? (Array.isArray(dh.total_debt_incl_mortgage) ? dh.total_debt_incl_mortgage : (dh.total_debt || []))
+                : (Array.isArray(dh.total_debt_excl_mortgage) ? dh.total_debt_excl_mortgage : (dh.total_debt || []));
+
+            const palette = [
+                '#2563EB', '#D97706', '#7C3AED', '#0891B2',
+                '#059669', '#DB2777', '#4F46E5', '#EA580C'
+            ];
+            const datasets = [
+                {
+                    label: this.debtIncludeMortgage
+                        ? 'Total Debt (incl. mortgage)'
+                        : 'Total Debt (excl. mortgage)',
+                    backgroundColor: 'rgba(220, 38, 38, 0.08)',
+                    borderColor: '#DC2626',
+                    borderWidth: 3,
+                    pointRadius: 4,
+                    data: totalSeries,
+                    fill: true
+                }
+            ];
+
+            this.visibleDebtAccounts.forEach((acct, idx) => {
+                const color = palette[idx % palette.length];
+                datasets.push({
+                    label: acct.display_name || acct.name || `Account #${acct.id}`,
+                    backgroundColor: color,
+                    borderColor: color,
+                    borderWidth: 2,
+                    borderDash: acct.is_csv_only ? [5, 4] : [],
+                    pointRadius: 3,
+                    data: Array.isArray(acct.debt_series) ? acct.debt_series : (acct.series || []),
+                    fill: false
+                });
+            });
+
+            return {
+                labels: labels,
+                datasets: datasets
+            };
+        },
+        debtChartOptions: function() {
+            return {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    yAxes: [{
+                        ticks: {
+                            beginAtZero: true
+                        }
+                    }]
+                }
+            };
         }
     },
     methods: {
@@ -723,6 +909,29 @@ const app = new Vue({
             }
             this.mobileSidebarVisible = false;
         },
+        // EX-03: the banner's "see Accounts" link.  The Accounts pane is this
+        // very sidebar, so the link has to undo whatever is hiding it — a
+        // collapsed sidebar on desktop, a collapsed account list, a closed
+        // drawer on a phone — and then bring it into view.
+        openAccountsPane: function() {
+            if (this.isMobileView) {
+                this.mobileSidebarVisible = true;
+            } else if (this.isSidebarCollapsed) {
+                this.isSidebarCollapsed = false;
+                this.lastDesktopSidebarPreference = false;
+                this.persistSidebarState();
+            }
+            if (this.transactionsCollapsed) {
+                this.transactionsCollapsed = false;
+            }
+            this.$nextTick(() => {
+                const pane = document.getElementById('accounts-navigation');
+                if (pane && typeof pane.scrollIntoView === 'function') {
+                    pane.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+                this.updateStickyPositions();
+            });
+        },
         sidebarTooltip: function(label) {
             if (this.isMobileView) {
                 return null;
@@ -802,7 +1011,25 @@ const app = new Vue({
                 this.dashboardData = {
                     balances: data.balances || { groups: [], grand_total: 0 },
                     spending: data.spending || { years: [], current_year: null, current_month: null },
-                    cashflow: data.cashflow || { months: [], categories: [], series: {} }
+                    cashflow: data.cashflow || { months: [], categories: [], series: {} },
+                    debt_history: data.debt_history || {
+                        dates: [],
+                        include_mortgage: false,
+                        current_total_debt: 0,
+                        previous_month_total_debt: 0,
+                        previous_month_date: null,
+                        change_vs_last_month: 0,
+                        change_vs_last_month_pct: null,
+                        is_debt_going_down: false,
+                        summary_excl_mortgage: null,
+                        summary_incl_mortgage: null,
+                        total_debt: [],
+                        total_debt_excl_mortgage: [],
+                        total_debt_incl_mortgage: [],
+                        debt_accounts: [],
+                        all_debt_accounts: []
+                    },
+                    sync_health: data.sync_health || { alerts: [], alert_count: 0, account_count: 0, counts: {} }
                 };
                 this.dashboardLoaded = true;
                 this.initializeDashboardState();
@@ -875,7 +1102,165 @@ const app = new Vue({
             this.dashboardTab = tab;
             if (tab === 'projects') {
                 this.fetchProjects();
+            } else if (tab === 'debt') {
+                if (!this.debtHistory.dates || !this.debtHistory.dates.length) {
+                    this.fetchDebtHistory();
+                }
+            } else if (tab === 'recurring' && !this.recurring) {
+                this.fetchRecurring();
+            } else if (tab === 'interest-fees' && !this.interestFees) {
+                this.fetchInterestFees();
             }
+        },
+        fetchRecurring: async function() {
+            if (this.recurringLoading) {
+                return;
+            }
+            this.recurringLoading = true;
+            this.recurringError = null;
+            try {
+                const response = await fetch('/api/recurring');
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to load recurring charges.');
+                }
+                this.recurring = data;
+            } catch (error) {
+                console.error('Error fetching recurring charges:', error);
+                this.recurringError = error.message || 'Failed to load recurring charges.';
+            } finally {
+                this.recurringLoading = false;
+            }
+        },
+        fetchInterestFees: async function() {
+            if (this.interestFeesLoading) {
+                return;
+            }
+            this.interestFeesLoading = true;
+            this.interestFeesError = null;
+            try {
+                const response = await fetch('/api/interest-fees');
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to load interest & fees.');
+                }
+                this.interestFees = data;
+            } catch (error) {
+                console.error('Error fetching interest & fees:', error);
+                this.interestFeesError = error.message || 'Failed to load interest & fees.';
+            } finally {
+                this.interestFeesLoading = false;
+            }
+        },
+        fetchDebtHistory: async function(options = {}) {
+            const { force = false } = options;
+            if (this.debtLoading && !force) {
+                return;
+            }
+            this.debtLoading = true;
+            this.debtError = null;
+            try {
+                const includeMortgage = this.debtIncludeMortgage ? 'true' : 'false';
+                const response = await fetch(`/api/balances/history?include_mortgage=${includeMortgage}`);
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to load debt history.');
+                }
+                this.$set(this.dashboardData, 'debt_history', data);
+            } catch (error) {
+                console.error('Error fetching debt history:', error);
+                this.debtError = error.message || 'Failed to load debt history.';
+            } finally {
+                this.debtLoading = false;
+            }
+        },
+        onDebtMortgageToggle: function() {
+            this.fetchDebtHistory({ force: true });
+        },
+        balanceSourceShortLabel: function(acct) {
+            if (!acct) return '';
+            const src = acct.balance_source;
+            if (src === 'plaid') return 'Plaid';
+            if (src === 'anchor+tx') return 'Manual anchor';
+            return 'Computed sum';
+        },
+        startDebtBalanceEdit: function(acct) {
+            if (!acct) return;
+            this.debtEditingAccountId = acct.id;
+            this.debtEditBalance = acct.current_debt !== undefined
+                ? acct.current_debt
+                : Math.abs(Number(acct.balance || 0));
+            const todayIso = new Date().toISOString().slice(0, 10);
+            this.debtEditAsOf = acct.balance_date || todayIso;
+        },
+        cancelDebtBalanceEdit: function() {
+            this.debtEditingAccountId = null;
+            this.debtEditBalance = '';
+            this.debtEditAsOf = '';
+        },
+        saveDebtBalanceEdit: async function(acct) {
+            if (!acct || this.debtSavingAccountId === acct.id) return;
+            const val = this.debtEditBalance;
+            if (val === null || val === undefined || val === '') {
+                this.cancelDebtBalanceEdit();
+                return;
+            }
+            this.debtSavingAccountId = acct.id;
+            this.debtError = null;
+            try {
+                const payload = { balance: val };
+                if (this.debtEditAsOf) {
+                    payload.as_of = this.debtEditAsOf;
+                }
+                const response = await fetch(`/api/accounts/${acct.id}/reconcile`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to update balance.');
+                }
+                this.cancelDebtBalanceEdit();
+                await this.fetchDashboard({ suppressLoader: true, force: true });
+            } catch (error) {
+                console.error('Error updating debt balance:', error);
+                this.debtError = error.message || 'Failed to update balance.';
+            } finally {
+                this.debtSavingAccountId = null;
+            }
+        },
+        /* ── Interest & Fees helpers (EX-07) ─────────────────── */
+        subTypeColor: function(type) {
+            const colors = {
+                'INTEREST': '#277DA1',
+                'OD_INTEREST': '#F8961E',
+                'NSF': '#F94144',
+                'ANNUAL_FEE': '#43AA8B',
+                'OVERDRAFT': '#F3722C',
+                'LATE_FEE': '#E56B6F',
+                'CASH_ADVANCE_FEE': '#577590',
+                'BALANCE_TRANSFER_FEE': '#6D597A',
+                'FOREIGN_TXN_FEE': '#90BE6D',
+                'OTHER_FEE': '#9A031E',
+            };
+            return colors[type] || '#577590';
+        },
+        getAccountLabel: function(acctId) {
+            for (const bank of this.banks) {
+                for (const acct of bank.accounts) {
+                    if (String(acct.id) === String(acctId)) {
+                        return acct.name + (acct.mask ? ' ••' + acct.mask : '');
+                    }
+                }
+            }
+            return 'Account ' + acctId;
+        },
+        formatMonth: function(monthKey) {
+            // monthKey is 'YYYY-MM'
+            const [year, month] = monthKey.split('-');
+            const date = new Date(year, month - 1, 1);
+            return date.toLocaleDateString(undefined, { year: 'numeric', month: 'short' });
         },
         handleSpendingYearChange: function() {
             this.resetOpenSpendingMonths();
@@ -3348,8 +3733,9 @@ const app = new Vue({
         },
         saveReconcile: function(account) {
             const val = this.reconcileValue;
-            // If value hasn't changed from original, cancel instead of saving
-            if (val === null || val === undefined || val === '' || val === this._originalBalance) {
+            const self = this;
+            // If value hasn't changed from original and is already anchored, cancel instead of saving
+            if (val === null || val === undefined || val === '' || (val === this._originalBalance && account.balance_source === 'anchor+tx')) {
                 this.cancelReconcile();
                 return;
             }
@@ -3362,25 +3748,34 @@ const app = new Vue({
                 if (!r.ok) throw new Error('Failed to reconcile');
                 return r.json();
             }).then(function(data) {
-                // Update the local balance to match what was set.
-                // Apply the same sign convention as _collect_balances_summary:
-                // credit/loan accounts are displayed negated (debt = negative).
-                var displayBalance = data.last_known_balance;
-                var t = account.type ? account.type.toLowerCase() : '';
-                var st = account.subtype ? account.subtype.toLowerCase() : '';
-                if (t === 'credit') {
-                    displayBalance = -displayBalance;
-                } else if (t === 'loan' || st === 'line_of_credit' || st === 'revolving') {
-                    // Loan accounts are also debt — negate for display
-                    displayBalance = -displayBalance;
-                }
+                // The server already knows the sign and which source now wins,
+                // so take its computed balance instead of re-deriving either here.
                 account.last_known_balance = data.last_known_balance;
                 account.balance_date = data.balance_date;
-                account.balance = displayBalance;
+                account.balance = data.balance;
+                account.balance_source = data.balance_source;
+                account.balance_as_of = data.balance_as_of;
+                return self.fetchDashboard({ suppressLoader: true, force: true });
             }).catch(function(err) {
                 console.error('Error reconciling:', err);
             });
             this.reconcileValue = 0;
+        },
+        toggleAccountClosed: function(account) {
+            // A cancelled card is retired, not deleted: it keeps every
+            // transaction and stops counting in the totals.
+            fetch('/api/accounts/' + account.id + '/closed', {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({closed: !account.is_closed})
+            }).then((r) => {
+                if (!r.ok) throw new Error('Failed to update the account');
+                return r.json();
+            }).then(() => {
+                return this.fetchDashboard({ suppressLoader: true, force: true });
+            }).catch(function(err) {
+                console.error('Error updating account status:', err);
+            });
         },
         fetchBanks: async function() {
             try {
@@ -3640,6 +4035,20 @@ const app = new Vue({
                 return isoDate;
             }
             return parsed.toLocaleDateString();
+        },
+        // EX-03: the badge a stale account gets in the accounts list. The whole
+        // sentence it produced is in the badge's title, so the badge itself stays
+        // short enough for a sidebar row.
+        syncIssueLabel: function(reasons) {
+            const labels = {
+                revoked: 'Revoked',
+                requires_update: 'Reconnect',
+                soft_disconnected: 'Paused',
+                no_recent_activity: 'No data',
+                no_transactions: 'No data'
+            };
+            const first = (reasons || [])[0];
+            return labels[first] || 'Sync issue';
         },
         applyTransactionFilters: function() {
             const start = this.filters.startDate;
@@ -3976,6 +4385,8 @@ const app = new Vue({
             this.csvImport.newInstitution = { name: '', accountName: '', type: 'credit_card', mask: '' };
             this.csvImport.createMissingAccounts = false;
             this.csvImport.newAccountCredentialId = '';
+            this.csvImport.markClosed = false;
+            this.csvImport.accountTypes = {};
             this.csvImport.headers = [];
             this.csvImport.sampleValues = {};
             this.csvImport.autoMapping = {};
@@ -3983,6 +4394,7 @@ const app = new Vue({
             this.csvImport.dateCandidates = [];
             this.csvImport.amountSign = 'as_is';
             this.csvImport.signConfirmed = false;
+            this.csvImport.duplicateConfirmed = false;
             this.csvImport.hasTemplate = false;
             this.csvImport.templateLabel = '';
             this.csvImport.preview = [];
@@ -3992,6 +4404,34 @@ const app = new Vue({
             this.csvImport.saveTemplate = false;
             this.csvImport.newTemplateLabel = '';
             this.csvImport.dragOver = false;
+        },
+
+        saveCsvAccountTypes: async function() {
+            // An import could not tell what a newly created account is, and the
+            // type decides whether it reads as an asset or as debt: ask the owner.
+            const pending = (this.csvImport.result && this.csvImport.result.accounts_need_type) || [];
+            const missing = pending.filter((acct) => !this.csvImport.accountTypes[acct.id]);
+            if (missing.length) {
+                this.csvImport.toastMessage = 'Pick a type for every account listed.';
+                this.csvImport.showToast = true;
+                var self3 = this;
+                setTimeout(function() { self3.csvImport.showToast = false; }, 6000);
+                return;
+            }
+            for (const acct of pending) {
+                const resp = await fetch('/api/accounts/' + acct.id + '/type', {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({account_type: this.csvImport.accountTypes[acct.id]}),
+                });
+                if (!resp.ok) {
+                    console.error('Could not set the type for account', acct.id, await resp.text());
+                    continue;
+                }
+                const entry = this.csvImport.result.accounts_need_type.find((a) => a.id === acct.id);
+                if (entry) entry.solved = true;
+            }
+            await this.fetchDashboard({ suppressLoader: true, force: true });
         },
 
         handleCsvFileSelect: function(event) {
@@ -4145,10 +4585,20 @@ const app = new Vue({
                 formData.append('mapping', JSON.stringify(this.csvImport.userMapping));
                 formData.append('save_template', this.csvImport.saveTemplate ? 'true' : 'false');
                 formData.append('create_missing_accounts', this.csvImport.createMissingAccounts ? 'true' : 'false');
+                if (this.csvImport.markClosed) {
+                    formData.append('mark_closed', 'true');
+                }
                 formData.append('amount_sign', this.csvImport.amountSign || 'as_is');
+                // Remember what this attempt confirmed: a file can trip both guards
+                // (sign first, then overlap), and the retry for one must keep the other.
+                const sentSignConfirmed = this.csvImport.signConfirmed;
                 if (this.csvImport.signConfirmed) {
                     formData.append('sign_confirmed', 'true');
                     this.csvImport.signConfirmed = false;  // one confirmed attempt only
+                }
+                if (this.csvImport.duplicateConfirmed) {
+                    formData.append('duplicate_confirmed', 'true');
+                    this.csvImport.duplicateConfirmed = false;  // one confirmed attempt only
                 }
                 if (this.csvImport.createMissingAccounts && this.csvImport.newAccountCredentialId) {
                     formData.append('new_account_credential_id', this.csvImport.newAccountCredentialId);
@@ -4185,6 +4635,34 @@ const app = new Vue({
                         return;
                     }
                     this.csvImport.signConfirmed = true;
+                    return await this.executeCsvImport();
+                }
+
+                if (resp.status === 409 && data && data.duplicate_check) {
+                    // The server found rows that look already stored and wrote
+                    // nothing: show each overlap, then import anyway on request
+                    // only.  Skipping them is the safe answer, so it is the default.
+                    const check = data.duplicate_check;
+                    const lines = (check.candidates || []).slice(0, 8).map(function(c) {
+                        return '• Row ' + c.row + ': ' + c.name + ' ' + c.amount + ' on ' + c.date
+                            + ' — you already have #' + c.matched.transaction_id + ' ('
+                            + c.matched.amount + ' on ' + c.matched.date + ', '
+                            + c.matched.gap_days + ' day(s) apart)';
+                    }).join('\n');
+                    const more = check.count > 8 ? '\n…and ' + (check.count - 8) + ' more.' : '';
+                    if (!window.confirm(
+                        'These ' + check.count + ' row(s) look like transactions you already have'
+                        + ' (same account, same amount, dates within ' + check.tolerance_days + ' days):\n\n'
+                        + lines + more + '\n\n'
+                        + 'OK: import them anyway.\n'
+                        + 'Cancel: import nothing.')) {
+                        this.csvImport.error = 'Import stopped: ' + check.count
+                            + ' row(s) overlap existing transactions. Nothing was saved — re-import '
+                            + 'and choose OK on this message if they really are separate transactions.';
+                        return;
+                    }
+                    this.csvImport.signConfirmed = sentSignConfirmed;
+                    this.csvImport.duplicateConfirmed = true;
                     return await this.executeCsvImport();
                 }
 

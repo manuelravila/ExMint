@@ -3,6 +3,24 @@
 
 changelog = [
     {
+        "version": "1.19.0",
+        "date": "2026-11-10",
+        "changes": [
+            "Debt dashboard: a new tab charts balance history and total debt over time, with the change since last "
+            "month for each card, line of credit and loan (mortgage optional). Balances are now calculated "
+            "automatically from your anchors and transactions when the bank does not report them",
+            "Sync health: a bank or card that stops syncing is named on the dashboard banner (most urgent first) "
+            "and badged in Accounts, instead of the data just going quiet",
+            "Recurring tab: subscriptions and recurring bills are detected, with the monthly total, the next "
+            "expected date, and alerts for price changes and new charges",
+            "Interest & fees tab: interest, annual fees, NSF, overdraft and other bank charges per account and "
+            "type, with fee reversals netted out",
+            "CSV import: a column describing the account (for example \"Account Type\") can no longer become a "
+            "purchase category, and rows that look like ones already stored (same amount, date within 3 days) "
+            "are shown for confirmation before importing"
+        ]
+    },
+    {
         "version": "1.18.0",
         "date": "2026-10-10",
         "changes": [

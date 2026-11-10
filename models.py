@@ -135,14 +135,53 @@ class Account(db.Model):
     subtype = db.Column(db.String(50))  # e.g., 'checking', 'savings', 'credit card'
     mask = db.Column(db.String(4))  # Last 4 digits of the account number, if available
     is_enabled = db.Column(db.Boolean, default=True, nullable=False)
+    # Anchor (reconciliation) point: the account's real balance as the bank
+    # reported it on balance_date, stored as a magnitude in the account's own
+    # frame — money held for an asset, money OWED for a credit/loan account.
+    # Every balance is that anchor plus the account's transactions after it.
     last_known_balance = db.Column(db.Numeric(14, 2), nullable=True)
     balance_date = db.Column(db.Date, nullable=True)
     current_balance = db.Column(db.Numeric(14, 2), nullable=True)
     available_balance = db.Column(db.Numeric(14, 2), nullable=True)
+    # When current_balance/available_balance were last written from Plaid.
+    balance_fetched_at = db.Column(db.DateTime, nullable=True)
+    # Cancelled/closed account: its whole history stays, but the account is
+    # left out of every balance total.
+    is_closed = db.Column(db.Boolean, nullable=False, default=False,
+                          server_default=db.text('0'))
 
     # Relation to Credential
     credential = db.relationship('Credential', backref=db.backref('accounts', lazy=True))
     transactions = db.relationship('Transaction', backref='account', lazy=True)
+
+
+class AccountBalanceSnapshot(db.Model):
+    """One row per account per day: the balance the dashboard computed that day.
+
+    ``balance`` uses the dashboard sign (asset positive, debt negative) so the
+    debt history totals straight from these rows. ``source`` records how it was
+    obtained: plaid | anchor+tx | sum.
+    """
+    __tablename__ = 'account_balance_snapshots'
+
+    id = db.Column(db.Integer, primary_key=True)
+    account_id = db.Column(db.Integer, db.ForeignKey('account.id', ondelete='CASCADE'),
+                           nullable=False, index=True)
+    snapshot_date = db.Column(db.Date, nullable=False)
+    balance = db.Column(db.Numeric(14, 2), nullable=False)
+    source = db.Column(db.String(16), nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow,
+                           onupdate=datetime.datetime.utcnow)
+
+    account = db.relationship('Account', backref=db.backref('balance_snapshots', lazy=True))
+
+    __table_args__ = (
+        db.UniqueConstraint('account_id', 'snapshot_date', name='uq_account_balance_snapshot'),
+    )
+
+    def __repr__(self):
+        return f'<AccountBalanceSnapshot {self.account_id} {self.snapshot_date} {self.balance}>'
 
 
 

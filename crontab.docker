@@ -5,3 +5,8 @@
 # Test-user nightly cleanup — 23:55 UTC every day.
 # Only does anything when TEST_USER_EMAIL is set (STAG only).
 55 23 * * * . /etc/cron.env ; cd /app && python /app/cleanup_test_user.py >> /var/log/exmint_cron.log 2>&1
+
+# Daily balance snapshot — 22:10 UTC (evening in North America).
+# Stores one row per account per day in account_balance_snapshots: the history
+# the debt charts read.  Re-running it the same day refreshes that day's rows.
+10 22 * * * . /etc/cron.env ; cd /app && python /app/snapshot_balances.py >> /var/log/exmint_cron.log 2>&1

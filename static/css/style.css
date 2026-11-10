@@ -1211,9 +1211,48 @@ body.mobile-sidebar-open {
 
 .tree-account {
     display: flex;
-    justify-content: space-between;
+    flex-direction: column;
     font-size: 0.85rem;
     padding: 0.2rem 0;
+}
+
+.tree-account-row {
+    display: flex;
+    justify-content: space-between;
+}
+
+/* "as of 2026-07-14 · anchor+tx": which balance this is and how current it is. */
+.tree-account-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.7rem;
+    line-height: 1.1;
+    opacity: 0.72;
+}
+
+.tree-account-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+.tree-account-action {
+    padding: 0 0.2rem;
+    font-size: 0.7rem;
+    line-height: 1;
+    opacity: 0.55;
+}
+
+.tree-account-action:hover {
+    opacity: 1;
+}
+
+/* A cancelled account stays listed, just visibly retired. */
+.tree-account-closed .tree-label {
+    text-decoration: line-through;
+    opacity: 0.75;
 }
 
 .tree-footer {
@@ -1821,3 +1860,22 @@ tr.budget-excluded-row .spending-category-link {
 .original-description { font-size: 0.75rem; line-height: 1.2; margin-top: 0.1rem; }
 .original-description .btn-link { color: #a0aec0; font-size: 0.7rem; }
 .description-edit-input { min-width: 12rem; }
+
+/* EX-03 sync health: the banner lists one line per institution and names only
+   the accounts underneath it that have actually gone quiet. */
+.sync-health-banner ul { list-style: none; padding-left: 0; margin-bottom: 0; }
+.sync-health-banner > div > div > ul > li { margin-bottom: 0.35rem; }
+.sync-health-banner .sync-health-accounts { padding-left: 1.1rem; margin-top: 0.15rem; }
+.sync-health-banner .sync-health-accounts li { font-size: 0.85rem; }
+.sync-health-banner .sync-health-count { white-space: nowrap; }
+/* The banner is capped at BANNER_INSTITUTION_LIMIT institutions; everything it
+   left out is reached through this link, which opens the Accounts pane. */
+.sync-health-more { font-size: 0.85rem; }
+.sync-health-more-btn { text-decoration: underline; }
+.sync-issue-badge { cursor: help; }
+
+/* EX-01 Debt dashboard */
+.debt-kpi { background-color: #f8fafc; }
+.debt-chart-container { position: relative; height: 320px; width: 100%; }
+.debt-account-table th, .debt-account-table td { vertical-align: middle; }
+
