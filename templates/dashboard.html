@@ -956,6 +956,15 @@
                         <i class="fas fa-folder-open mr-2"></i>
                         Projects
                     </button>
+                    <button
+                        type="button"
+                        class="dashboard-tab-btn tab-switch-btn"
+                        :class="{ active: dashboardTab === 'interest-fees' }"
+                        @click="setDashboardTab('interest-fees')"
+                    >
+                        <i class="fas fa-percent mr-2"></i>
+                        Interest & Fees
+                    </button>
                 </div>
                 <div v-if="dashboardError" class="alert alert-warning py-2 px-3 mb-3">
                     [[ dashboardError ]]
@@ -1517,6 +1526,112 @@
                                             [[ item.merchant ]] — [[ formatCurrency(item.last_amount) ]] [[ item.cadence ]], last [[ item.last_date ]]
                                         </div>
                                     </details>
+                                </template>
+                            </div>
+                        </div>
+                    </template>
+                    <template v-else-if="dashboardTab === 'interest-fees'">
+                        <div class="card shadow-sm dashboard-card interest-fees-card">
+                            <div class="card-header d-flex justify-content-between align-items-center">
+                                <div>
+                                    <h5 class="mb-0">Interest & Fees</h5>
+                                    <small class="text-muted">Monthly cost of debt — interest charges, overdraft fees, NSF, annual fees, and more</small>
+                                </div>
+                                <button type="button" class="btn btn-sm btn-outline-secondary" @click="fetchInterestFees()"
+                                        :disabled="interestFeesLoading" title="Refresh">
+                                    <i class="fas fa-sync-alt" :class="{ 'fa-spin': interestFeesLoading }"></i>
+                                </button>
+                            </div>
+                            <div class="card-body">
+                                <div v-if="interestFeesError" class="alert alert-warning py-2 px-3">[[ interestFeesError ]]</div>
+                                <div v-else-if="interestFeesLoading && !interestFees" class="text-muted">Loading…</div>
+                                <template v-else-if="interestFees">
+                                    <div class="mb-3">
+                                        <span class="text-muted">Total ({{ interestFees.lookback_days }} days)</span>
+                                        <h3 class="mb-0 text-danger">[[ formatCurrency(interestFees.total_overall) ]]</h3>
+                                        <small class="text-muted">[[ interestFees.charge_count_overall ]] charges across [[ Object.keys(interestFees.by_account).length ]] account(s)</small>
+                                    </div>
+                                    <div class="row mb-4">
+                                        <div class="col-12 col-md-6">
+                                            <h6 class="text-muted small mb-2">By Type</h6>
+                                            <div v-if="Object.keys(interestFees.by_sub_type).length" class="table-responsive">
+                                                <table class="table table-sm table-bordered">
+                                                    <thead class="thead-light">
+                                                        <tr><th>Type</th><th class="text-right">Total</th><th class="text-right">Count</th></tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        <tr v-for="(data, type) in interestFees.by_sub_type" :key="type">
+                                                            <td>
+                                                                <span class="badge" :style="{ backgroundColor: subTypeColor(type), color: '#fff' }">[[ type ]]</span>
+                                                            </td>
+                                                            <td class="text-right">[[ formatCurrency(data.total) ]]</td>
+                                                            <td class="text-right">[[ data.count ]]</td>
+                                                        </tr>
+                                                        <tr class="font-weight-bold">
+                                                            <td>Total</td>
+                                                            <td class="text-right">[[ formatCurrency(interestFees.total_overall) ]]</td>
+                                                            <td class="text-right">[[ interestFees.charge_count_overall ]]</td>
+                                                        </tr>
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                            <div v-else class="text-muted small">No interest/fee charges found.</div>
+                                        </div>
+                                        <div class="col-12 col-md-6">
+                                            <h6 class="text-muted small mb-2">By Account</h6>
+                                            <div v-if="Object.keys(interestFees.by_account).length" class="table-responsive">
+                                                <table class="table table-sm table-bordered">
+                                                    <thead class="thead-light">
+                                                        <tr><th>Account</th><th class="text-right">Total</th><th class="text-right">Count</th></tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        <tr v-for="(data, acctId) in interestFees.by_account" :key="acctId">
+                                                            <td>[[ getAccountLabel(acctId) ]]</td>
+                                                            <td class="text-right">[[ formatCurrency(data.total) ]]</td>
+                                                            <td class="text-right">[[ data.count ]]</td>
+                                                        </tr>
+                                                        <tr class="font-weight-bold">
+                                                            <td>Total</td>
+                                                            <td class="text-right">[[ formatCurrency(interestFees.total_overall) ]]</td>
+                                                            <td class="text-right">[[ interestFees.charge_count_overall ]]</td>
+                                                        </tr>
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                            <div v-else class="text-muted small">No interest/fee charges found.</div>
+                                        </div>
+                                    </div>
+                                    <div class="mt-4">
+                                        <h6 class="text-muted small mb-2">Monthly Breakdown</h6>
+                                        <div v-if="interestFees.monthly.length" class="table-responsive">
+                                            <table class="table table-sm table-bordered">
+                                                <thead class="thead-light">
+                                                    <tr>
+                                                        <th>Month</th>
+                                                        <th class="text-right">Total</th>
+                                                        <th class="text-right">Charges</th>
+                                                        <th v-for="type in interestFees.sub_types" :key="type" class="text-right">
+                                                            <span class="badge" :style="{ backgroundColor: subTypeColor(type), color: '#fff' }">[[ type ]]</span>
+                                                        </th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    <tr v-for="month in interestFees.monthly" :key="month.month">
+                                                        <td>[[ formatMonth(month.month) ]]</td>
+                                                        <td class="text-right font-weight-bold">[[ formatCurrency(month.total) ]]</td>
+                                                        <td class="text-right">[[ month.charge_count ]]</td>
+                                                        <td v-for="type in interestFees.sub_types" :key="type" class="text-right">
+                                                            <span v-if="month.by_sub_type && month.by_sub_type[type]" class="text-danger">
+                                                                [[ formatCurrency(month.by_sub_type[type].total) ]]
+                                                            </span>
+                                                            <span v-else class="text-muted">—</span>
+                                                        </td>
+                                                    </tr>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                        <div v-else class="text-muted small">No monthly data available.</div>
+                                    </div>
                                 </template>
                             </div>
                         </div>

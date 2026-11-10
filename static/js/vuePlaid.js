@@ -308,6 +308,9 @@ const app = new Vue({
         recurring: null,
         recurringLoading: false,
         recurringError: null,
+        interestFees: null,
+        interestFeesLoading: false,
+        interestFeesError: null,
         debtIncludeMortgage: false,
         debtLoading: false,
         debtError: null,
@@ -1105,6 +1108,8 @@ const app = new Vue({
                 }
             } else if (tab === 'recurring' && !this.recurring) {
                 this.fetchRecurring();
+            } else if (tab === 'interest-fees' && !this.interestFees) {
+                this.fetchInterestFees();
             }
         },
         fetchRecurring: async function() {
@@ -1125,6 +1130,26 @@ const app = new Vue({
                 this.recurringError = error.message || 'Failed to load recurring charges.';
             } finally {
                 this.recurringLoading = false;
+            }
+        },
+        fetchInterestFees: async function() {
+            if (this.interestFeesLoading) {
+                return;
+            }
+            this.interestFeesLoading = true;
+            this.interestFeesError = null;
+            try {
+                const response = await fetch('/api/interest-fees');
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to load interest & fees.');
+                }
+                this.interestFees = data;
+            } catch (error) {
+                console.error('Error fetching interest & fees:', error);
+                this.interestFeesError = error.message || 'Failed to load interest & fees.';
+            } finally {
+                this.interestFeesLoading = false;
             }
         },
         fetchDebtHistory: async function(options = {}) {
@@ -1204,6 +1229,38 @@ const app = new Vue({
             } finally {
                 this.debtSavingAccountId = null;
             }
+        },
+        /* ── Interest & Fees helpers (EX-07) ─────────────────── */
+        subTypeColor: function(type) {
+            const colors = {
+                'INTEREST': '#277DA1',
+                'OD_INTEREST': '#F8961E',
+                'NSF': '#F94144',
+                'ANNUAL_FEE': '#43AA8B',
+                'OVERDRAFT': '#F3722C',
+                'LATE_FEE': '#E56B6F',
+                'CASH_ADVANCE_FEE': '#577590',
+                'BALANCE_TRANSFER_FEE': '#6D597A',
+                'FOREIGN_TXN_FEE': '#90BE6D',
+                'OTHER_FEE': '#9A031E',
+            };
+            return colors[type] || '#577590';
+        },
+        getAccountLabel: function(acctId) {
+            for (const bank of this.banks) {
+                for (const acct of bank.accounts) {
+                    if (String(acct.id) === String(acctId)) {
+                        return acct.name + (acct.mask ? ' ••' + acct.mask : '');
+                    }
+                }
+            }
+            return 'Account ' + acctId;
+        },
+        formatMonth: function(monthKey) {
+            // monthKey is 'YYYY-MM'
+            const [year, month] = monthKey.split('-');
+            const date = new Date(year, month - 1, 1);
+            return date.toLocaleDateString(undefined, { year: 'numeric', month: 'short' });
         },
         handleSpendingYearChange: function() {
             this.resetOpenSpendingMonths();

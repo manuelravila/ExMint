@@ -62,6 +62,7 @@ import jwt as _pyjwt
 from jwt.algorithms import ECAlgorithm as _ECAlgorithm
 from sync_health import collect_sync_health
 from recurring import collect_recurring
+from interest_fees import collect_interest_fees, apply_interest_fees_tags
 
 core = Blueprint('core', __name__)
 
@@ -5436,6 +5437,20 @@ def sync_health_report():
 def recurring_report():
     """EX-06: recurring charges, the monthly total and price-change alerts."""
     return jsonify(collect_recurring(current_user.id))
+
+
+@core.route('/api/interest-fees', methods=['GET'])
+@login_required
+def interest_fees_report():
+    """EX-07: interest & fees tracker — monthly totals and per-account breakdown."""
+    return jsonify(collect_interest_fees(current_user.id))
+
+
+@core.route('/api/interest-fees/tag', methods=['POST'])
+@login_required
+def interest_fees_tag():
+    """EX-07: move detected interest/fee charges into the 'Interest & Fees' category."""
+    return jsonify({'tagged': apply_interest_fees_tags(current_user.id)})
 
 
 @core.route('/api/budgets', methods=['GET'])
