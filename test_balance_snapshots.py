@@ -580,11 +580,17 @@ def main():
             hist_mort = hist_mort_resp.get_json() or {}
             mort_debt_by_id = {a['id']: a for a in hist_mort.get('debt_accounts', [])}
             check(
-                'include_mortgage=true includes mortgage account and increases current_total_debt by 249,000.00',
+                'include_mortgage=true includes the 249,000.00 mortgage and raises current_total_debt by '
+                'exactly the mortgages the user holds (the dev user may own sandbox ones too)',
                 mort_id in mort_debt_by_id
+                and close(Decimal(str(mort_debt_by_id[mort_id]['current_debt'])), Decimal('249000.00'))
                 and close(
                     Decimal(str(hist_mort['current_total_debt'])) - Decimal(str(hist['current_total_debt'])),
-                    Decimal('249000.00'),
+                    sum(
+                        (Decimal(str(a['current_debt'] or 0)) for a in hist_mort.get('debt_accounts', [])
+                         if (a.get('subtype') or '').lower() == 'mortgage'),
+                        Decimal('0'),
+                    ),
                 ),
                 repr((hist.get('current_total_debt'), hist_mort.get('current_total_debt'))),
             )

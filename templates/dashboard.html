@@ -1547,7 +1547,7 @@
                                 <div v-else-if="interestFeesLoading && !interestFees" class="text-muted">Loading…</div>
                                 <template v-else-if="interestFees">
                                     <div class="mb-3">
-                                        <span class="text-muted">Total ({{ interestFees.lookback_days }} days)</span>
+                                        <span class="text-muted">Total ([[ interestFees.lookback_days ]] days)</span>
                                         <h3 class="mb-0 text-danger">[[ formatCurrency(interestFees.total_overall) ]]</h3>
                                         <small class="text-muted">[[ interestFees.charge_count_overall ]] charges across [[ Object.keys(interestFees.by_account).length ]] account(s)</small>
                                     </div>
